@@ -220,13 +220,30 @@ document.addEventListener('DOMContentLoaded', function() {
                 data.forEach(storage => {
                     const option = document.createElement('option');
                     option.value = storage.storage;
-                    option.textContent = `${storage.storage} (${storage.type})`;
+                    
+                    // Create display text with available space information
+                    let displayText = `${storage.storage} (${storage.type})`;
+                    if (storage.available_gb !== undefined) {
+                        displayText += ` - ${storage.available_gb} GB free`;
+                    }
+                    option.textContent = displayText;
                     storageSelect.appendChild(option);
                 });
                 
-                // Select first storage by default if available
+                // Auto-select storage with most available space (already sorted by API)
                 if (data.length > 0) {
-                    storageSelect.value = data[0].storage;
+                    // The API already sorts by available space (most space first)
+                    // Filter out storages with very little space (less than 10GB) if alternatives exist
+                    const usableStorages = data.filter(s => s.available_gb >= 10);
+                    
+                    let selectedStorage;
+                    if (usableStorages.length > 0) {
+                        selectedStorage = usableStorages[0]; // Storage with most space that has at least 10GB
+                    } else {
+                        selectedStorage = data[0]; // Fallback to any available storage
+                    }
+                    
+                    storageSelect.value = selectedStorage.storage;
                 }
             })
             .catch(error => {

@@ -565,8 +565,25 @@ def api_node_storages(node):
     try:
         storages = proxmox.nodes(node).storage.get()
         # Filter for storages that can be used for disk images and containers
-        vm_storages = [s for s in storages if 'images' in s.get('content', '').split(',') 
-                      or 'rootdir' in s.get('content', '').split(',')]
+        vm_storages = []
+        for storage in storages:
+            pprint.pp(storage)
+            if storage.get('enabled', 0) == 1:
+                if 'images' in storage.get('content', '').split(',') or 'rootdir' in storage.get('content', '').split(','):
+                    # Calculate available space
+                    if storage.get('total') and storage.get('total') > 0:
+                        storage['available_bytes'] = storage.get('total', 0) - storage.get('used', 0)
+                        storage['available_gb'] = round(storage['available_bytes'] / (1024**3), 2)
+                        storage['used_percent'] = (storage.get('used', 0) / storage['total']) * 100
+                    else:
+                        storage['available_bytes'] = 0
+                        storage['available_gb'] = 0
+                        storage['used_percent'] = 0
+                    
+                    vm_storages.append(storage)
+            
+        # Sort by available space (descending - most space first)
+        vm_storages.sort(key=lambda x: x['available_bytes'], reverse=True)
         return jsonify(vm_storages)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
