@@ -562,14 +562,25 @@ def api_node_storages(node):
     if not proxmox:
         return jsonify({'error': 'Node not found'}), 404
     
+    # Get vm_type from query parameter (qemu or lxc)
+    vm_type = request.args.get('vm_type', 'qemu')
+    
     try:
         storages = proxmox.nodes(node).storage.get()
-        # Filter for storages that can be used for disk images and containers
+        # Filter storages based on VM type
         vm_storages = []
         for storage in storages:
-            pprint.pp(storage)
             if storage.get('enabled', 0) == 1:
-                if 'images' in storage.get('content', '').split(',') or 'rootdir' in storage.get('content', '').split(','):
+                content_types = storage.get('content', '').split(',')
+                
+                # Filter based on VM type
+                is_suitable = False
+                if vm_type == 'qemu' and 'images' in content_types:
+                    is_suitable = True
+                elif vm_type == 'lxc' and 'rootdir' in content_types:
+                    is_suitable = True
+                
+                if is_suitable:
                     # Calculate available space
                     if storage.get('total') and storage.get('total') > 0:
                         storage['available_bytes'] = storage.get('total', 0) - storage.get('used', 0)

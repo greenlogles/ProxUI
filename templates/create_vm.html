@@ -169,6 +169,8 @@ document.addEventListener('DOMContentLoaded', function() {
         // Update templates if node is selected
         if (nodeSelect.value) {
             fetchTemplates(nodeSelect.value, vmType);
+            // Also refresh storages since they depend on VM type
+            fetchStorages(nodeSelect.value);
         }
     }
     
@@ -207,7 +209,8 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Fetch storage options for the selected node
     function fetchStorages(node) {
-        fetch(`/api/node/${node}/storages`)
+        const vmType = typeSelect.value;
+        fetch(`/api/node/${node}/storages?vm_type=${vmType}`)
             .then(response => response.json())
             .then(data => {
                 storageSelect.innerHTML = '<option value="">Select storage...</option>';
