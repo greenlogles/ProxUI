@@ -1,0 +1,663 @@
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
+from proxmoxer import ProxmoxAPI
+import toml
+import requests
+from functools import wraps
+from datetime import datetime
+import urllib3
+from collections import defaultdict
+
+import pprint
+
+# Disable SSL warnings if needed
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+app = Flask(__name__)
+app.secret_key = 'your-secret-key-here'
+
+# Load configuration
+try:
+    with open('config.toml', 'r') as f:
+        config = toml.load(f)
+except Exception as e:
+    print(f"Error loading config.toml: {e}")
+    config = {'cluster': {'name': 'Proxmox Cluster'}, 'nodes': []}
+
+# Store Proxmox connections
+proxmox_nodes = {}
+cluster_nodes = []  # Store all nodes from all connections
+
+def init_proxmox_connections():
+    """Initialize connections to all Proxmox nodes and discover cluster members"""
+    global cluster_nodes
+    discovered_nodes = set()
+    
+    # First, connect to configured nodes
+    for node_config in config['nodes']:
+        try:
+            proxmox = ProxmoxAPI(
+                node_config['host'],
+                user=node_config['user'],
+                password=node_config['password'],
+                verify_ssl=node_config.get('verify_ssl', True)
+            )
+            
+            # Test connection
+            version = proxmox.version.get()
+            print(f"Connected to {node_config['host']} - PVE {version['version']}")
+            
+            # Get all nodes in the cluster through this connection
+            try:
+                nodes = proxmox.nodes.get()
+                for node in nodes:
+                    node_name = node['node']
+                    if node_name not in discovered_nodes:
+                        discovered_nodes.add(node_name)
+                        # Store the connection that can access this node
+                        if node_name not in proxmox_nodes:
+                            proxmox_nodes[node_name] = proxmox
+                        cluster_nodes.append({
+                            'name': node_name,
+                            'status': node['status'],
+                            'connection': proxmox
+                        })
+            except Exception as e:
+                print(f"Error getting cluster nodes from {node_config['host']}: {e}")
+                # If cluster endpoint fails, at least add this node
+                proxmox_nodes[node_config['host']] = proxmox
+                
+        except Exception as e:
+            print(f"Failed to connect to {node_config['host']}: {e}")
+    
+    print(f"Discovered {len(cluster_nodes)} cluster nodes: {[n['name'] for n in cluster_nodes]}")
+    print(f"Active connections to {len(proxmox_nodes)} nodes")
+
+def get_proxmox_for_node(node_name):
+    """Get the appropriate Proxmox connection for a specific node"""
+    # First check if we have a direct connection to this node
+    if node_name in proxmox_nodes:
+        return proxmox_nodes[node_name]
+    
+    # Otherwise, find a connection that can access this node
+    for node_info in cluster_nodes:
+        if node_info['name'] == node_name:
+            return node_info['connection']
+    
+    # Fallback to any available connection (they should all work in a cluster)
+    if proxmox_nodes:
+        return next(iter(proxmox_nodes.values()))
+    
+    return None
+
+def get_all_vms_and_containers():
+    """Get all VMs and containers from all nodes using cluster resources endpoint"""
+    all_resources = []
+    processed_vmids = set()  # Track processed VMs to avoid duplicates
+    
+    # Use the first available connection to get cluster-wide resources
+    if proxmox_nodes:
+        try:
+            # Get any working connection
+            proxmox = next(iter(proxmox_nodes.values()))
+            
+            # Get all VMs and containers from cluster endpoint
+            resources = proxmox.cluster.resources.get(type='vm')
+            
+            for resource in resources:
+                # Skip if we've already processed this VM
+                vm_key = f"{resource['node']}-{resource['vmid']}"
+                if vm_key in processed_vmids:
+                    continue
+                processed_vmids.add(vm_key)
+                
+                # Calculate resource usage percentages
+                if resource.get('maxcpu'):
+                    resource['cpu_percent'] = (resource.get('cpu', 0) * 100)
+                else:
+                    resource['cpu_percent'] = 0
+                    
+                if resource.get('maxmem') and resource.get('maxmem') > 0:
+                    resource['mem_percent'] = (resource.get('mem', 0) / resource.get('maxmem', 1)) * 100
+                else:
+                    resource['mem_percent'] = 0
+                    
+                if resource.get('maxdisk') and resource.get('maxdisk') > 0:
+                    resource['disk_percent'] = (resource.get('disk', 0) / resource.get('maxdisk', 1)) * 100
+                else:
+                    resource['disk_percent'] = 0
+                
+                all_resources.append(resource)
+                
+        except Exception as e:
+            print(f"Error getting cluster resources: {e}")
+            # Fallback to node-by-node retrieval
+            return get_all_vms_and_containers_fallback()
+    
+    return all_resources
+
+def get_all_vms_and_containers_fallback():
+    """Fallback method to get VMs/containers node by node"""
+    all_resources = []
+    processed_vmids = set()
+    
+    for node_info in cluster_nodes:
+        try:
+            node_name = node_info['name']
+            proxmox = node_info['connection']
+            
+            # Get VMs
+            vms = proxmox.nodes(node_name).qemu.get()
+            for vm in vms:
+                vm_key = f"{node_name}-{vm['vmid']}"
+                if vm_key not in processed_vmids:
+                    processed_vmids.add(vm_key)
+                    vm['node'] = node_name
+                    vm['type'] = 'qemu'
+                    # Calculate percentages
+                    vm['cpu_percent'] = vm.get('cpu', 0) * 100 if vm.get('cpu') else 0
+                    vm['mem_percent'] = (vm.get('mem', 0) / vm.get('maxmem', 1)) * 100 if vm.get('maxmem') else 0
+                    vm['disk_percent'] = (vm.get('disk', 0) / vm.get('maxdisk', 1)) * 100 if vm.get('maxdisk') else 0
+                    all_resources.append(vm)
+            
+            # Get containers
+            containers = proxmox.nodes(node_name).lxc.get()
+            for container in containers:
+                ct_key = f"{node_name}-{container['vmid']}"
+                if ct_key not in processed_vmids:
+                    processed_vmids.add(ct_key)
+                    container['node'] = node_name
+                    container['type'] = 'lxc'
+                    # Calculate percentages
+                    container['cpu_percent'] = container.get('cpu', 0) * 100 if container.get('cpu') else 0
+                    container['mem_percent'] = (container.get('mem', 0) / container.get('maxmem', 1)) * 100 if container.get('maxmem') else 0
+                    container['disk_percent'] = (container.get('disk', 0) / container.get('maxdisk', 1)) * 100 if container.get('maxdisk') else 0
+                    all_resources.append(container)
+                    
+        except Exception as e:
+            print(f"Error getting resources from node {node_info['name']}: {e}")
+    
+    return all_resources
+
+# ROUTES - Make sure all routes are defined
+
+@app.route('/')
+def index():
+    """Dashboard with overview"""
+    resources = get_all_vms_and_containers()
+    
+    # Calculate statistics
+    total_vms = len([r for r in resources if r['type'] == 'qemu'])
+    total_containers = len([r for r in resources if r['type'] == 'lxc'])
+    running = len([r for r in resources if r.get('status') == 'running'])
+    stopped = len([r for r in resources if r.get('status') == 'stopped'])
+    
+    # Find top resource consumers
+    top_cpu = sorted(resources, key=lambda x: x.get('cpu', 0), reverse=True)[:8]
+    top_memory = sorted(resources, key=lambda x: x.get('mem', 0), reverse=True)[:8]
+    
+    return render_template('index.html',
+                         total_vms=total_vms,
+                         total_containers=total_containers,
+                         running=running,
+                         stopped=stopped,
+                         top_cpu=top_cpu,
+                         top_memory=top_memory)
+
+@app.route('/vms')
+def vms():
+    """List all VMs and containers"""
+    resources = get_all_vms_and_containers()
+    
+    # Sort by CPU usage by default
+    sort_by = request.args.get('sort', 'cpu')
+    reverse = request.args.get('order', 'desc') == 'desc'
+    
+    if sort_by == 'cpu':
+        resources.sort(key=lambda x: x.get('cpu', 0), reverse=reverse)
+    elif sort_by == 'memory':
+        resources.sort(key=lambda x: x.get('mem', 0), reverse=reverse)
+    elif sort_by == 'disk':
+        resources.sort(key=lambda x: x.get('disk', 0), reverse=reverse)
+    elif sort_by == 'name':
+        resources.sort(key=lambda x: x.get('name', ''), reverse=reverse)
+    
+    return render_template('vms.html', resources=resources)
+
+@app.route('/vm/<node>/<vmid>')
+def vm_detail(node, vmid):
+    """Show detailed VM information"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        flash('Node connection not found', 'error')
+        return redirect(url_for('vms'))
+    
+    try:
+        # Get VM config
+        vm_type = 'qemu'  # Default to qemu
+        try:
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+        except:
+            vm_type = 'lxc'
+            config = proxmox.nodes(node).lxc(vmid).config.get()
+        
+        # Get current status
+        if vm_type == 'qemu':
+            status = proxmox.nodes(node).qemu(vmid).status.current.get()
+        else:
+            status = proxmox.nodes(node).lxc(vmid).status.current.get()
+        
+        # Get available nodes for migration (all cluster nodes except current)
+        available_nodes = [n['name'] for n in cluster_nodes if n['name'] != node and n.get('status') == 'online']
+        
+        return render_template('vm_detail.html',
+                             vm_type=vm_type,
+                             vmid=vmid,
+                             node=node,
+                             config=config,
+                             status=status,
+                             available_nodes=available_nodes)
+    except Exception as e:
+        flash(f'Error getting VM details: {e}', 'error')
+        return redirect(url_for('vms'))
+
+@app.route('/vm/<node>/<vmid>/<action>', methods=['POST'])
+def vm_action(node, vmid, action):
+    """Perform action on VM"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        return jsonify({'error': 'Node connection not found'}), 404
+    
+    try:
+        # Determine VM type
+        vm_type = 'qemu'
+        try:
+            proxmox.nodes(node).qemu(vmid).config.get()
+        except:
+            vm_type = 'lxc'
+        
+        # Get VM object
+        if vm_type == 'qemu':
+            vm = proxmox.nodes(node).qemu(vmid)
+        else:
+            vm = proxmox.nodes(node).lxc(vmid)
+        
+        # Perform action
+        if action == 'start':
+            vm.status.start.post()
+            flash(f'VM {vmid} started successfully', 'success')
+        elif action == 'stop':
+            vm.status.stop.post()
+            flash(f'VM {vmid} stopped successfully', 'success')
+        elif action == 'shutdown':
+            vm.status.shutdown.post()
+            flash(f'VM {vmid} shutdown initiated', 'success')
+        elif action == 'reset':
+            vm.status.reset.post()
+            flash(f'VM {vmid} reset successfully', 'success')
+        elif action == 'migrate':
+            target_node = request.form.get('target_node')
+            if target_node:
+                vm.migrate.post(target=target_node, online=1)
+                flash(f'VM {vmid} migration to {target_node} started', 'success')
+            else:
+                flash('Target node not specified', 'error')
+        else:
+            flash(f'Unknown action: {action}', 'error')
+            
+    except Exception as e:
+        flash(f'Error performing action: {e}', 'error')
+    
+    return redirect(url_for('vm_detail', node=node, vmid=vmid))
+
+@app.route('/create_vm', methods=['GET', 'POST'])
+def create_vm():
+    """Create new VM or container"""
+    if request.method == 'POST':
+        try:
+            node = request.form.get('node')
+            vm_type = request.form.get('type')
+            creation_method = request.form.get('creation_method')
+            name = request.form.get('name')
+            vmid = request.form.get('vmid')
+            storage = request.form.get('storage')
+            disk_size = request.form.get('disk_size')
+            bridge = request.form.get('bridge', 'vmbr0')  # Default to vmbr0 if not specified
+            
+            proxmox = get_proxmox_for_node(node)
+            if not proxmox:
+                flash('Invalid node selected', 'error')
+                return redirect(url_for('create_vm'))
+            
+            if creation_method == 'template' and vm_type == 'qemu':
+                # Clone from VM template
+                template_vmid = request.form.get('template')
+                if not template_vmid:
+                    flash('Template must be selected', 'error')
+                    return redirect(url_for('create_vm'))
+                
+                # Clone the VM
+                proxmox.nodes(node).qemu(template_vmid).clone.post(
+                    newid=vmid,
+                    name=name,
+                    full=1  # Full clone
+                )
+                flash(f'VM {name} cloned from template successfully', 'success')
+                
+            elif vm_type == 'qemu':
+                # Create VM from scratch
+                params = {
+                    'vmid': vmid,
+                    'name': name,
+                    'memory': int(request.form.get('memory', 512)),
+                    'cores': int(request.form.get('cores', 1)),
+                    'sockets': int(request.form.get('sockets', 1)),
+                    'cpu': 'host',
+                    'net0': f'virtio,bridge={bridge}',
+                    'boot': 'c',
+                    'scsihw': 'virtio-scsi-pci'
+                }
+                
+                # Add disk if storage is specified
+                if storage:
+                    params['scsi0'] = f"{storage}:{disk_size}"
+                    params['bootdisk'] = 'scsi0'
+                
+                # Create the VM
+                proxmox.nodes(node).qemu.create(**params)
+                
+            elif vm_type == 'lxc':
+                # Create container
+                ostemplate = request.form.get('ostemplate')
+                if not ostemplate and creation_method != 'blank':
+                    flash('OS Template must be selected', 'error')
+                    return redirect(url_for('create_vm'))
+                
+                params = {
+                    'vmid': vmid,
+                    'hostname': name,
+                    'memory': int(request.form.get('memory', 512)),
+                    'cores': int(request.form.get('cores', 1)),
+                    'net0': f'name=eth0,bridge={bridge},ip=dhcp'
+                }
+                
+                # Add storage
+                if storage:
+                    params['rootfs'] = f"{storage}:{disk_size}"
+                
+                # Add template if specified
+                if ostemplate:
+                    params['ostemplate'] = ostemplate
+                
+                # Create the container
+                proxmox.nodes(node).lxc.create(**params)
+            
+            flash(f'{vm_type.upper()} {name} created successfully', 'success')
+            return redirect(url_for('vms'))
+            
+        except Exception as e:
+            flash(f'Error creating VM: {e}', 'error')
+    
+    # Get all online nodes for the form
+    nodes = [n['name'] for n in cluster_nodes if n.get('status') == 'online']
+    
+    return render_template('create_vm.html', nodes=nodes)
+
+@app.route('/storages')
+def storages():
+    """List all storage"""
+    all_storages = []
+    processed_storages = set()  # Track processed storages to avoid duplicates
+    
+    # Try to get storage info from cluster endpoint first
+    if proxmox_nodes:
+        try:
+            proxmox = next(iter(proxmox_nodes.values()))
+            storages = proxmox.cluster.resources.get(type='storage')
+            
+            for storage in storages:
+                storage_key = f"{storage['node']}-{storage['storage']}"
+                if storage_key not in processed_storages:
+                    processed_storages.add(storage_key)
+                    if storage.get('maxdisk') and storage.get('maxdisk') > 0:
+                        storage['used_percent'] = (storage.get('disk', 0) / storage['maxdisk']) * 100
+                        #storage['enabled'] = 1 if storage == 'Apple' else 'No'
+
+                    else:
+                        storage['used_percent'] = 0
+                    all_storages.append(storage)
+            #pprint.pp(all_storages)
+                    
+        except Exception as e:
+            print(f"Error getting cluster storage: {e}")
+            # Fallback to node-by-node
+            all_storages = get_storages_fallback()
+    # all_storages = get_storages_fallback()
+    pprint.pp(all_storages)
+    return render_template('storages.html', storages=all_storages)
+
+def get_storages_fallback():
+    """Fallback method to get storage node by node"""
+    all_storages = []
+    processed_storages = set()
+    
+    for node_info in cluster_nodes:
+        try:
+            node_name = node_info['name']
+            proxmox = node_info['connection']
+            
+            storages = proxmox.nodes(node_name).storage.get()
+            for storage in storages:
+                storage_key = f"{node_name}-{storage['storage']}"
+                if storage_key not in processed_storages:
+                    processed_storages.add(storage_key)
+                    storage['node'] = node_name
+                    if storage.get('total') and storage.get('total') > 0:
+                        storage['used_percent'] = (storage.get('used', 0) / storage['total']) * 100
+                    else:
+                        storage['used_percent'] = 0
+                    all_storages.append(storage)
+        except Exception as e:
+            print(f"Error getting storage from node {node_info['name']}: {e}")
+    
+    return all_storages
+
+@app.route('/networks')
+def networks():
+    """List all networks"""
+    all_networks = []
+    processed_networks = set()
+    
+    for node_info in cluster_nodes:
+        try:
+            node_name = node_info['name']
+            proxmox = node_info['connection']
+            
+            networks = proxmox.nodes(node_name).network.get()
+            for network in networks:
+                network_key = f"{node_name}-{network['iface']}"
+                if network_key not in processed_networks:
+                    processed_networks.add(network_key)
+                    network['node'] = node_name
+                    all_networks.append(network)
+        except Exception as e:
+            print(f"Error getting networks from node {node_info['name']}: {e}")
+    
+    return render_template('networks.html', networks=all_networks)
+
+@app.route('/cluster')
+def cluster():
+    """Show cluster information"""
+    cluster_info = {
+        'name': config['cluster']['name'],
+        'nodes': []
+    }
+    
+    # Get detailed status for each node
+    for node_info in cluster_nodes:
+        try:
+            node_name = node_info['name']
+            proxmox = node_info['connection']
+            
+            # Get node status
+            status = proxmox.nodes(node_name).status.get()
+            status['host'] = node_name
+            status['online'] = True
+            
+            # Get additional node information
+            try:
+                # Get node subscription status if available
+                subscription = proxmox.nodes(node_name).subscription.get()
+                status['subscription'] = subscription
+            except:
+                pass
+            
+            cluster_info['nodes'].append(status)
+            
+        except Exception as e:
+            cluster_info['nodes'].append({
+                'host': node_info['name'],
+                'error': str(e),
+                'online': False
+            })
+    
+    # Sort nodes by name
+    cluster_info['nodes'].sort(key=lambda x: x['host'])
+    
+    return render_template('cluster.html', cluster=cluster_info)
+
+@app.route('/api/nodes')
+def api_nodes():
+    """API endpoint to get all cluster nodes"""
+    nodes = []
+    for node_info in cluster_nodes:
+        nodes.append({
+            'name': node_info['name'],
+            'status': node_info.get('status', 'unknown')
+        })
+    return jsonify(nodes)
+
+@app.route('/api/resources')
+def api_resources():
+    """API endpoint to get all resources"""
+    resources = get_all_vms_and_containers()
+    return jsonify(resources)
+
+@app.route('/api/node/<node>/status')
+def api_node_status(node):
+    """API endpoint to get specific node status"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        return jsonify({'error': 'Node not found'}), 404
+    
+    try:
+        status = proxmox.nodes(node).status.get()
+        return jsonify(status)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/node/<node>/storages')
+def api_node_storages(node):
+    """API endpoint to get storage pools for a specific node"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        return jsonify({'error': 'Node not found'}), 404
+    
+    try:
+        storages = proxmox.nodes(node).storage.get()
+        # Filter for storages that can be used for disk images and containers
+        vm_storages = [s for s in storages if 'images' in s.get('content', '').split(',') 
+                      or 'rootdir' in s.get('content', '').split(',')]
+        return jsonify(vm_storages)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/node/<node>/templates')
+def api_node_templates(node):
+    """API endpoint to get VM templates and container templates for a specific node"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        return jsonify({'error': 'Node not found'}), 404
+    
+    try:
+        result = {
+            'qemu': [],  # VM templates
+            'lxc': []    # Container templates
+        }
+        
+        # Get VM templates
+        try:
+            vms = proxmox.nodes(node).qemu.get()
+            templates = [vm for vm in vms if vm.get('template') == 1]
+            result['qemu'] = templates
+        except Exception as e:
+            print(f"Error getting VM templates: {e}")
+        
+        # Get container templates
+        try:
+            templates = proxmox.nodes(node).storage.get()
+            for storage in templates:
+                if 'vztmpl' in storage.get('content', '').split(','):
+                    # Get templates in this storage
+                    try:
+                        content = proxmox.nodes(node).storage(storage['storage']).content.get(content='vztmpl')
+                        result['lxc'].extend(content)
+                    except:
+                        pass
+        except Exception as e:
+            print(f"Error getting LXC templates: {e}")
+            
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/node/<node>/networks')
+def api_node_networks(node):
+    """API endpoint to get network interfaces for a specific node"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        return jsonify({'error': 'Node not found'}), 404
+    
+    try:
+        networks = proxmox.nodes(node).network.get()
+        # Filter for bridge interfaces
+        bridges = [net for net in networks if net.get('type') == 'bridge']
+        return jsonify(bridges)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cluster/nextid')
+def api_next_vmid():
+    """API endpoint to get the next available VMID"""
+    if not proxmox_nodes:
+        return jsonify({'error': 'No Proxmox connections available'}), 500
+    
+    try:
+        # Get any working connection
+        proxmox = next(iter(proxmox_nodes.values()))
+        
+        # Get next available VMID
+        next_id = proxmox.cluster.nextid.get()
+        return jsonify({'vmid': next_id})
+    except Exception as e:
+        return jsonify({'error': str(e), 'vmid': 100}), 500
+    
+
+@app.errorhandler(404)
+def not_found(error):
+    return render_template('404.html'), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    return render_template('500.html'), 500
+
+if __name__ == '__main__':
+    print("Initializing Proxmox connections...")
+    init_proxmox_connections()
+    
+    if not proxmox_nodes:
+        print("WARNING: No Proxmox connections established!")
+    else:
+        print(f"Successfully connected to {len(proxmox_nodes)} Proxmox nodes")
+        print(f"Cluster contains {len(cluster_nodes)} total nodes")
+    
+    app.run(debug=True, host='0.0.0.0', port=5000)

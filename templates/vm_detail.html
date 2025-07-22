@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+
+{% block title %}VM {{ vmid }} - Proxmox Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1>
+            <i class="bi bi-{{ 'pc-display' if vm_type == 'qemu' else 'box' }}"></i> 
+            {{ config.name or ('VM ' + vmid) }}
+        </h1>
+        <p class="text-muted">{{ vm_type|upper }} {{ vmid }} on {{ node }}</p>
+    </div>
+</div>
+
+<div class="row mt-3">
+    <!-- Status Card -->
+    <div class="col-md-4 mb-3">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-activity"></i> Status</h5>
+            </div>
+            <div class="card-body">
+                <dl class="row">
+                    <dt class="col-sm-4">Status:</dt>
+                    <dd class="col-sm-8">
+                        {% if status.status == 'running' %}
+                            <span class="badge bg-success">Running</span>
+                        {% elif status.status == 'stopped' %}
+                            <span class="badge bg-danger">Stopped</span>
+                        {% else %}
+                            <span class="badge bg-warning">{{ status.status }}</span>
+                        {% endif %}
+                    </dd>
+                    
+                    <dt class="col-sm-4">Uptime:</dt>
+                    <dd class="col-sm-8">{{ status.uptime|default('N/A') }}</dd>
+                    
+                    <dt class="col-sm-4">CPU:</dt>
+                    <dd class="col-sm-8">
+                        <div class="progress" style="height: 20px;">
+                            <div class="progress-bar" style="width: {{ (status.cpu * 100)|round(1) }}%">
+                                {{ (status.cpu * 100)|round(1) }}%
+                            </div>
+                        </div>
+                    </dd>
+                    
+                    <dt class="col-sm-4">Memory:</dt>
+                    <dd class="col-sm-8">
+                        <div class="progress" style="height: 20px;">
+                            <div class="progress-bar" style="width: {{ ((status.mem / status.maxmem) * 100)|round(1) }}%">
+                                {{ ((status.mem / status.maxmem) * 100)|round(1) }}%
+                            </div>
+                        </div>
+                        <small>{{ (status.mem / 1024 / 1024 / 1024)|round(1) }} / {{ (status.maxmem / 1024 / 1024 / 1024)|round(1) }} GB</small>
+                    </dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <!-- Actions Card -->
+    <div class="col-md-4 mb-3">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-gear"></i> Actions</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    {% if status.status == 'stopped' %}
+                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='start') }}">
+                        <button type="submit" class="btn btn-success w-100">
+                            <i class="bi bi-play-fill"></i> Start
+                        </button>
+                    </form>
+                    {% else %}
+                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='shutdown') }}">
+                        <button type="submit" class="btn btn-warning w-100">
+                            <i class="bi bi-power"></i> Shutdown
+                        </button>
+                    </form>
+                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='stop') }}">
+                        <button type="submit" class="btn btn-danger w-100" onclick="return confirm('Force stop VM?')">
+                            <i class="bi bi-stop-fill"></i> Force Stop
+                        </button>
+                    </form>
+                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='reset') }}">
+                        <button type="submit" class="btn btn-warning w-100" onclick="return confirm('Reset VM?')">
+                            <i class="bi bi-arrow-clockwise"></i> Reset
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Migration Card -->
+    <div class="col-md-4 mb-3">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-arrow-left-right"></i> Migration</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='migrate') }}">
+                    <div class="mb-3">
+                        <label for="target_node" class="form-label">Target Node</label>
+                        <select class="form-select" id="target_node" name="target_node" required>
+                            <option value="">Select target node...</option>
+                            {% for target in available_nodes %}
+                            <option value="{{ target }}">{{ target }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100" onclick="return confirm('Migrate VM to selected node?')">
+                        <i class="bi bi-arrow-right-circle"></i> Migrate
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Configuration Details -->
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-sliders"></i> Configuration</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Setting</th>
+                                <th>Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for key, value in config.items() %}
+                            <tr>
+                                <td><strong>{{ key }}</strong></td>
+                                <td>{{ value }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

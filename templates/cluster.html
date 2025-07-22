@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}Cluster - Proxmox Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1><i class="bi bi-diagram-2"></i> Cluster Information</h1>
+        <p class="text-muted">{{ cluster.name }}</p>
+    </div>
+</div>
+
+<div class="row mt-3">
+    {% for node in cluster.nodes %}
+    <div class="col-md-6 mb-3">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="bi bi-server"></i> {{ node.host }}
+                    {% if node.error %}
+                        <span class="badge bg-danger float-end">Offline</span>
+                    {% else %}
+                        <span class="badge bg-success float-end">Online</span>
+                    {% endif %}
+                </h5>
+            </div>
+            <div class="card-body">
+                {% if node.error %}
+                    <div class="alert alert-danger">
+                        <i class="bi bi-exclamation-triangle"></i> Connection Error: {{ node.error }}
+                    </div>
+                {% else %}
+                    <dl class="row">
+                        <dt class="col-sm-4">CPU Model:</dt>
+                        <dd class="col-sm-8">{{ node.cpuinfo.model|default('N/A') }}</dd>
+                        
+                        <dt class="col-sm-4">CPU Cores:</dt>
+                        <dd class="col-sm-8">{{ node.cpuinfo.cpus|default('N/A') }}</dd>
+                        
+                        <dt class="col-sm-4">CPU Usage:</dt>
+                        <dd class="col-sm-8">
+                            <div class="progress" style="height: 20px;">
+                                <div class="progress-bar bg-{{ 'danger' if (node.cpu * 100) > 80 else 'warning' if (node.cpu * 100) > 60 else 'success' }}" 
+                                     style="width: {{ (node.cpu * 100)|round(1) }}%">
+                                    {{ (node.cpu * 100)|round(1) }}%
+                                </div>
+                            </div>
+                        </dd>
+                        
+                        <dt class="col-sm-4">Memory:</dt>
+                        <dd class="col-sm-8">
+                            <div class="progress" style="height: 20px;">
+                                <div class="progress-bar bg-{{ 'danger' if ((node.memory.used / node.memory.total) * 100) > 80 else 'warning' if ((node.memory.used / node.memory.total) * 100) > 60 else 'success' }}" 
+                                     style="width: {{ ((node.memory.used / node.memory.total) * 100)|round(1) }}%">
+                                    {{ ((node.memory.used / node.memory.total) * 100)|round(1) }}%
+                                </div>
+                            </div>
+                            <small>{{ (node.memory.used / 1024 / 1024 / 1024)|round(1) }} / {{ (node.memory.total / 1024 / 1024 / 1024)|round(1) }} GB</small>
+                        </dd>
+                        
+                        <dt class="col-sm-4">Uptime:</dt>
+                        <dd class="col-sm-8">{{ node.uptime|default('N/A') }}</dd>
+                        
+                        <dt class="col-sm-4">Kernel:</dt>
+                        <dd class="col-sm-8">{{ node.kversion|default('N/A') }}</dd>
+                        
+                        <dt class="col-sm-4">PVE Version:</dt>
+                        <dd class="col-sm-8">{{ node.pveversion|default('N/A') }}</dd>
+                    </dl>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Networks - Proxmox Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1><i class="bi bi-diagram-3"></i> Networks</h1>
+    </div>
+</div>
+
+<div class="row mt-3">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Network Interfaces</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Interface</th>
+                                <th>Node</th>
+                                <th>Type</th>
+                                <th>Active</th>
+                                <th>IP Address</th>
+                                <th>Bridge Ports</th>
+                                <th>Comments</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for network in networks %}
+                            <tr>
+                                <td><strong>{{ network.iface }}</strong></td>
+                                <td>{{ network.node }}</td>
+                                <td>
+                                    <span class="badge bg-info">{{ network.type }}</span>
+                                </td>
+                                <td>
+                                    {% if network.active %}
+                                        <span class="badge bg-success">Active</span>
+                                    {% else %}
+                                        <span class="badge bg-danger">Inactive</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ network.address|default('-') }}</td>
+                                <td>{{ network.bridge_ports|default('-') }}</td>
+                                <td>{{ network.comments|default('-') }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

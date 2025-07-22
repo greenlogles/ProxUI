@@ -1,0 +1,10 @@
+[cluster]
+name = "My Proxmox Cluster"
+
+[[nodes]]
+host = "localhost"
+user = "root@pam"
+password = "admin"
+verify_ssl = false
+
+#

@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}VMs & Containers - Proxmox Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1><i class="bi bi-pc-display"></i> Virtual Machines & Containers</h1>
+    </div>
+</div>
+
+<div class="row mt-3">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">All VMs and Containers</h5>
+                    <div>
+                        <a href="{{ url_for('create_vm') }}" class="btn btn-success btn-sm">
+                            <i class="bi bi-plus-circle"></i> Create New
+                        </a>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Status</th>
+                                <th>
+                                    <a href="?sort=name&order={{ 'asc' if request.args.get('sort') == 'name' and request.args.get('order') == 'desc' else 'desc' }}">
+                                        Name <i class="bi bi-arrow-down-up"></i>
+                                    </a>
+                                </th>
+                                <th>Type</th>
+                                <th>Node</th>
+                                <th>
+                                    <a href="?sort=cpu&order={{ 'asc' if request.args.get('sort') == 'cpu' and request.args.get('order') == 'desc' else 'desc' }}">
+                                        CPU <i class="bi bi-arrow-down-up"></i>
+                                    </a>
+                                </th>
+                                <th>
+                                    <a href="?sort=memory&order={{ 'asc' if request.args.get('sort') == 'memory' and request.args.get('order') == 'desc' else 'desc' }}">
+                                        Memory <i class="bi bi-arrow-down-up"></i>
+                                    </a>
+                                </th>
+                                <th>
+                                    <a href="?sort=disk&order={{ 'asc' if request.args.get('sort') == 'disk' and request.args.get('order') == 'desc' else 'desc' }}">
+                                        Disk <i class="bi bi-arrow-down-up"></i>
+                                    </a>
+                                </th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for vm in resources %}
+                            <tr>
+                                <td>
+                                    {% if vm.status == 'running' %}
+                                        <span class="badge bg-success"><i class="bi bi-play-circle"></i> Running</span>
+                                    {% elif vm.status == 'stopped' %}
+                                        <span class="badge bg-danger"><i class="bi bi-stop-circle"></i> Stopped</span>
+                                    {% else %}
+                                        <span class="badge bg-warning">{{ vm.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}">
+                                        <strong>{{ vm.name }}</strong>
+                                    </a>
+                                    <br>
+                                    <small class="text-muted">VMID: {{ vm.vmid }}</small>
+                                </td>
+                                <td>
+                                    <span class="badge bg-{{ 'primary' if vm.type == 'qemu' else 'info' }}">
+                                        {{ 'VM' if vm.type == 'qemu' else 'LXC' }}
+                                    </span>
+                                </td>
+                                <td>{{ vm.node }}</td>
+                                <td>
+                                    <div class="progress" style="height: 20px; min-width: 100px;">
+                                        <div class="progress-bar bg-{{ 'danger' if vm.cpu_percent > 80 else 'warning' if vm.cpu_percent > 60 else 'success' }}" 
+                                             style="width: {{ vm.cpu_percent }}%">
+                                            {{ "%.1f"|format(vm.cpu_percent) }}%
+                                        </div>
+                                    </div>
+                                    <small>{{ vm.maxcpu }} vCPU</small>
+                                </td>
+                                <td>
+                                    <div class="progress" style="height: 20px; min-width: 100px;">
+                                        <div class="progress-bar bg-{{ 'danger' if vm.mem_percent > 80 else 'warning' if vm.mem_percent > 60 else 'success' }}" 
+                                             style="width: {{ vm.mem_percent }}%">
+                                            {{ "%.1f"|format(vm.mem_percent) }}%
+                                        </div>
+                                    </div>
+                                    <small>{% if vm.maxmem %}{{ (vm.maxmem / 1024 / 1024 / 1024)|round(1) }} GB{% else %}N/A{% endif%}</small>
+                                </td>
+                                <td>
+                                    {% if vm.maxdisk %}
+                                    <div class="progress" style="height: 20px; min-width: 100px;">
+                                        <div class="progress-bar bg-{{ 'danger' if vm.disk_percent > 80 else 'warning' if vm.disk_percent > 60 else 'info' }}" 
+                                             style="width: {{ vm.disk_percent }}%">
+                                            {{ "%.1f"|format(vm.disk_percent) }}%
+                                        </div>
+                                    </div>
+                                    <small>{{ (vm.maxdisk / 1024 / 1024 / 1024)|round(1) }} GB</small>
+                                    {% else %}
+                                    <small class="text-muted">N/A</small>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}" 
+                                           class="btn btn-outline-primary" title="Details">
+                                            <i class="bi bi-info-circle"></i>
+                                        </a>
+                                        {% if vm.status == 'stopped' %}
+                                        <form method="POST" action="{{ url_for('vm_action', node=vm.node, vmid=vm.vmid, action='start') }}" style="display: inline;">
+                                            <button type="submit" class="btn btn-outline-success" title="Start">
+                                                <i class="bi bi-play-fill"></i>
+                                            </button>
+                                        </form>
+                                        {% else %}
+                                        <form method="POST" action="{{ url_for('vm_action', node=vm.node, vmid=vm.vmid, action='shutdown') }}" style="display: inline;">
+                                            <button type="submit" class="btn btn-outline-warning" title="Shutdown">
+                                                <i class="bi bi-power"></i>
+                                            </button>
+                                        </form>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

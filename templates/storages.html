@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Storage - Proxmox Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1><i class="bi bi-hdd"></i> Storage</h1>
+    </div>
+</div>
+
+<div class="row mt-3">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Storage Overview</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Storage</th>
+                                <th>Node</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Usage</th>
+                                <th>Total Size</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for storage in storages %}
+                            <tr>
+                                <td><strong>{{ storage.storage }}</strong></td>
+                                <td>{{ storage.node }}</td>
+                                <td>
+                                    <span class="badge bg-secondary">{% if storage.content %}{{ storage.content }} {% else %}{{ storage.type }}{% endif %}</span>
+                                </td>
+                                <td>
+                                    {% if storage.enabled or (storage.status == 'available') %}
+                                        <span class="badge bg-success">Active</span>
+                                    {% else %}
+                                        <span class="badge bg-danger">Inactive</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if storage.maxdisk %}
+                                    <div class="progress" style="height: 20px; min-width: 150px;">
+                                        <div class="progress-bar bg-{{ 'danger' if storage.used_percent > 80 else 'warning' if storage.used_percent > 60 else 'info' }}" 
+                                             style="width: {{ storage.used_percent }}%">
+                                            {{ "%.1f"|format(storage.used_percent) }}%
+                                        </div>
+                                    </div>
+                                    <small>{{ (storage.disk / 1024 / 1024 / 1024)|round(1) }} / {{ (storage.maxdisk / 1024 / 1024 / 1024)|round(1) }} GB</small>
+                                    {% else %}
+                                    <small class="text-muted">N/A</small>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if storage.maxdisk %}
+                                        {{ (storage.maxdisk / 1024 / 1024 / 1024)|round(1) }} GB
+                                    {% else %}
+                                        <small class="text-muted">N/A</small>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

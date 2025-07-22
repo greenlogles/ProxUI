@@ -1,0 +1,4 @@
+Flask==2.3.3
+proxmoxer==2.0.1
+requests==2.31.0
+toml==0.10.2
