@@ -102,7 +102,7 @@
                 <h5 class="mb-0"><i class="bi bi-arrow-left-right"></i> Migration</h5>
             </div>
             <div class="card-body">
-                <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='migrate') }}">
+                <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='migrate') }}" id="migrateForm">
                     <div class="mb-3">
                         <label for="target_node" class="form-label">Target Node</label>
                         <select class="form-select" id="target_node" name="target_node" required>
@@ -112,6 +112,15 @@
                             {% endfor %}
                         </select>
                     </div>
+                    
+                    <div class="mb-3">
+                        <label for="target_storage" class="form-label">Target Storage (Optional)</label>
+                        <select class="form-select" id="target_storage" name="target_storage">
+                            <option value="">Keep current storage locations</option>
+                        </select>
+                        <div class="form-text">Leave empty to keep disks on current storage</div>
+                    </div>
+                    
                     <button type="submit" class="btn btn-primary w-100" onclick="return confirm('Migrate VM to selected node?')">
                         <i class="bi bi-arrow-right-circle"></i> Migrate
                     </button>
@@ -151,4 +160,56 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const targetNodeSelect = document.getElementById('target_node');
+    const targetStorageSelect = document.getElementById('target_storage');
+    
+    // Fetch storage options when target node changes
+    targetNodeSelect.addEventListener('change', function() {
+        const targetNode = this.value;
+        
+        if (!targetNode) {
+            targetStorageSelect.innerHTML = '<option value="">Keep current storage locations</option>';
+            return;
+        }
+        
+        // Show loading state
+        targetStorageSelect.innerHTML = '<option value="">Loading storages...</option>';
+        
+        // Fetch storage for target node - use correct VM type
+        const vmType = '{{ vm_type }}';
+        fetch(`/api/node/${targetNode}/storages?vm_type=${vmType}`)
+            .then(response => response.json())
+            .then(data => {
+                targetStorageSelect.innerHTML = '<option value="">Keep current storage locations</option>';
+                
+                if (data.error) {
+                    console.error('Error fetching target storages:', data.error);
+                    return;
+                }
+                
+                data.forEach(storage => {
+                    const option = document.createElement('option');
+                    option.value = storage.storage;
+                    
+                    // Create display text with available space information
+                    let displayText = `${storage.storage} (${storage.type})`;
+                    if (storage.available_gb !== undefined) {
+                        displayText += ` - ${storage.available_gb} GB free`;
+                    }
+                    option.textContent = displayText;
+                    targetStorageSelect.appendChild(option);
+                });
+            })
+            .catch(error => {
+                console.error('Error fetching target storages:', error);
+                targetStorageSelect.innerHTML = '<option value="">Error loading storages</option>';
+            });
+    });
+});
+</script>
 {% endblock %}

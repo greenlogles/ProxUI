@@ -296,9 +296,48 @@ def vm_action(node, vmid, action):
             flash(f'VM {vmid} reset successfully', 'success')
         elif action == 'migrate':
             target_node = request.form.get('target_node')
+            target_storage = request.form.get('target_storage')
+            
             if target_node:
-                vm.migrate.post(target=target_node, online=1)
-                flash(f'VM {vmid} migration to {target_node} started', 'success')
+                # Build migration parameters
+                migrate_params = {
+                    'target': target_node,
+                    'online': 1
+                }
+                
+                # Add storage mapping if target storage is specified
+                if target_storage:
+                    # Get VM's current storage configuration to build storage mapping
+                    vm_config = vm.config.get()
+                    storage_mapping = {}
+                    
+                    if vm_type == 'qemu':
+                        # QEMU VMs: Find all storage devices (scsi, virtio, ide, sata disks)
+                        for key, value in vm_config.items():
+                            if any(key.startswith(prefix) for prefix in ['scsi', 'virtio', 'ide', 'sata']):
+                                if isinstance(value, str) and ':' in value:
+                                    # Format: storage:size or storage:vm-100-disk-0,size=20G
+                                    current_storage = value.split(':')[0]
+                                    storage_mapping[current_storage] = target_storage
+                    else:
+                        # LXC containers: Find rootfs and mount points
+                        for key, value in vm_config.items():
+                            if key == 'rootfs' or key.startswith('mp'):
+                                if isinstance(value, str) and ':' in value:
+                                    # Format: storage:size or storage:subvol-100-disk-0,size=20G
+                                    current_storage = value.split(':')[0]
+                                    storage_mapping[current_storage] = target_storage
+                    
+                    if storage_mapping:
+                        migrate_params['targetstorage'] = target_storage
+                
+                vm.migrate.post(**migrate_params)
+                
+                vm_type_name = 'VM' if vm_type == 'qemu' else 'Container'
+                if target_storage:
+                    flash(f'{vm_type_name} {vmid} migration to {target_node} with storage {target_storage} started', 'success')
+                else:
+                    flash(f'{vm_type_name} {vmid} migration to {target_node} started', 'success')
             else:
                 flash('Target node not specified', 'error')
         else:
