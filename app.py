@@ -622,15 +622,15 @@ def api_node_templates(node):
         
         # Get container templates
         try:
-            templates = proxmox.nodes(node).storage.get()
-            for storage in templates:
+            storages = proxmox.nodes(node).storage.get()
+            for storage in storages:
                 if 'vztmpl' in storage.get('content', '').split(','):
                     # Get templates in this storage
                     try:
-                        content = proxmox.nodes(node).storage(storage['storage']).content.get(content='vztmpl')
-                        result['lxc'].extend(content)
-                    except:
-                        pass
+                        templates = proxmox.nodes(node).storage(storage['storage']).content.get(content='vztmpl')
+                        result['lxc'].extend(templates)
+                    except Exception as e:
+                        print(f"Error getting templates from storage {storage.get('storage')}: {e}")
         except Exception as e:
             print(f"Error getting LXC templates: {e}")
             

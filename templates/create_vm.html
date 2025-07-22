@@ -298,20 +298,27 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 if (vmType === 'qemu') {
                     // VM templates
-                    data.qemu.forEach(template => {
-                        const option = document.createElement('option');
-                        option.value = template.vmid;
-                        option.textContent = template.name || `Template VM ${template.vmid}`;
-                        templateSelect.appendChild(option);
-                    });
-                } else {
-                    // Container templates
-                    data.lxc.forEach(template => {
-                        const option = document.createElement('option');
-                        option.value = template.volid;
-                        option.textContent = template.volid.split('/').pop();
-                        osTemplateSelect.appendChild(option);
-                    });
+                    if (data.qemu && data.qemu.length > 0) {
+                        data.qemu.forEach(template => {
+                            const option = document.createElement('option');
+                            option.value = template.vmid;
+                            option.textContent = template.name || `Template VM ${template.vmid}`;
+                            templateSelect.appendChild(option);
+                        });
+                    }
+                } else if (vmType === 'lxc') {
+                    // Container templates - populate OS template dropdown
+                    if (data.lxc && data.lxc.length > 0) {
+                        console.log('Found LXC templates:', data.lxc.length);
+                        data.lxc.forEach(template => {
+                            const option = document.createElement('option');
+                            option.value = template.volid;
+                            option.textContent = template.volid.split('/').pop();
+                            osTemplateSelect.appendChild(option);
+                        });
+                    } else {
+                        console.log('No LXC templates found in data:', data);
+                    }
                 }
             })
             .catch(error => {
