@@ -131,14 +131,34 @@
 </div>
 
 <div class="row">
+    <!-- Recent Tasks -->
+    <div class="col-md-6 mb-3">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-list-task"></i> Recent Tasks</h5>
+                <button class="btn btn-sm btn-outline-primary" id="refreshTasks" title="Refresh Tasks">
+                    <i class="bi bi-arrow-clockwise"></i>
+                </button>
+            </div>
+            <div class="card-body" id="tasksContainer">
+                <div class="text-center">
+                    <div class="spinner-border spinner-border-sm" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    Loading tasks...
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Configuration Details -->
-    <div class="col-12">
+    <div class="col-md-6 mb-3">
         <div class="card">
             <div class="card-header">
                 <h5 class="mb-0"><i class="bi bi-sliders"></i> Configuration</h5>
             </div>
             <div class="card-body">
-                <div class="table-responsive">
+                <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
                     <table class="table table-sm">
                         <thead>
                             <tr>
@@ -167,6 +187,13 @@
 document.addEventListener('DOMContentLoaded', function() {
     const targetNodeSelect = document.getElementById('target_node');
     const targetStorageSelect = document.getElementById('target_storage');
+    const tasksContainer = document.getElementById('tasksContainer');
+    const refreshTasksBtn = document.getElementById('refreshTasks');
+    
+    // VM/Container details
+    const node = '{{ node }}';
+    const vmid = '{{ vmid }}';
+    const vmType = '{{ vm_type }}';
     
     // Fetch storage options when target node changes
     targetNodeSelect.addEventListener('change', function() {
@@ -181,7 +208,6 @@ document.addEventListener('DOMContentLoaded', function() {
         targetStorageSelect.innerHTML = '<option value="">Loading storages...</option>';
         
         // Fetch storage for target node - use correct VM type
-        const vmType = '{{ vm_type }}';
         fetch(`/api/node/${targetNode}/storages?vm_type=${vmType}`)
             .then(response => response.json())
             .then(data => {
@@ -210,6 +236,96 @@ document.addEventListener('DOMContentLoaded', function() {
                 targetStorageSelect.innerHTML = '<option value="">Error loading storages</option>';
             });
     });
+    
+    // Fetch and display VM tasks
+    function fetchVmTasks() {
+        fetch(`/api/vm/${node}/${vmid}/tasks`)
+            .then(response => response.json())
+            .then(data => {
+                displayTasks(data);
+            })
+            .catch(error => {
+                console.error('Error fetching VM tasks:', error);
+                tasksContainer.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle"></i> Error loading tasks</div>';
+            });
+    }
+    
+    // Display tasks in the container
+    function displayTasks(tasks) {
+        if (!Array.isArray(tasks)) {
+            tasksContainer.innerHTML = '<div class="text-muted"><i class="bi bi-info-circle"></i> No tasks found</div>';
+            return;
+        }
+        
+        if (tasks.length === 0) {
+            tasksContainer.innerHTML = '<div class="text-muted"><i class="bi bi-info-circle"></i> No recent tasks</div>';
+            return;
+        }
+        
+        let tasksHtml = '<div class="list-group list-group-flush">';
+        
+        tasks.forEach(task => {
+            const taskType = task.type || 'unknown';
+            const taskStatus = task.status || 'unknown';
+            const startTime = task.start_time_formatted || 'Unknown';
+            const endTime = task.end_time_formatted;
+            const statusClass = task.status_class || 'secondary';
+            
+            // Create task type display name
+            const taskTypeNames = {
+                'qmstart': 'Start VM',
+                'qmstop': 'Stop VM', 
+                'qmshutdown': 'Shutdown VM',
+                'qmreset': 'Reset VM',
+                'qmmigrate': 'Migrate VM',
+                'qmclone': 'Clone VM',
+                'qmcreate': 'Create VM',
+                'qmdestroy': 'Destroy VM',
+                'vzstart': 'Start Container',
+                'vzstop': 'Stop Container',
+                'vzshutdown': 'Shutdown Container',
+                'vzmigrate': 'Migrate Container',
+                'vzclone': 'Clone Container',
+                'vzcreate': 'Create Container',
+                'vzdestroy': 'Destroy Container'
+            };
+            
+            const displayName = taskTypeNames[taskType] || taskType.toUpperCase();
+            
+            tasksHtml += `
+                <div class="list-group-item list-group-item-action">
+                    <div class="d-flex w-100 justify-content-between align-items-start">
+                        <div>
+                            <h6 class="mb-1">${displayName}</h6>
+                            <p class="mb-1 text-muted small">Started: ${startTime}</p>
+                            ${endTime ? `<p class="mb-1 text-muted small">Ended: ${endTime}</p>` : ''}
+                        </div>
+                        <span class="badge bg-${statusClass}">${taskStatus}</span>
+                    </div>
+                </div>
+            `;
+        });
+        
+        tasksHtml += '</div>';
+        tasksContainer.innerHTML = tasksHtml;
+    }
+    
+    // Refresh tasks button
+    refreshTasksBtn.addEventListener('click', function() {
+        this.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
+        this.disabled = true;
+        fetchVmTasks();
+        setTimeout(() => {
+            this.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
+            this.disabled = false;
+        }, 1000);
+    });
+    
+    // Initial load of tasks
+    fetchVmTasks();
+    
+    // Auto-refresh tasks every 30 seconds
+    setInterval(fetchVmTasks, 30000);
 });
 </script>
 {% endblock %}

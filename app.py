@@ -708,6 +708,63 @@ def api_next_vmid():
         return jsonify({'vmid': next_id})
     except Exception as e:
         return jsonify({'error': str(e), 'vmid': 100}), 500
+
+@app.route('/api/vm/<node>/<vmid>/tasks')
+def api_vm_tasks(node, vmid):
+    """API endpoint to get recent tasks for a specific VM/container"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        return jsonify({'error': 'Node not found'}), 404
+    
+    try:
+        # Get all tasks from the node
+        all_tasks = proxmox.nodes(node).tasks.get()
+        
+        # Filter tasks related to this specific VM/container
+        vm_tasks = []
+        for task in all_tasks:
+            # Check if task is related to this VMID
+            task_description = task.get('type', '').lower()
+            task_id = task.get('id', '')
+            
+            # Match tasks that contain the VMID or are VM-related operations
+            if (vmid in task_id or 
+                f":{vmid}:" in task_id or 
+                task_id.endswith(f":{vmid}") or
+                task_id.startswith(f"{vmid}:") or
+                f"VMID {vmid}" in task.get('status', '') or
+                (task.get('type') in ['qmstart', 'qmstop', 'qmshutdown', 'qmreset', 'qmmigrate', 'qmclone', 'qmcreate', 'qmdestroy',
+                                     'vzstart', 'vzstop', 'vzshutdown', 'vzmigrate', 'vzclone', 'vzcreate', 'vzdestroy'] and
+                 vmid in str(task.get('id', '')))):
+                
+                # Add human-readable timestamps
+                if task.get('starttime'):
+                    task['start_time_formatted'] = datetime.fromtimestamp(task['starttime']).strftime('%Y-%m-%d %H:%M:%S')
+                if task.get('endtime'):
+                    task['end_time_formatted'] = datetime.fromtimestamp(task['endtime']).strftime('%Y-%m-%d %H:%M:%S')
+                
+                # Add status badge class for UI
+                status = task.get('status', '').lower()
+                if 'ok' in status or status == 'stopped':
+                    task['status_class'] = 'success'
+                elif 'error' in status or 'failed' in status:
+                    task['status_class'] = 'danger'
+                elif 'running' in status:
+                    task['status_class'] = 'primary'
+                else:
+                    task['status_class'] = 'secondary'
+                
+                vm_tasks.append(task)
+        
+        # Sort by start time (most recent first)
+        vm_tasks.sort(key=lambda x: x.get('starttime', 0), reverse=True)
+        
+        # Limit to last 10 tasks
+        vm_tasks = vm_tasks[:10]
+        
+        return jsonify(vm_tasks)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
     
 
 @app.errorhandler(404)
