@@ -165,4 +165,150 @@
         </div>
     </div>
 </div>
+
+<div class="row mt-4">
+    <!-- Recent Tasks -->
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-list-task"></i> Recent Tasks</h5>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-primary" id="refreshTasks" title="Refresh Tasks">
+                        <i class="bi bi-arrow-clockwise"></i>
+                    </button>
+                    <a href="{{ url_for('tasks') }}" class="btn btn-sm btn-outline-secondary">
+                        View All
+                    </a>
+                </div>
+            </div>
+            <div class="card-body p-0" id="tasksContainer">
+                <div class="text-center p-4">
+                    <div class="spinner-border spinner-border-sm" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    Loading recent tasks...
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const tasksContainer = document.getElementById('tasksContainer');
+    const refreshTasksBtn = document.getElementById('refreshTasks');
+    
+    // Fetch recent tasks for dashboard
+    function fetchRecentTasks() {
+        fetch('/api/tasks?limit=8')
+            .then(response => response.json())
+            .then(data => {
+                displayDashboardTasks(data);
+            })
+            .catch(error => {
+                console.error('Error fetching recent tasks:', error);
+                tasksContainer.innerHTML = '<div class="text-danger p-4"><i class="bi bi-exclamation-triangle"></i> Error loading tasks</div>';
+            });
+    }
+    
+    // Display tasks on dashboard
+    function displayDashboardTasks(tasks) {
+        if (!Array.isArray(tasks) || tasks.length === 0) {
+            tasksContainer.innerHTML = '<div class="text-muted p-4"><i class="bi bi-info-circle"></i> No recent tasks</div>';
+            return;
+        }
+        
+        const taskTypeNames = {
+            'qmstart': 'Start VM',
+            'qmstop': 'Stop VM', 
+            'qmshutdown': 'Shutdown VM',
+            'qmreset': 'Reset VM',
+            'qmmigrate': 'Migrate VM',
+            'qmclone': 'Clone VM',
+            'qmcreate': 'Create VM',
+            'qmdestroy': 'Destroy VM',
+            'vzstart': 'Start Container',
+            'vzstop': 'Stop Container',
+            'vzshutdown': 'Shutdown Container',
+            'vzmigrate': 'Migrate Container',
+            'vzclone': 'Clone Container',
+            'vzcreate': 'Create Container',
+            'vzdestroy': 'Destroy Container'
+        };
+        
+        let tasksHtml = '<div class="list-group list-group-flush">';
+        
+        tasks.forEach((task, index) => {
+            if (index >= 8) return; // Limit to 8 tasks for dashboard
+            
+            const taskType = task.type || 'unknown';
+            const taskStatus = task.status || 'unknown';
+            const startTime = task.start_time_formatted || 'Unknown';
+            const statusClass = task.status_class || 'secondary';
+            const node = task.node || 'Unknown';
+            const vmid = task.vmid || '';
+            
+            const displayName = taskTypeNames[taskType] || taskType.toUpperCase();
+            
+            // Create VM/Container link if VMID exists
+            let vmidDisplay = vmid;
+            if (vmid && (taskType.startsWith('qm') || taskType.startsWith('vz'))) {
+                vmidDisplay = `<a href="/vm/${node}/${vmid}" class="text-decoration-none">${vmid}</a>`;
+            }
+            
+            tasksHtml += `
+                <div class="list-group-item list-group-item-action">
+                    <div class="d-flex w-100 justify-content-between align-items-start">
+                        <div>
+                            <h6 class="mb-1">${displayName}</h6>
+                            <p class="mb-1 text-muted small">
+                                Node: <span class="badge bg-secondary">${node}</span>
+                                ${vmid ? `| VM/CT: ${vmidDisplay}` : ''}
+                            </p>
+                            <small class="text-muted">${startTime}</small>
+                        </div>
+                        <span class="badge bg-${statusClass}">${taskStatus}</span>
+                    </div>
+                </div>
+            `;
+        });
+        
+        tasksHtml += '</div>';
+        tasksContainer.innerHTML = tasksHtml;
+    }
+    
+    // Refresh tasks button
+    refreshTasksBtn.addEventListener('click', function() {
+        const originalHtml = this.innerHTML;
+        this.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i>';
+        this.disabled = true;
+        
+        fetchRecentTasks();
+        
+        setTimeout(() => {
+            this.innerHTML = originalHtml;
+            this.disabled = false;
+        }, 1000);
+    });
+    
+    // Initial load
+    fetchRecentTasks();
+    
+    // Auto-refresh every 30 seconds
+    setInterval(fetchRecentTasks, 30000);
+});
+</script>
+
+<style>
+.spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+</style>
 {% endblock %}

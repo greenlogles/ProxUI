@@ -390,6 +390,11 @@ def vm_action(node, vmid, action):
     
     return redirect(url_for('vm_detail', node=node, vmid=vmid))
 
+@app.route('/tasks')
+def tasks():
+    """Show all recent tasks from the cluster"""
+    return render_template('tasks.html')
+
 @app.route('/create_vm', methods=['GET', 'POST'])
 def create_vm():
     """Create new VM or container"""
@@ -806,6 +811,73 @@ def api_vm_tasks(node, vmid):
         return jsonify(vm_tasks)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/tasks')
+def api_cluster_tasks():
+    """API endpoint to get all recent tasks from the cluster"""
+    all_tasks = []
+    processed_tasks = set()  # Track processed tasks to avoid duplicates
+    
+    # Collect tasks from all cluster nodes
+    for node_info in cluster_nodes:
+        try:
+            node_name = node_info['name']
+            proxmox = node_info['connection']
+            
+            # Get tasks from this node
+            node_tasks = proxmox.nodes(node_name).tasks.get()
+            
+            for task in node_tasks:
+                # Create unique task identifier
+                task_key = f"{node_name}-{task.get('upid', task.get('id', ''))}"
+                
+                if task_key not in processed_tasks:
+                    processed_tasks.add(task_key)
+                    
+                    # Add node information
+                    task['node'] = node_name
+                    
+                    # Add human-readable timestamps
+                    if task.get('starttime'):
+                        task['start_time_formatted'] = datetime.fromtimestamp(task['starttime']).strftime('%Y-%m-%d %H:%M:%S')
+                    if task.get('endtime'):
+                        task['end_time_formatted'] = datetime.fromtimestamp(task['endtime']).strftime('%Y-%m-%d %H:%M:%S')
+                    
+                    # Add status badge class for UI
+                    status = task.get('status', '').lower()
+                    if 'ok' in status or status == 'stopped':
+                        task['status_class'] = 'success'
+                    elif 'error' in status or 'failed' in status:
+                        task['status_class'] = 'danger'
+                    elif 'running' in status:
+                        task['status_class'] = 'primary'
+                    else:
+                        task['status_class'] = 'secondary'
+                    
+                    # Extract VMID from task if possible
+                    task_id = task.get('id', '')
+                    task_type = task.get('type', '')
+                    if task_type in ['qmstart', 'qmstop', 'qmshutdown', 'qmreset', 'qmmigrate', 'qmclone', 'qmcreate', 'qmdestroy',
+                                   'vzstart', 'vzstop', 'vzshutdown', 'vzmigrate', 'vzclone', 'vzcreate', 'vzdestroy']:
+                        # Try to extract VMID from task ID
+                        import re
+                        vmid_match = re.search(r':(\d+):', task_id)
+                        if vmid_match:
+                            task['vmid'] = vmid_match.group(1)
+                    
+                    all_tasks.append(task)
+                    
+        except Exception as e:
+            print(f"Error getting tasks from node {node_info['name']}: {e}")
+    
+    # Sort by start time (most recent first)
+    all_tasks.sort(key=lambda x: x.get('starttime', 0), reverse=True)
+    
+    # Get limit from query parameter, default to 50
+    limit = request.args.get('limit', 50, type=int)
+    all_tasks = all_tasks[:limit]
+    
+    return jsonify(all_tasks)
     
 
 @app.errorhandler(404)

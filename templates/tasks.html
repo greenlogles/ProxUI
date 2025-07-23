@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+
+{% block title %}Tasks - Proxmox Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center">
+            <h1><i class="bi bi-list-task"></i> Recent Tasks</h1>
+            <button class="btn btn-outline-primary" id="refreshTasks" title="Refresh Tasks">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </button>
+        </div>
+        <p class="text-muted">All recent tasks from the cluster</p>
+    </div>
+</div>
+
+<div class="row mt-3">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Cluster Tasks</h5>
+                <div class="d-flex gap-2">
+                    <select class="form-select form-select-sm" id="taskFilter" style="width: auto;">
+                        <option value="all">All Tasks</option>
+                        <option value="running">Running</option>
+                        <option value="ok">Completed</option>
+                        <option value="error">Failed</option>
+                    </select>
+                    <select class="form-select form-select-sm" id="taskLimit" style="width: auto;">
+                        <option value="50">Last 50</option>
+                        <option value="100">Last 100</option>
+                        <option value="200">Last 200</option>
+                    </select>
+                </div>
+            </div>
+            <div class="card-body p-0" id="tasksContainer">
+                <div class="text-center p-4">
+                    <div class="spinner-border spinner-border-sm" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    Loading tasks...
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const tasksContainer = document.getElementById('tasksContainer');
+    const refreshTasksBtn = document.getElementById('refreshTasks');
+    const taskFilter = document.getElementById('taskFilter');
+    const taskLimit = document.getElementById('taskLimit');
+    
+    let allTasks = [];
+    
+    // Fetch all tasks from cluster
+    function fetchClusterTasks() {
+        const limit = taskLimit.value;
+        
+        fetch(`/api/tasks?limit=${limit}`)
+            .then(response => response.json())
+            .then(data => {
+                allTasks = data;
+                displayFilteredTasks();
+            })
+            .catch(error => {
+                console.error('Error fetching cluster tasks:', error);
+                tasksContainer.innerHTML = '<div class="text-danger p-4"><i class="bi bi-exclamation-triangle"></i> Error loading tasks</div>';
+            });
+    }
+    
+    // Display filtered tasks
+    function displayFilteredTasks() {
+        const filter = taskFilter.value;
+        
+        let filteredTasks = allTasks;
+        if (filter !== 'all') {
+            filteredTasks = allTasks.filter(task => {
+                const status = task.status?.toLowerCase() || '';
+                if (filter === 'running') {
+                    return status.includes('running');
+                } else if (filter === 'ok') {
+                    return status.includes('ok') || status === 'stopped';
+                } else if (filter === 'error') {
+                    return status.includes('error') || status.includes('failed');
+                }
+                return true;
+            });
+        }
+        
+        displayTasks(filteredTasks);
+    }
+    
+    // Display tasks in the container
+    function displayTasks(tasks) {
+        if (!Array.isArray(tasks)) {
+            tasksContainer.innerHTML = '<div class="text-muted p-4"><i class="bi bi-info-circle"></i> No tasks found</div>';
+            return;
+        }
+        
+        if (tasks.length === 0) {
+            tasksContainer.innerHTML = '<div class="text-muted p-4"><i class="bi bi-info-circle"></i> No tasks match the current filter</div>';
+            return;
+        }
+        
+        const taskTypeNames = {
+            'qmstart': 'Start VM',
+            'qmstop': 'Stop VM', 
+            'qmshutdown': 'Shutdown VM',
+            'qmreset': 'Reset VM',
+            'qmmigrate': 'Migrate VM',
+            'qmclone': 'Clone VM',
+            'qmcreate': 'Create VM',
+            'qmdestroy': 'Destroy VM',
+            'vzstart': 'Start Container',
+            'vzstop': 'Stop Container',
+            'vzshutdown': 'Shutdown Container',
+            'vzmigrate': 'Migrate Container',
+            'vzclone': 'Clone Container',
+            'vzcreate': 'Create Container',
+            'vzdestroy': 'Destroy Container'
+        };
+        
+        let tasksHtml = '<div class="table-responsive">';
+        tasksHtml += '<table class="table table-hover mb-0">';
+        tasksHtml += `
+            <thead class="table-light">
+                <tr>
+                    <th>Task</th>
+                    <th>Node</th>
+                    <th>VM/CT</th>
+                    <th>Status</th>
+                    <th>Started</th>
+                    <th>Duration</th>
+                </tr>
+            </thead>
+            <tbody>
+        `;
+        
+        tasks.forEach(task => {
+            const taskType = task.type || 'unknown';
+            const taskStatus = task.status || 'unknown';
+            const startTime = task.start_time_formatted || 'Unknown';
+            const endTime = task.end_time_formatted;
+            const statusClass = task.status_class || 'secondary';
+            const node = task.node || 'Unknown';
+            const vmid = task.vmid || '';
+            
+            // Calculate duration if both start and end times exist
+            let duration = '';
+            if (task.starttime && task.endtime) {
+                const durationSeconds = task.endtime - task.starttime;
+                if (durationSeconds < 60) {
+                    duration = `${durationSeconds}s`;
+                } else if (durationSeconds < 3600) {
+                    duration = `${Math.floor(durationSeconds / 60)}m ${durationSeconds % 60}s`;
+                } else {
+                    const hours = Math.floor(durationSeconds / 3600);
+                    const minutes = Math.floor((durationSeconds % 3600) / 60);
+                    duration = `${hours}h ${minutes}m`;
+                }
+            } else if (task.starttime && !task.endtime && taskStatus.toLowerCase().includes('running')) {
+                const now = Math.floor(Date.now() / 1000);
+                const runningSeconds = now - task.starttime;
+                if (runningSeconds < 60) {
+                    duration = `${runningSeconds}s`;
+                } else if (runningSeconds < 3600) {
+                    duration = `${Math.floor(runningSeconds / 60)}m`;
+                } else {
+                    const hours = Math.floor(runningSeconds / 3600);
+                    const minutes = Math.floor((runningSeconds % 3600) / 60);
+                    duration = `${hours}h ${minutes}m`;
+                }
+            }
+            
+            const displayName = taskTypeNames[taskType] || taskType.toUpperCase();
+            
+            // Create VM/Container link if VMID exists
+            let vmidDisplay = vmid;
+            if (vmid && (taskType.startsWith('qm') || taskType.startsWith('vz'))) {
+                vmidDisplay = `<a href="/vm/${node}/${vmid}" class="text-decoration-none">${vmid}</a>`;
+            }
+            
+            tasksHtml += `
+                <tr>
+                    <td>
+                        <div>
+                            <strong>${displayName}</strong>
+                        </div>
+                    </td>
+                    <td>
+                        <span class="badge bg-secondary">${node}</span>
+                    </td>
+                    <td>${vmidDisplay}</td>
+                    <td>
+                        <span class="badge bg-${statusClass}">${taskStatus}</span>
+                    </td>
+                    <td>
+                        <small class="text-muted">${startTime}</small>
+                    </td>
+                    <td>
+                        <small class="text-muted">${duration}</small>
+                    </td>
+                </tr>
+            `;
+        });
+        
+        tasksHtml += '</tbody></table></div>';
+        tasksContainer.innerHTML = tasksHtml;
+    }
+    
+    // Event listeners
+    refreshTasksBtn.addEventListener('click', function() {
+        const originalHtml = this.innerHTML;
+        this.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Refreshing...';
+        this.disabled = true;
+        
+        fetchClusterTasks();
+        
+        setTimeout(() => {
+            this.innerHTML = originalHtml;
+            this.disabled = false;
+        }, 1000);
+    });
+    
+    taskFilter.addEventListener('change', displayFilteredTasks);
+    taskLimit.addEventListener('change', fetchClusterTasks);
+    
+    // Initial load
+    fetchClusterTasks();
+    
+    // Auto-refresh every 30 seconds
+    setInterval(fetchClusterTasks, 30000);
+});
+</script>
+
+<style>
+.spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+</style>
+{% endblock %}
