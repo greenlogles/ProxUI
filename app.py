@@ -878,6 +878,124 @@ def api_cluster_tasks():
     all_tasks = all_tasks[:limit]
     
     return jsonify(all_tasks)
+
+@app.route('/api/vm/<node>/<vmid>/metrics')
+def api_vm_metrics(node, vmid):
+    """API endpoint to get historical metrics for a specific VM/container"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        return jsonify({'error': 'Node not found'}), 404
+    
+    # Get timeframe from query parameter, default to 'day'
+    timeframe = request.args.get('timeframe', 'day')
+    
+    # Map timeframes to Proxmox RRD timeframes
+    timeframe_mapping = {
+        'hour': 'hour',
+        'day': 'day', 
+        'week': 'week',
+        'month': 'month',
+        'year': 'year'
+    }
+    
+    proxmox_timeframe = timeframe_mapping.get(timeframe, 'day')
+    
+    try:
+        # Determine VM type
+        vm_type = 'qemu'
+        try:
+            proxmox.nodes(node).qemu(vmid).config.get()
+        except:
+            vm_type = 'lxc'
+        
+        # Get current status for current values
+        if vm_type == 'qemu':
+            status = proxmox.nodes(node).qemu(vmid).status.current.get()
+            # Get historical RRD data
+            try:
+                rrd_data = proxmox.nodes(node).qemu(vmid).rrddata.get(timeframe=proxmox_timeframe)
+            except:
+                rrd_data = []
+        else:
+            status = proxmox.nodes(node).lxc(vmid).status.current.get()
+            # Get historical RRD data for containers
+            try:
+                rrd_data = proxmox.nodes(node).lxc(vmid).rrddata.get(timeframe=proxmox_timeframe)
+            except:
+                rrd_data = []
+        
+        # Process historical data for charts
+        chart_data = {
+            'labels': [],
+            'cpu': [],
+            'memory': [],
+            'network_in': [],
+            'network_out': [],
+            'disk_read': [],
+            'disk_write': []
+        }
+        
+        max_memory = status.get('maxmem', 1)
+        
+        for entry in rrd_data:
+            timestamp = entry.get('time', 0)
+            if timestamp:
+                # Format timestamp based on timeframe
+                dt = datetime.fromtimestamp(timestamp)
+                if timeframe == 'hour':
+                    label = dt.strftime('%H:%M')
+                elif timeframe == 'day':
+                    label = dt.strftime('%H:%M')
+                elif timeframe == 'week':
+                    label = dt.strftime('%m/%d %H:%M')
+                elif timeframe == 'month':
+                    label = dt.strftime('%m/%d')
+                else:  # year
+                    label = dt.strftime('%Y-%m')
+                
+                chart_data['labels'].append(label)
+                chart_data['cpu'].append((entry.get('cpu', 0) * 100) if entry.get('cpu') is not None else 0)
+                chart_data['memory'].append((entry.get('mem', 0) / max_memory * 100) if entry.get('mem') and max_memory else 0)
+                chart_data['network_in'].append(entry.get('netin', 0) / (1024*1024) if entry.get('netin') else 0)  # Convert to MB
+                chart_data['network_out'].append(entry.get('netout', 0) / (1024*1024) if entry.get('netout') else 0)  # Convert to MB
+                chart_data['disk_read'].append(entry.get('diskread', 0) / (1024*1024) if entry.get('diskread') else 0)  # Convert to MB
+                chart_data['disk_write'].append(entry.get('diskwrite', 0) / (1024*1024) if entry.get('diskwrite') else 0)  # Convert to MB
+        
+        # Current metrics for display
+        current_metrics = {
+            'vm_type': vm_type,
+            'status': status.get('status', 'unknown'),
+            'uptime': status.get('uptime', 0),
+            'cpu': {
+                'current': status.get('cpu', 0) * 100 if status.get('cpu') is not None else 0,
+                'cores': status.get('cpus', status.get('maxcpu', 1)),
+            },
+            'memory': {
+                'used': status.get('mem', 0),
+                'max': status.get('maxmem', 0),
+                'usage_percent': (status.get('mem', 0) / status.get('maxmem', 1)) * 100 if status.get('maxmem') else 0,
+                'used_gb': status.get('mem', 0) / (1024**3) if status.get('mem') else 0,
+                'max_gb': status.get('maxmem', 0) / (1024**3) if status.get('maxmem') else 0
+            },
+            'disk': {
+                'used': status.get('disk', 0),
+                'max': status.get('maxdisk', 0),
+                'usage_percent': (status.get('disk', 0) / status.get('maxdisk', 1)) * 100 if status.get('maxdisk') else 0,
+                'used_gb': status.get('disk', 0) / (1024**3) if status.get('disk') else 0,
+                'max_gb': status.get('maxdisk', 0) / (1024**3) if status.get('maxdisk') else 0
+            },
+        }
+        
+        response = {
+            'current': current_metrics,
+            'historical': chart_data,
+            'timeframe': timeframe,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        return jsonify(response)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
     
 
 @app.errorhandler(404)

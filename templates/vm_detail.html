@@ -34,6 +34,90 @@
 {% endif %}
 
 <div class="row mt-3">
+    <!-- Performance Metrics Charts -->
+    <div class="col-12 mb-3">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-graph-up"></i> Performance Metrics</h5>
+                <div class="d-flex gap-2 align-items-center">
+                    <select class="form-select form-select-sm" id="timeframeSelect" style="width: auto;">
+                        <option value="hour">Last Hour</option>
+                        <option value="day" selected>Last Day</option>
+                        <option value="week">Last Week</option>
+                        <option value="month">Last Month</option>
+                        <option value="year">Last Year</option>
+                    </select>
+                    <small class="text-muted" id="metricsLastUpdate">Loading...</small>
+                    <button class="btn btn-sm btn-outline-primary" id="refreshMetrics" title="Refresh Metrics">
+                        <i class="bi bi-arrow-clockwise"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <!-- Current Status Row -->
+                <div class="row mb-4" id="currentStatusRow">
+                    <div class="col-md-3 col-sm-6 mb-2">
+                        <div class="text-center">
+                            <small class="text-muted">Status</small>
+                            <div class="fw-bold" id="currentStatus">Loading...</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-sm-6 mb-2">
+                        <div class="text-center">
+                            <small class="text-muted">CPU</small>
+                            <div class="fw-bold" id="currentCpu">Loading...</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-sm-6 mb-2">
+                        <div class="text-center">
+                            <small class="text-muted">Memory</small>
+                            <div class="fw-bold" id="currentMemory">Loading...</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-sm-6 mb-2">
+                        <div class="text-center">
+                            <small class="text-muted">Uptime</small>
+                            <div class="fw-bold" id="currentUptime">Loading...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Charts Row -->
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <h6><i class="bi bi-cpu"></i> CPU Usage (%)</h6>
+                        <div style="height: 250px;">
+                            <canvas id="cpuChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <h6><i class="bi bi-memory"></i> Memory Usage (%)</h6>
+                        <div style="height: 250px;">
+                            <canvas id="memoryChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <h6><i class="bi bi-diagram-3"></i> Network I/O (MB)</h6>
+                        <div style="height: 250px;">
+                            <canvas id="networkChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <h6><i class="bi bi-hdd"></i> Disk I/O (MB)</h6>
+                        <div style="height: 250px;">
+                            <canvas id="diskChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
     <!-- Status Card -->
     <div class="col-md-4 mb-3">
         <div class="card">
@@ -220,6 +304,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const targetStorageSelect = document.getElementById('target_storage');
     const tasksContainer = document.getElementById('tasksContainer');
     const refreshTasksBtn = document.getElementById('refreshTasks');
+    const refreshMetricsBtn = document.getElementById('refreshMetrics');
+    const metricsLastUpdate = document.getElementById('metricsLastUpdate');
+    const timeframeSelect = document.getElementById('timeframeSelect');
     
     // VM/Container details
     const node = '{{ node }}';
@@ -362,6 +449,268 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Auto-refresh tasks every 30 seconds
     setInterval(fetchVmTasks, 30000);
+    
+    // Chart instances
+    let cpuChart, memoryChart, networkChart, diskChart;
+    
+    // Initialize charts
+    function initializeCharts() {
+        const chartOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'bottom'
+                }
+            },
+            scales: {
+                x: {
+                    display: true,
+                    title: {
+                        display: true,
+                        text: 'Time'
+                    }
+                },
+                y: {
+                    display: true,
+                    beginAtZero: true
+                }
+            }
+        };
+        
+        // CPU Chart
+        const cpuCtx = document.getElementById('cpuChart').getContext('2d');
+        cpuChart = new Chart(cpuCtx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'CPU Usage (%)',
+                    data: [],
+                    borderColor: 'rgb(54, 162, 235)',
+                    backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                    fill: true,
+                    tension: 0.1
+                }]
+            },
+            options: {
+                ...chartOptions,
+                scales: {
+                    ...chartOptions.scales,
+                    y: {
+                        ...chartOptions.scales.y,
+                        max: 100,
+                        title: {
+                            display: true,
+                            text: 'CPU Usage (%)'
+                        }
+                    }
+                }
+            }
+        });
+        
+        // Memory Chart
+        const memoryCtx = document.getElementById('memoryChart').getContext('2d');
+        memoryChart = new Chart(memoryCtx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Memory Usage (%)',
+                    data: [],
+                    borderColor: 'rgb(255, 99, 132)',
+                    backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                    fill: true,
+                    tension: 0.1
+                }]
+            },
+            options: {
+                ...chartOptions,
+                scales: {
+                    ...chartOptions.scales,
+                    y: {
+                        ...chartOptions.scales.y,
+                        max: 100,
+                        title: {
+                            display: true,
+                            text: 'Memory Usage (%)'
+                        }
+                    }
+                }
+            }
+        });
+        
+        // Network Chart
+        const networkCtx = document.getElementById('networkChart').getContext('2d');
+        networkChart = new Chart(networkCtx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Network In (MB)',
+                    data: [],
+                    borderColor: 'rgb(75, 192, 192)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                    fill: false,
+                    tension: 0.1
+                }, {
+                    label: 'Network Out (MB)',
+                    data: [],
+                    borderColor: 'rgb(255, 205, 86)',
+                    backgroundColor: 'rgba(255, 205, 86, 0.1)',
+                    fill: false,
+                    tension: 0.1
+                }]
+            },
+            options: {
+                ...chartOptions,
+                scales: {
+                    ...chartOptions.scales,
+                    y: {
+                        ...chartOptions.scales.y,
+                        title: {
+                            display: true,
+                            text: 'Network I/O (MB)'
+                        }
+                    }
+                }
+            }
+        });
+        
+        // Disk Chart
+        const diskCtx = document.getElementById('diskChart').getContext('2d');
+        diskChart = new Chart(diskCtx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Disk Read (MB)',
+                    data: [],
+                    borderColor: 'rgb(153, 102, 255)',
+                    backgroundColor: 'rgba(153, 102, 255, 0.1)',
+                    fill: false,
+                    tension: 0.1
+                }, {
+                    label: 'Disk Write (MB)',
+                    data: [],
+                    borderColor: 'rgb(255, 159, 64)',
+                    backgroundColor: 'rgba(255, 159, 64, 0.1)',
+                    fill: false,
+                    tension: 0.1
+                }]
+            },
+            options: {
+                ...chartOptions,
+                scales: {
+                    ...chartOptions.scales,
+                    y: {
+                        ...chartOptions.scales.y,
+                        title: {
+                            display: true,
+                            text: 'Disk I/O (MB)'
+                        }
+                    }
+                }
+            }
+        });
+    }
+    
+    // Fetch and display VM metrics
+    function fetchVmMetrics() {
+        const timeframe = timeframeSelect.value;
+        
+        fetch(`/api/vm/${node}/${vmid}/metrics?timeframe=${timeframe}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    console.error('Error fetching VM metrics:', data.error);
+                    return;
+                }
+                
+                updateCurrentStatus(data.current);
+                updateCharts(data.historical);
+                metricsLastUpdate.textContent = `Last update: ${data.timestamp}`;
+            })
+            .catch(error => {
+                console.error('Error fetching VM metrics:', error);
+            });
+    }
+    
+    // Update current status display
+    function updateCurrentStatus(current) {
+        // Format uptime
+        function formatUptime(seconds) {
+            if (!seconds) return 'N/A';
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            
+            if (days > 0) {
+                return `${days}d ${hours}h ${minutes}m`;
+            } else if (hours > 0) {
+                return `${hours}h ${minutes}m`;
+            } else {
+                return `${minutes}m`;
+            }
+        }
+        
+        const statusBadgeClass = current.status === 'running' ? 'badge bg-success' : 
+                                current.status === 'stopped' ? 'badge bg-danger' : 'badge bg-warning';
+        
+        document.getElementById('currentStatus').innerHTML = `<span class="${statusBadgeClass}">${current.status}</span>`;
+        document.getElementById('currentCpu').textContent = `${current.cpu.current.toFixed(1)}% (${current.cpu.cores} cores)`;
+        document.getElementById('currentMemory').textContent = `${current.memory.used_gb.toFixed(1)}/${current.memory.max_gb.toFixed(1)} GB (${current.memory.usage_percent.toFixed(1)}%)`;
+        document.getElementById('currentUptime').textContent = formatUptime(current.uptime);
+    }
+    
+    // Update charts with new data
+    function updateCharts(historical) {
+        // Update CPU chart
+        cpuChart.data.labels = historical.labels;
+        cpuChart.data.datasets[0].data = historical.cpu;
+        cpuChart.update('none');
+        
+        // Update Memory chart
+        memoryChart.data.labels = historical.labels;
+        memoryChart.data.datasets[0].data = historical.memory;
+        memoryChart.update('none');
+        
+        // Update Network chart
+        networkChart.data.labels = historical.labels;
+        networkChart.data.datasets[0].data = historical.network_in;
+        networkChart.data.datasets[1].data = historical.network_out;
+        networkChart.update('none');
+        
+        // Update Disk chart
+        diskChart.data.labels = historical.labels;
+        diskChart.data.datasets[0].data = historical.disk_read;
+        diskChart.data.datasets[1].data = historical.disk_write;
+        diskChart.update('none');
+    }
+    
+    // Event listeners
+    timeframeSelect.addEventListener('change', fetchVmMetrics);
+    
+    refreshMetricsBtn.addEventListener('click', function() {
+        const originalHtml = this.innerHTML;
+        this.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i>';
+        this.disabled = true;
+        
+        fetchVmMetrics();
+        
+        setTimeout(() => {
+            this.innerHTML = originalHtml;
+            this.disabled = false;
+        }, 1000);
+    });
+    
+    // Initialize charts and load initial data
+    initializeCharts();
+    fetchVmMetrics();
+    
+    // Auto-refresh metrics every 30 seconds
+    setInterval(fetchVmMetrics, 30000);
 });
 </script>
 {% endblock %}
