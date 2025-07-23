@@ -249,13 +249,38 @@ def vm_detail(node, vmid):
         # Get available nodes for migration (all cluster nodes except current)
         available_nodes = [n['name'] for n in cluster_nodes if n['name'] != node and n.get('status') == 'online']
         
+        # Check for active migration tasks
+        migration_info = None
+        try:
+            all_tasks = proxmox.nodes(node).tasks.get()
+            for task in all_tasks:
+                task_id = task.get('id', '')
+                task_type = task.get('type', '')
+                task_status = task.get('status', '').lower()
+                
+                # Check if this is an active migration task for this VM/container
+                if (task_type in ['qmmigrate', 'vzmigrate'] and 
+                    vmid in str(task_id) and 
+                    'running' in task_status):
+                    
+                    migration_info = {
+                        'status': task.get('status'),
+                        'target': task.get('target'),
+                        'start_time': datetime.fromtimestamp(task.get('starttime')).strftime('%Y-%m-%d %H:%M:%S') if task.get('starttime') else 'Unknown',
+                        'task_id': task.get('upid')
+                    }
+                    break
+        except Exception as e:
+            print(f"Error checking migration status: {e}")
+        
         return render_template('vm_detail.html',
                              vm_type=vm_type,
                              vmid=vmid,
                              node=node,
                              config=config,
                              status=status,
-                             available_nodes=available_nodes)
+                             available_nodes=available_nodes,
+                             migration_info=migration_info)
     except Exception as e:
         flash(f'Error getting VM details: {e}', 'error')
         return redirect(url_for('vms'))
@@ -297,6 +322,22 @@ def vm_action(node, vmid, action):
         elif action == 'migrate':
             target_node = request.form.get('target_node')
             target_storage = request.form.get('target_storage')
+            
+            # Check if migration is already in progress
+            try:
+                all_tasks = proxmox.nodes(node).tasks.get()
+                for task in all_tasks:
+                    task_id = task.get('id', '')
+                    task_type = task.get('type', '')
+                    task_status = task.get('status', '').lower()
+                    
+                    if (task_type in ['qmmigrate', 'vzmigrate'] and 
+                        vmid in str(task_id) and 
+                        'running' in task_status):
+                        flash('Migration already in progress. Please wait for current migration to complete.', 'warning')
+                        return redirect(url_for('vm_detail', node=node, vmid=vmid))
+            except Exception as e:
+                print(f"Error checking migration status: {e}")
             
             if target_node:
                 vm_type_name = 'VM' if vm_type == 'qemu' else 'Container'
