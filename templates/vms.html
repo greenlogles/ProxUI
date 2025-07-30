@@ -73,9 +73,13 @@
                                     <small class="text-muted">VMID: {{ vm.vmid }}</small>
                                 </td>
                                 <td>
-                                    <span class="badge bg-{{ 'primary' if vm.type == 'qemu' else 'info' }}">
-                                        {{ 'VM' if vm.type == 'qemu' else 'LXC' }}
-                                    </span>
+                                    {% if vm.get('template') == 1 %}
+                                        <span class="badge bg-secondary">Template</span>
+                                    {% else %}
+                                        <span class="badge bg-{{ 'primary' if vm.type == 'qemu' else 'info' }}">
+                                            {{ 'VM' if vm.type == 'qemu' else 'LXC' }}
+                                        </span>
+                                    {% endif %}
                                 </td>
                                 <td>{{ vm.node }}</td>
                                 <td>
