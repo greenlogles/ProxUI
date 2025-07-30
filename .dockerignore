@@ -1,0 +1,14 @@
+__pycache__
+config.toml
+
+.git/
+.gitignore
+
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+README.md
+*.md
+
+venv/
