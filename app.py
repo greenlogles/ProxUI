@@ -184,17 +184,20 @@ def get_qemu_guest_disk_info(proxmox, node, vmid):
         # Check if guest agent is available by trying to get filesystem info
         fsinfo = proxmox.nodes(node).qemu(vmid).agent.get('get-fsinfo')
         disk_info = []
+        # Filter some filesystems
+        ignore_fs_type = ['squashfs']
         if isinstance(fsinfo.get('result'), list):
             for fs in fsinfo.get('result'):
                 # Extract relevant filesystem information
-                disk_info.append({
-                    'name': fs.get('name', 'Unknown'),
-                    'mountpoint': fs.get('mountpoint', '/'),
-                    'type': fs.get('type', 'unknown'),
-                    'used_bytes': fs.get('used-bytes', 0),
-                    'total_bytes': fs.get('total-bytes', 0),
-                    'disk_name': fs.get('disk', [{}])[0].get('serial', 'Unknown') if fs.get('disk') else 'Unknown'
-                })
+                if not fs.get('type') in ignore_fs_type:
+                    disk_info.append({
+                        'name': fs.get('name', 'Unknown'),
+                        'mountpoint': fs.get('mountpoint', '/'),
+                        'type': fs.get('type', 'unknown'),
+                        'used_bytes': fs.get('used-bytes', 0),
+                        'total_bytes': fs.get('total-bytes', 0),
+                        'disk_name': fs.get('disk', [{}])[0].get('serial', 'Unknown') if fs.get('disk') else 'Unknown'
+                    })
         
         # Calculate usage percentages
         for disk in disk_info:
