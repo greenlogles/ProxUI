@@ -243,6 +243,45 @@
             </div>
         </div>
     </div>
+
+    <!-- Guest Disk Usage Card -->
+    {% if guest_disk_info and vm_type == 'qemu' %}
+    <div class="col-md-4 mb-3">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-hdd"></i> Guest Disk Usage</h5>
+            </div>
+            <div class="card-body">
+                <div style="max-height: 300px; overflow-y: auto;">
+                    {% for disk in guest_disk_info %}
+                    <div class="mb-3{% if not loop.last %} border-bottom pb-2{% endif %}">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <strong>{{ disk.mountpoint }}</strong>
+                            <small class="text-muted">{{ disk.type }}</small>
+                        </div>
+                        <div class="progress mb-1" style="height: 18px;">
+                            <div class="progress-bar bg-{{ 'danger' if disk.used_percent > 80 else 'warning' if disk.used_percent > 60 else 'info' }}" 
+                                 style="width: {{ disk.used_percent }}%">
+                                {{ "%.1f"|format(disk.used_percent) }}%
+                            </div>
+                        </div>
+                        <small class="text-muted">
+                            {{ "%.1f"|format(disk.used_gb) }} / {{ "%.1f"|format(disk.total_gb) }} GB used
+                            ({{ "%.1f"|format(disk.free_gb) }} GB free)
+                        </small>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% if not guest_disk_info %}
+                <div class="text-center text-muted">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <p class="mb-0">Guest agent not available or no disk info</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
 </div>
 
 <div class="row">

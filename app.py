@@ -178,6 +178,43 @@ def get_all_vms_and_containers_fallback():
     
     return all_resources
 
+def get_qemu_guest_disk_info(proxmox, node, vmid):
+    """Get disk usage information from QEMU guest agent"""
+    try:
+        # Check if guest agent is available by trying to get filesystem info
+        fsinfo = proxmox.nodes(node).qemu(vmid).agent.get('get-fsinfo')
+        disk_info = []
+        if isinstance(fsinfo.get('result'), list):
+            for fs in fsinfo.get('result'):
+                # Extract relevant filesystem information
+                disk_info.append({
+                    'name': fs.get('name', 'Unknown'),
+                    'mountpoint': fs.get('mountpoint', '/'),
+                    'type': fs.get('type', 'unknown'),
+                    'used_bytes': fs.get('used-bytes', 0),
+                    'total_bytes': fs.get('total-bytes', 0),
+                    'disk_name': fs.get('disk', [{}])[0].get('serial', 'Unknown') if fs.get('disk') else 'Unknown'
+                })
+        
+        # Calculate usage percentages
+        for disk in disk_info:
+            if disk['total_bytes'] > 0:
+                disk['used_percent'] = (disk['used_bytes'] / disk['total_bytes']) * 100
+                disk['used_gb'] = disk['used_bytes'] / (1024**3)
+                disk['total_gb'] = disk['total_bytes'] / (1024**3)
+                disk['free_gb'] = (disk['total_bytes'] - disk['used_bytes']) / (1024**3)
+            else:
+                disk['used_percent'] = 0
+                disk['used_gb'] = 0
+                disk['total_gb'] = 0
+                disk['free_gb'] = 0
+        
+        return disk_info
+        
+    except Exception as e:
+        print(f"Error getting guest agent disk info: {e}")
+        return None
+
 # ROUTES - Make sure all routes are defined
 
 @app.route('/')
@@ -249,6 +286,11 @@ def vm_detail(node, vmid):
         # Get available nodes for migration (all cluster nodes except current)
         available_nodes = [n['name'] for n in cluster_nodes if n['name'] != node and n.get('status') == 'online']
         
+        # Get guest agent disk information for QEMU VMs
+        guest_disk_info = None
+        if vm_type == 'qemu' and status.get('status') == 'running':
+            guest_disk_info = get_qemu_guest_disk_info(proxmox, node, vmid)
+        
         # Check for active migration tasks
         migration_info = None
         try:
@@ -280,7 +322,8 @@ def vm_detail(node, vmid):
                              config=config,
                              status=status,
                              available_nodes=available_nodes,
-                             migration_info=migration_info)
+                             migration_info=migration_info,
+                             guest_disk_info=guest_disk_info)
     except Exception as e:
         flash(f'Error getting VM details: {e}', 'error')
         return redirect(url_for('vms'))
