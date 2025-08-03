@@ -215,6 +215,133 @@ def get_qemu_guest_disk_info(proxmox, node, vmid):
         print(f"Error getting guest agent disk info: {e}")
         return None
 
+def parse_vm_configuration(config, vm_type='qemu'):
+    """Parse VM/LXC configuration into structured groups"""
+    parsed_config = {
+        'cpu': {},
+        'memory': {},
+        'network': [],
+        'storage': [],
+        'devices': [],
+        'cloud_init': {},
+        'general': {},
+        'other': {}
+    }
+    
+    for key, value in config.items():
+        # CPU Configuration
+        if key in ['cores', 'sockets', 'vcpus', 'cpu', 'cpulimit', 'cpuunits']:
+            parsed_config['cpu'][key] = value
+        
+        # Memory Configuration  
+        elif key in ['memory', 'balloon', 'shares']:
+            parsed_config['memory'][key] = value
+            
+        # Network Configuration
+        elif key.startswith('net'):
+            net_info = {'interface': key, 'config': value}
+            if '=' in str(value):
+                # Parse network config like "virtio,bridge=vmbr0,firewall=1"
+                parts = str(value).split(',')
+                net_info['model'] = parts[0].split('=')[0] if parts else 'unknown'
+                net_info['mac'] = parts[0].split('=')[1] if parts else 'unknown'
+                for part in parts[1:]:
+                    if '=' in part:
+                        k, v = part.split('=', 1)
+                        net_info[k] = v
+            parsed_config['network'].append(net_info)
+            
+        # Storage Configuration
+        elif key.startswith(('scsi', 'ide', 'sata', 'virtio', 'rootfs', 'mp')):
+            storage_info = {'device': key, 'config': value}
+            if '=' in str(value) or ':' in str(value):
+                # Parse storage config like "local-lvm:vm-100-disk-0,size=32G"
+                storage_info['details'] = str(value)
+            parsed_config['storage'].append(storage_info)
+            
+        # Hardware Devices
+        elif key.startswith(('hostpci', 'usb', 'serial', 'audio')):
+            parsed_config['devices'].append({'device': key, 'config': value})
+            
+        # Cloud-init Configuration
+        elif key in ['ciuser', 'cipassword', 'sshkeys', 'ipconfig0', 'ipconfig1', 'ipconfig2', 'nameserver', 'searchdomain', 'cicustom']:
+            if key == 'sshkeys':
+                # Parse SSH keys to extract meaningful information
+                parsed_config['cloud_init'][key] = {
+                    'raw': value,
+                    'parsed': parse_ssh_keys(value)
+                }
+            else:
+                parsed_config['cloud_init'][key] = value
+            
+        # General VM Settings
+        elif key in ['name', 'ostype', 'boot', 'bootdisk', 'onboot', 'startup', 'protection', 'template', 'tags']:
+            parsed_config['general'][key] = value
+            
+        # Everything else
+        else:
+            parsed_config['other'][key] = value
+    
+    # Add default CPU values if CPU section is empty (Proxmox defaults)
+    if not parsed_config['cpu']:
+        parsed_config['cpu'] = {
+            'sockets': 1,
+            'cores': 1
+        }
+    else:
+        # Ensure default values exist if not specified
+        if 'sockets' not in parsed_config['cpu']:
+            parsed_config['cpu']['sockets'] = 1
+        if 'cores' not in parsed_config['cpu']:
+            parsed_config['cpu']['cores'] = 1
+    
+    return parsed_config
+
+def parse_ssh_keys(ssh_keys_string):
+    """Parse SSH keys from URL-encoded string and extract key info"""
+    if not ssh_keys_string:
+        return []
+    
+    import urllib.parse
+    
+    # URL decode the string
+    decoded_keys = urllib.parse.unquote(ssh_keys_string)
+    
+    # Split by newlines to get individual keys
+    key_lines = [line.strip() for line in decoded_keys.split('\n') if line.strip()]
+    
+    parsed_keys = []
+    for key_line in key_lines:
+        if not key_line:
+            continue
+            
+        # SSH key format: <type> <key-data> <comment>
+        parts = key_line.split(' ', 2)
+        if len(parts) >= 2:
+            key_type = parts[0]  # ssh-rsa, ssh-ed25519, etc.
+            key_data = parts[1]  # The actual key data
+            comment = parts[2] if len(parts) > 2 else 'no comment'
+            
+            # Truncate key data for display
+            key_preview = key_data[:10] + '...' + key_data[-10:] if len(key_data) > 20 else key_data
+            
+            parsed_keys.append({
+                'type': key_type,
+                'preview': key_preview,
+                'comment': comment,
+                'full_key': key_line
+            })
+        else:
+            # Fallback for malformed keys
+            parsed_keys.append({
+                'type': 'unknown',
+                'preview': key_line[:30] + '...' if len(key_line) > 30 else key_line,
+                'comment': 'malformed key',
+                'full_key': key_line
+            })
+    
+    return parsed_keys
+
 # ROUTES - Make sure all routes are defined
 
 @app.route('/')
@@ -315,11 +442,15 @@ def vm_detail(node, vmid):
         except Exception as e:
             print(f"Error checking migration status: {e}")
         
+        # Parse configuration into structured groups
+        parsed_config = parse_vm_configuration(config, vm_type)
+        
         return render_template('vm_detail.html',
                              vm_type=vm_type,
                              vmid=vmid,
                              node=node,
                              config=config,
+                             parsed_config=parsed_config,
                              status=status,
                              available_nodes=available_nodes,
                              migration_info=migration_info,

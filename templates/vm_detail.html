@@ -311,25 +311,182 @@
             <div class="card-header">
                 <h5 class="mb-0"><i class="bi bi-sliders"></i> Configuration</h5>
             </div>
-            <div class="card-body">
-                <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
-                    <table class="table table-sm">
-                        <thead>
-                            <tr>
-                                <th>Setting</th>
-                                <th>Value</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for key, value in config.items() %}
-                            <tr>
-                                <td><strong>{{ key }}</strong></td>
-                                <td>{{ value }}</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
+            <div class="card-body" style="max-height: 500px; overflow-y: auto;">
+                
+                <!-- CPU Configuration -->
+                {% if parsed_config.cpu %}
+                <div class="mb-4">
+                    <h6 class="text-primary mb-2"><i class="bi bi-cpu"></i> Processor</h6>
+                    <div class="row">
+                        {% for key, value in parsed_config.cpu.items() %}
+                        <div class="col-sm-4 mb-2">
+                            <small class="text-muted">{{ key|title }}:</small>
+                            <div><strong>{{ value }}</strong></div>
+                        </div>
+                        {% endfor %}
+                    </div>
                 </div>
+                {% endif %}
+
+                <!-- Memory Configuration -->
+                {% if parsed_config.memory %}
+                <div class="mb-4">
+                    <h6 class="text-primary mb-2"><i class="bi bi-memory"></i> Memory</h6>
+                    <div class="row">
+                        {% for key, value in parsed_config.memory.items() %}
+                        <div class="col-sm-6 mb-2">
+                            <small class="text-muted">{{ key|title }}:</small>
+                            <div><strong>
+                                {% if key == 'memory' %}
+                                    {{ (value|int / 1024)|round(1) if value|string|length > 3 else value }} 
+                                    {{ 'GB' if value|string|length > 3 else 'MB' }}
+                                {% else %}
+                                    {{ value }}
+                                {% endif %}
+                            </strong></div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Network Configuration -->
+                {% if parsed_config.network %}
+                <div class="mb-4">
+                    <h6 class="text-primary mb-2"><i class="bi bi-ethernet"></i> Network</h6>
+                    {% for net in parsed_config.network %}
+                    <div class="border rounded p-2 mb-2">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <strong>{{ net.interface }}</strong>
+                        </div>
+                        <div class="row">
+                            {% for key, value in net.items() %}
+                            {% if key not in ['interface', 'config'] %}
+                            <div class="col-sm-6 mb-1">
+                                <small class="text-muted">{{ key|title }}:</small>
+                                <small><strong>{{ value }}</strong></small>
+                            </div>
+                            {% endif %}
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <!-- Storage Configuration -->
+                {% if parsed_config.storage %}
+                <div class="mb-4">
+                    <h6 class="text-primary mb-2"><i class="bi bi-hdd"></i> Storage</h6>
+                    {% for storage in parsed_config.storage %}
+                    <div class="border rounded p-2 mb-2">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <strong>{{ storage.device }}</strong>
+                        </div>
+                        <small class="text-muted">{{ storage.details or storage.config }}</small>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <!-- Connected Devices -->
+                {% if parsed_config.devices %}
+                <div class="mb-4">
+                    <h6 class="text-primary mb-2"><i class="bi bi-device-hdd"></i> Connected Devices</h6>
+                    {% for device in parsed_config.devices %}
+                    <div class="border rounded p-2 mb-2">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <strong>{{ device.device }}</strong>
+                            <small class="text-muted">{{ device.config }}</small>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <!-- Cloud-init Configuration -->
+                {% if parsed_config.cloud_init %}
+                <div class="mb-4">
+                    <h6 class="text-primary mb-2"><i class="bi bi-cloud"></i> Cloud-init</h6>
+                    <div class="row">
+                        {% for key, value in parsed_config.cloud_init.items() %}
+                        <div class="col-sm-6 mb-2">
+                            <small class="text-muted">
+                                {% if key == 'ciuser' %}Default User
+                                {% elif key == 'sshkeys' %}SSH Keys
+                                {% elif key.startswith('ipconfig') %}IP Config {{ key[-1] }}
+                                {% elif key == 'nameserver' %}DNS Server
+                                {% elif key == 'searchdomain' %}Search Domain
+                                {% else %}{{ key|title }}
+                                {% endif %}:
+                            </small>
+                            <div><strong>
+                                {% if key == 'sshkeys' and value.parsed %}
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <span>{{ value.parsed|length }} SSH key(s)</span>
+                                        <button class="btn btn-sm btn-outline-secondary" type="button" 
+                                                data-bs-toggle="collapse" 
+                                                data-bs-target="#sshKeysCollapse" 
+                                                aria-expanded="false" 
+                                                aria-controls="sshKeysCollapse">
+                                            <i class="bi bi-chevron-down"></i> View
+                                        </button>
+                                    </div>
+                                    <div class="collapse mt-2" id="sshKeysCollapse">
+                                        {% for ssh_key in value.parsed %}
+                                        <div class="border-start border-2 border-info ps-2 mb-2">
+                                            <div class="d-flex justify-content-between align-items-center">
+                                                <span class="badge bg-secondary me-2">{{ ssh_key.type }}</span>
+                                                <small class="text-muted">{{ ssh_key.comment }}</small>
+                                            </div>
+                                            <small class="font-monospace text-muted">{{ ssh_key.preview }}</small>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                {% elif key == 'sshkeys' %}
+                                    <span class="text-truncate d-inline-block" style="max-width: 200px;" title="{{ value }}">
+                                        SSH keys configured
+                                    </span>
+                                {% else %}
+                                    {{ value }}
+                                {% endif %}
+                            </strong></div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- General Settings -->
+                {% if parsed_config.general %}
+                <div class="mb-4">
+                    <h6 class="text-primary mb-2"><i class="bi bi-gear"></i> General</h6>
+                    <div class="row">
+                        {% for key, value in parsed_config.general.items() %}
+                        <div class="col-sm-6 mb-2">
+                            <small class="text-muted">{{ key|title }}:</small>
+                            <div><strong>{{ value }}</strong></div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Other Settings -->
+                {% if parsed_config.other %}
+                <div class="mb-4">
+                    <h6 class="text-primary mb-2"><i class="bi bi-three-dots"></i> Other Settings</h6>
+                    <div class="row">
+                        {% for key, value in parsed_config.other.items() %}
+                        <div class="col-sm-6 mb-2">
+                            <small class="text-muted">{{ key }}:</small>
+                            <div><strong>{{ value }}</strong></div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
             </div>
         </div>
     </div>
@@ -750,6 +907,33 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Auto-refresh metrics every 30 seconds
     setInterval(fetchVmMetrics, 30000);
+    
+    // SSH Keys collapse handler
+    const sshKeysCollapse = document.getElementById('sshKeysCollapse');
+    if (sshKeysCollapse) {
+        const toggleButton = document.querySelector('[data-bs-target="#sshKeysCollapse"]');
+        const chevronIcon = toggleButton?.querySelector('i');
+        
+        sshKeysCollapse.addEventListener('show.bs.collapse', function () {
+            if (chevronIcon) {
+                chevronIcon.classList.remove('bi-chevron-down');
+                chevronIcon.classList.add('bi-chevron-up');
+            }
+            if (toggleButton) {
+                toggleButton.innerHTML = '<i class="bi bi-chevron-up"></i> Hide';
+            }
+        });
+        
+        sshKeysCollapse.addEventListener('hide.bs.collapse', function () {
+            if (chevronIcon) {
+                chevronIcon.classList.remove('bi-chevron-up');
+                chevronIcon.classList.add('bi-chevron-down');
+            }
+            if (toggleButton) {
+                toggleButton.innerHTML = '<i class="bi bi-chevron-down"></i> View';
+            }
+        });
+    }
 });
 </script>
 {% endblock %}
