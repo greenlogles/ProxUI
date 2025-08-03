@@ -1,7 +1,17 @@
 // Add this to the scripts block in create_vm.html, after the existing JavaScript
 
 // Form validation
-document.getElementById('createVmForm').addEventListener('submit', function(event) {
+const createVmForm = document.getElementById('createVmForm');
+const typeSelect = document.getElementById('type');
+const creationMethodSelect = document.getElementById('creation_method');
+const nodeSelect = document.getElementById('node');
+const storageSelect = document.getElementById('storage');
+const bridgeSelect = document.getElementById('bridge');
+const templateSelect = document.getElementById('template');
+const osTemplateSelect = document.getElementById('ostemplate');
+
+if (createVmForm && typeSelect && creationMethodSelect && nodeSelect && storageSelect && bridgeSelect) {
+    createVmForm.addEventListener('submit', function(event) {
     const vmType = typeSelect.value;
     const creationMethod = creationMethodSelect.value;
     const node = nodeSelect.value;
@@ -48,8 +58,8 @@ document.getElementById('createVmForm').addEventListener('submit', function(even
         event.preventDefault();
         alert(errorMessage);
     }
-});
-
+    });
+}
 
 ///////////////////////
 
@@ -67,24 +77,28 @@ function hideLoading(element, originalText) {
 }
 
 // Add loading indicator to form submission
-document.getElementById('createVmForm').addEventListener('submit', function(event) {
-    // Only show loading if validation passed
-    if (this.checkValidity()) {
-        const submitButton = this.querySelector('button[type="submit"]');
-        showLoading(submitButton);
-    }
-});
+if (createVmForm) {
+    createVmForm.addEventListener('submit', function(event) {
+        // Only show loading if validation passed
+        if (this.checkValidity()) {
+            const submitButton = this.querySelector('button[type="submit"]');
+            showLoading(submitButton);
+        }
+    });
+}
 
 // Add loading indicators to dropdowns
-nodeSelect.addEventListener('change', function() {
-    if (this.value) {
-        storageSelect.innerHTML = '<option>Loading storages...</option>';
-        bridgeSelect.innerHTML = '<option>Loading networks...</option>';
-        if (creationMethodSelect.value === 'template') {
-            templateSelect.innerHTML = '<option>Loading templates...</option>';
+if (nodeSelect && storageSelect && bridgeSelect) {
+    nodeSelect.addEventListener('change', function() {
+        if (this.value) {
+            storageSelect.innerHTML = '<option>Loading storages...</option>';
+            bridgeSelect.innerHTML = '<option>Loading networks...</option>';
+            if (creationMethodSelect && creationMethodSelect.value === 'template' && templateSelect) {
+                templateSelect.innerHTML = '<option>Loading templates...</option>';
+            }
+            if (typeSelect && typeSelect.value === 'lxc' && osTemplateSelect) {
+                osTemplateSelect.innerHTML = '<option>Loading templates...</option>';
+            }
         }
-        if (typeSelect.value === 'lxc') {
-            osTemplateSelect.innerHTML = '<option>Loading templates...</option>';
-        }
-    }
-});
+    });
+}

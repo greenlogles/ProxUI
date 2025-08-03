@@ -112,18 +112,30 @@ document.addEventListener('DOMContentLoaded', function() {
             'qmstop': 'Stop VM', 
             'qmshutdown': 'Shutdown VM',
             'qmreset': 'Reset VM',
-            'qmmigrate': 'Migrate VM',
+            'qmreboot': 'Reboot VM',
+            'qmigrate': 'Migrate VM',
             'qmclone': 'Clone VM',
             'qmcreate': 'Create VM',
             'qmdestroy': 'Destroy VM',
+            'qmtemplate': 'Create VM template',
             'vzstart': 'Start Container',
             'vzstop': 'Stop Container',
             'vzshutdown': 'Shutdown Container',
             'vzmigrate': 'Migrate Container',
             'vzclone': 'Clone Container',
             'vzcreate': 'Create Container',
-            'vzdestroy': 'Destroy Container'
+            'vzdestroy': 'Destroy Container',
+            'vzdump': 'Backup Container',
+            'download': 'Download ISO',
+            'aptupdate': 'Update package database',
+            'startall': 'Bulk start VMs and Containers',
+            'stopall': 'Bulk stop VMs and Containers',
+            'srvreload': 'SRV networking - reload',
+            'vncproxy': 'VNC Console',
+            'clusterjoin': 'Add node to cluster',
+            'resize': 'Disk resize'
         };
+        
         
         let tasksHtml = '<div class="table-responsive">';
         tasksHtml += '<table class="table table-hover mb-0">';
@@ -132,7 +144,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 <tr>
                     <th>Task</th>
                     <th>Node</th>
-                    <th>VM/CT</th>
+                    <th>Description</th>
+                    <th>User</th>
                     <th>Status</th>
                     <th>Started</th>
                     <th>Duration</th>
@@ -140,15 +153,16 @@ document.addEventListener('DOMContentLoaded', function() {
             </thead>
             <tbody>
         `;
-        
+
         tasks.forEach(task => {
+            const taskId = task.id || '';
             const taskType = task.type || 'unknown';
             const taskStatus = task.status || 'unknown';
             const startTime = task.start_time_formatted || 'Unknown';
             const endTime = task.end_time_formatted;
             const statusClass = task.status_class || 'secondary';
             const node = task.node || 'Unknown';
-            const vmid = task.vmid || '';
+            const vmid = task.id || '';
             
             // Calculate duration if both start and end times exist
             let duration = '';
@@ -181,8 +195,11 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Create VM/Container link if VMID exists
             let vmidDisplay = vmid;
-            if (vmid && (taskType.startsWith('qm') || taskType.startsWith('vz'))) {
-                vmidDisplay = `<a href="/vm/${node}/${vmid}" class="text-decoration-none">${vmid}</a>`;
+            if (vmid && taskType.startsWith('qm')) {
+                vmidDisplay = `VM <a href="/vm/${node}/${vmid}" class="text-decoration-none">${vmid}</a>`;
+            }
+            if (vmid &&  taskType.startsWith('vz')) {
+                vmidDisplay = `CT <a href="/vm/${node}/${vmid}" class="text-decoration-none">${vmid}</a>`;
             }
             
             tasksHtml += `
@@ -196,6 +213,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <span class="badge bg-secondary">${node}</span>
                     </td>
                     <td>${vmidDisplay}</td>
+                    <td>${task.user}</td>
                     <td>
                         <span class="badge bg-${statusClass}">${taskStatus}</span>
                     </td>

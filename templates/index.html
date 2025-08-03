@@ -168,7 +168,7 @@
 
 <div class="row mt-4">
     <!-- Recent Tasks -->
-    <div class="col-12">
+    <div class="col-6">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0"><i class="bi bi-list-task"></i> Recent Tasks</h5>
@@ -225,18 +225,30 @@ document.addEventListener('DOMContentLoaded', function() {
             'qmstop': 'Stop VM', 
             'qmshutdown': 'Shutdown VM',
             'qmreset': 'Reset VM',
-            'qmmigrate': 'Migrate VM',
+            'qmreboot': 'Reboot VM',
+            'qmigrate': 'Migrate VM',
             'qmclone': 'Clone VM',
             'qmcreate': 'Create VM',
             'qmdestroy': 'Destroy VM',
+            'qmtemplate': 'Create VM template',
             'vzstart': 'Start Container',
             'vzstop': 'Stop Container',
             'vzshutdown': 'Shutdown Container',
             'vzmigrate': 'Migrate Container',
             'vzclone': 'Clone Container',
             'vzcreate': 'Create Container',
-            'vzdestroy': 'Destroy Container'
+            'vzdestroy': 'Destroy Container',
+            'vzdump': 'Backup Container',
+            'download': 'Download ISO',
+            'aptupdate': 'Update package database',
+            'startall': 'Bulk start VMs and Containers',
+            'stopall': 'Bulk stop VMs and Containers',
+            'srvreload': 'SRV networking - reload',
+            'vncproxy': 'VNC Console',
+            'clusterjoin': 'Add node to cluster',
+            'resize': 'Disk resize'
         };
+        
         
         let tasksHtml = '<div class="list-group list-group-flush">';
         
@@ -248,14 +260,14 @@ document.addEventListener('DOMContentLoaded', function() {
             const startTime = task.start_time_formatted || 'Unknown';
             const statusClass = task.status_class || 'secondary';
             const node = task.node || 'Unknown';
-            const vmid = task.vmid || '';
+            const vmid = task.id || '';
             
             const displayName = taskTypeNames[taskType] || taskType.toUpperCase();
             
             // Create VM/Container link if VMID exists
             let vmidDisplay = vmid;
             if (vmid && (taskType.startsWith('qm') || taskType.startsWith('vz'))) {
-                vmidDisplay = `<a href="/vm/${node}/${vmid}" class="text-decoration-none">${vmid}</a>`;
+                vmidDisplay = `VM/CT <a href="/vm/${node}/${vmid}" class="text-decoration-none">${vmid}</a>`;
             }
             
             tasksHtml += `
@@ -265,11 +277,14 @@ document.addEventListener('DOMContentLoaded', function() {
                             <h6 class="mb-1">${displayName}</h6>
                             <p class="mb-1 text-muted small">
                                 Node: <span class="badge bg-secondary">${node}</span>
-                                ${vmid ? `| VM/CT: ${vmidDisplay}` : ''}
+                                ${vmid ? `| ${vmidDisplay}` : ''}
                             </p>
+                            
+                        </div>
+                        <div>
+                            <span class="badge bg-${statusClass}">${taskStatus}</span></br>
                             <small class="text-muted">${startTime}</small>
                         </div>
-                        <span class="badge bg-${statusClass}">${taskStatus}</span>
                     </div>
                 </div>
             `;

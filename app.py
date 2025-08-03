@@ -259,7 +259,7 @@ def vm_detail(node, vmid):
                 task_status = task.get('status', '').lower()
                 
                 # Check if this is an active migration task for this VM/container
-                if (task_type in ['qmmigrate', 'vzmigrate'] and 
+                if (task_type in ['qmigrate', 'vzmigrate'] and
                     vmid in str(task_id) and 
                     'running' in task_status):
                     
@@ -331,8 +331,8 @@ def vm_action(node, vmid, action):
                     task_type = task.get('type', '')
                     task_status = task.get('status', '').lower()
                     
-                    if (task_type in ['qmmigrate', 'vzmigrate'] and 
-                        vmid in str(task_id) and 
+                    if (task_type in ['qmigrate', 'vzmigrate'] and
+                        vmid in str(task_id) and
                         'running' in task_status):
                         flash('Migration already in progress. Please wait for current migration to complete.', 'warning')
                         return redirect(url_for('vm_detail', node=node, vmid=vmid))
@@ -765,6 +765,7 @@ def api_vm_tasks(node, vmid):
     try:
         # Get all tasks from the node
         all_tasks = proxmox.nodes(node).tasks.get()
+        pprint.pp(all_tasks)
         
         # Filter tasks related to this specific VM/container
         vm_tasks = []
@@ -779,7 +780,7 @@ def api_vm_tasks(node, vmid):
                 task_id.endswith(f":{vmid}") or
                 task_id.startswith(f"{vmid}:") or
                 f"VMID {vmid}" in task.get('status', '') or
-                (task.get('type') in ['qmstart', 'qmstop', 'qmshutdown', 'qmreset', 'qmmigrate', 'qmclone', 'qmcreate', 'qmdestroy',
+                (task.get('type') in ['qmstart', 'qmstop', 'qmshutdown', 'qmreset', 'qmigrate', 'qmclone', 'qmcreate', 'qmdestroy',
                                      'vzstart', 'vzstop', 'vzshutdown', 'vzmigrate', 'vzclone', 'vzcreate', 'vzdestroy'] and
                  vmid in str(task.get('id', '')))):
                 
@@ -857,7 +858,7 @@ def api_cluster_tasks():
                     # Extract VMID from task if possible
                     task_id = task.get('id', '')
                     task_type = task.get('type', '')
-                    if task_type in ['qmstart', 'qmstop', 'qmshutdown', 'qmreset', 'qmmigrate', 'qmclone', 'qmcreate', 'qmdestroy',
+                    if task_type in ['qmstart', 'qmstop', 'qmshutdown', 'qmreset', 'qmigrate', 'qmclone', 'qmcreate', 'qmdestroy',
                                    'vzstart', 'vzstop', 'vzshutdown', 'vzmigrate', 'vzclone', 'vzcreate', 'vzdestroy']:
                         # Try to extract VMID from task ID
                         import re
