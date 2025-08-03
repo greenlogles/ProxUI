@@ -506,20 +506,18 @@ def storages():
                     processed_storages.add(storage_key)
                     if storage.get('maxdisk') and storage.get('maxdisk') > 0:
                         storage['used_percent'] = (storage.get('disk', 0) / storage['maxdisk']) * 100
-                        #storage['enabled'] = 1 if storage == 'Apple' else 'No'
-
                     else:
                         storage['used_percent'] = 0
                     all_storages.append(storage)
-            #pprint.pp(all_storages)
                     
         except Exception as e:
             print(f"Error getting cluster storage: {e}")
             # Fallback to node-by-node
             all_storages = get_storages_fallback()
-    # all_storages = get_storages_fallback()
-    pprint.pp(all_storages)
-    return render_template('storages.html', storages=all_storages)
+    
+    # Group shared storage by storage name
+    grouped_storages = group_shared_storages(all_storages)
+    return render_template('storages.html', storages=grouped_storages)
 
 def get_storages_fallback():
     """Fallback method to get storage node by node"""
@@ -546,6 +544,67 @@ def get_storages_fallback():
             print(f"Error getting storage from node {node_info['name']}: {e}")
     
     return all_storages
+
+def group_shared_storages(all_storages):
+    """Group storage by storage name and combine nodes only if shared=1"""
+    storage_groups = defaultdict(list)
+    
+    # Group storages by storage name
+    for storage in all_storages:
+        storage_name = storage.get('storage', '')
+        storage_groups[storage_name].append(storage)
+    
+    grouped_storages = []
+    
+    for storage_name, storage_list in storage_groups.items():
+        if not storage_list:
+            continue
+        
+        # Check if this storage is shared (has shared=1 flag)
+        is_shared = any(storage.get('shared', 0) == 1 for storage in storage_list)
+        
+        if is_shared and len(storage_list) > 1:
+            # Combine shared storage across multiple nodes
+            base_storage = storage_list[0].copy()
+            nodes = []
+            max_disk = 0
+            max_maxdisk = 0
+            enabled_count = 0
+            
+            for storage in storage_list:
+                nodes.append(storage.get('node', ''))
+                # For shared storage, use max values instead of sum (same storage seen from different nodes)
+                if storage.get('disk'):
+                    max_disk = max(max_disk, storage.get('disk', 0))
+                if storage.get('maxdisk'):
+                    max_maxdisk = max(max_maxdisk, storage.get('maxdisk', 0))
+                if storage.get('enabled', 0) == 1 or storage.get('status') == 'available':
+                    enabled_count += 1
+            
+            # Update the base storage with combined data
+            base_storage['nodes'] = nodes
+            base_storage['node_count'] = len(nodes)
+            base_storage['disk'] = max_disk
+            base_storage['maxdisk'] = max_maxdisk
+            
+            # Calculate usage percentage
+            if max_maxdisk > 0:
+                base_storage['used_percent'] = (max_disk / max_maxdisk) * 100
+            else:
+                base_storage['used_percent'] = 0
+                
+            # Storage is considered active if it's enabled on any node
+            base_storage['is_active'] = enabled_count > 0
+            
+            grouped_storages.append(base_storage)
+        else:
+            # Add each storage separately (not shared or only on one node)
+            for storage in storage_list:
+                # Ensure individual storage has proper is_active flag
+                storage['is_active'] = storage.get('enabled', 0) == 1 or storage.get('status') == 'available'
+                grouped_storages.append(storage)
+    
+    return grouped_storages
 
 @app.route('/networks')
 def networks():
@@ -765,7 +824,6 @@ def api_vm_tasks(node, vmid):
     try:
         # Get all tasks from the node
         all_tasks = proxmox.nodes(node).tasks.get()
-        pprint.pp(all_tasks)
         
         # Filter tasks related to this specific VM/container
         vm_tasks = []

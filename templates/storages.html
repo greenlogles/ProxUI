@@ -21,7 +21,7 @@
                         <thead>
                             <tr>
                                 <th>Storage</th>
-                                <th>Node</th>
+                                <th>Nodes</th>
                                 <th>Type</th>
                                 <th>Status</th>
                                 <th>Usage</th>
@@ -32,12 +32,22 @@
                             {% for storage in storages %}
                             <tr>
                                 <td><strong>{{ storage.storage }}</strong></td>
-                                <td>{{ storage.node }}</td>
+                                <td>
+                                    {% if storage.nodes and storage.nodes|length > 1 %}
+                                        <span class="badge bg-info me-1">{{ storage.nodes|length }} nodes</span>
+                                        <br>
+                                        <small class="text-muted">{{ storage.nodes|join(', ') }}</small>
+                                    {% elif storage.nodes %}
+                                        {{ storage.nodes[0] }}
+                                    {% else %}
+                                        {{ storage.node }}
+                                    {% endif %}
+                                </td>
                                 <td>
                                     <span class="badge bg-secondary">{% if storage.content %}{{ storage.content }} {% else %}{{ storage.type }}{% endif %}</span>
                                 </td>
                                 <td>
-                                    {% if storage.enabled or (storage.status == 'available') %}
+                                    {% if storage.is_active or storage.enabled or (storage.status == 'available') %}
                                         <span class="badge bg-success">Active</span>
                                     {% else %}
                                         <span class="badge bg-danger">Inactive</span>
