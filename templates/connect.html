@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+
+{% block title %}Cluster Management - Proxmox Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Existing Clusters -->
+    {% if existing_clusters %}
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="bi bi-diagram-2 text-primary"></i>
+                    Configured Clusters
+                </h5>
+                <small class="text-muted">{{ existing_clusters|length }} cluster(s)</small>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    {% for cluster in existing_clusters %}
+                    <div class="col-md-6 col-lg-4 mb-3">
+                        <div class="card border {% if cluster.id == current_cluster.id %}border-primary{% endif %}">
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between align-items-start mb-2">
+                                    <h6 class="card-title mb-0">
+                                        {{ cluster.name }}
+                                        {% if cluster.id == current_cluster.id %}
+                                        <span class="badge bg-primary ms-1">Active</span>
+                                        {% endif %}
+                                    </h6>
+                                    <div class="dropdown">
+                                        <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                                            <i class="bi bi-three-dots"></i>
+                                        </button>
+                                        <ul class="dropdown-menu">
+                                            {% if cluster.id != current_cluster.id %}
+                                            <li><a class="dropdown-item" href="#" onclick="switchCluster('{{ cluster.id }}')">
+                                                <i class="bi bi-arrow-right-circle"></i> Switch to
+                                            </a></li>
+                                            {% endif %}
+                                            <li><a class="dropdown-item" href="#" onclick="editCluster('{{ cluster.id }}')">
+                                                <i class="bi bi-pencil"></i> Edit
+                                            </a></li>
+                                            <li><a class="dropdown-item text-danger" href="#" onclick="deleteCluster('{{ cluster.id }}', '{{ cluster.name }}')">
+                                                <i class="bi bi-trash"></i> Delete
+                                            </a></li>
+                                        </ul>
+                                    </div>
+                                </div>
+                                <small class="text-muted d-block mb-2">ID: {{ cluster.id }}</small>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <small class="text-muted">
+                                        <i class="bi bi-hdd-network"></i> 
+                                        {{ cluster.nodes|length }} node(s)
+                                    </small>
+                                    <div id="status-{{ cluster.id }}" class="connection-status">
+                                        <small class="text-muted">
+                                            <i class="bi bi-question-circle"></i> Unknown
+                                        </small>
+                                    </div>
+                                </div>
+                                <div class="mt-2">
+                                    {% for node in cluster.nodes %}
+                                    <small class="d-block text-muted">
+                                        <i class="bi bi-server"></i> {{ node.host }}
+                                    </small>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Add New Cluster -->
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="bi bi-plus-circle text-success"></i>
+                    {% if existing_clusters %}Add New Cluster{% else %}Connect to Proxmox{% endif %}
+                </h5>
+            </div>
+            <div class="card-body">
+                {% if not existing_clusters %}
+                <div class="alert alert-info mb-4">
+                    <i class="bi bi-info-circle"></i>
+                    <strong>Welcome!</strong> No Proxmox configuration was found. 
+                    Please enter your Proxmox cluster details to get started.
+                </div>
+                {% endif %}
+
+                <form method="POST" action="{{ url_for('connect') }}" id="connectForm">
+                    <!-- Cluster Information -->
+                    <div class="mb-4">
+                        <h5 class="text-primary mb-3">
+                            <i class="bi bi-diagram-2"></i> Cluster Information
+                        </h5>
+                        
+                        <div class="mb-3">
+                            <label for="cluster_name" class="form-label">Cluster Name</label>
+                            <input type="text" class="form-control" id="cluster_name" name="cluster_name" 
+                                   value="My Proxmox Cluster" required>
+                            <div class="form-text">A friendly name for your Proxmox cluster</div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="cluster_id" class="form-label">Cluster ID</label>
+                            <input type="text" class="form-control" id="cluster_id" name="cluster_id" 
+                                   value="main" required pattern="[a-zA-Z0-9_-]+">
+                            <div class="form-text">Unique identifier (letters, numbers, underscores, and dashes only)</div>
+                        </div>
+                    </div>
+
+                    <!-- Node Connection -->
+                    <div class="mb-4">
+                        <h5 class="text-primary mb-3">
+                            <i class="bi bi-hdd-network"></i> Node Connection
+                        </h5>
+                        
+                        <div class="mb-3">
+                            <label for="node_host" class="form-label">Proxmox Host</label>
+                            <input type="text" class="form-control" id="node_host" name="node_host" 
+                                   placeholder="192.168.1.100 or pve.example.com" required>
+                            <div class="form-text">IP address or hostname of your Proxmox node</div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="node_user" class="form-label">Username</label>
+                                <input type="text" class="form-control" id="node_user" name="node_user" 
+                                       value="root@pam" required>
+                                <div class="form-text">Usually root@pam</div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="node_password" class="form-label">Password</label>
+                                <input type="password" class="form-control" id="node_password" name="node_password" required>
+                                <div class="form-text">Root password for Proxmox</div>
+                            </div>
+                        </div>
+
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" id="verify_ssl" name="verify_ssl">
+                            <label class="form-check-label" for="verify_ssl">
+                                Verify SSL Certificate
+                            </label>
+                            <div class="form-text">Uncheck if using self-signed certificates (common for home labs)</div>
+                        </div>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-primary btn-lg">
+                            <i class="bi bi-plug"></i> Connect to Proxmox
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" onclick="testConnection()">
+                            <i class="bi bi-wifi"></i> Test Connection
+                        </button>
+                    </div>
+                </form>
+
+                <!-- Connection Status -->
+                <div id="connectionStatus" class="mt-3" style="display: none;"></div>
+            </div>
+        </div>
+
+        <!-- Help Card -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-question-circle"></i> Need Help?
+                </h6>
+            </div>
+            <div class="card-body">
+                <h6>Common Issues:</h6>
+                <ul class="mb-3">
+                    <li><strong>Connection refused:</strong> Check if Proxmox web interface is accessible</li>
+                    <li><strong>SSL errors:</strong> Uncheck "Verify SSL Certificate" for self-signed certs</li>
+                    <li><strong>Authentication failed:</strong> Verify username/password combination</li>
+                    <li><strong>Network timeout:</strong> Ensure firewall allows port 8006</li>
+                </ul>
+                
+                <h6>Default Settings:</h6>
+                <ul class="mb-0">
+                    <li><strong>Web Interface:</strong> https://your-ip:8006</li>
+                    <li><strong>Username:</strong> root@pam</li>
+                    <li><strong>Port:</strong> 8006 (HTTPS)</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function testConnection() {
+    const form = document.getElementById('connectForm');
+    const formData = new FormData(form);
+    const statusDiv = document.getElementById('connectionStatus');
+    const testBtn = event.target;
+    
+    // Show loading state
+    const originalText = testBtn.innerHTML;
+    testBtn.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Testing...';
+    testBtn.disabled = true;
+    
+    statusDiv.style.display = 'block';
+    statusDiv.innerHTML = '<div class="alert alert-info"><i class="bi bi-arrow-clockwise spin"></i> Testing connection...</div>';
+    
+    // Make test request
+    fetch('/api/test-connection', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            statusDiv.innerHTML = `
+                <div class="alert alert-success">
+                    <i class="bi bi-check-circle"></i> 
+                    <strong>Connection successful!</strong><br>
+                    Connected to ${data.node_name} running Proxmox VE ${data.version}
+                </div>
+            `;
+        } else {
+            statusDiv.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle"></i> 
+                    <strong>Connection failed:</strong><br>
+                    ${data.error}
+                </div>
+            `;
+        }
+    })
+    .catch(error => {
+        statusDiv.innerHTML = `
+            <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle"></i> 
+                <strong>Network error:</strong><br>
+                ${error.message}
+            </div>
+        `;
+    })
+    .finally(() => {
+        testBtn.innerHTML = originalText;
+        testBtn.disabled = false;
+    });
+}
+
+// Generate cluster ID from name
+document.getElementById('cluster_name').addEventListener('input', function() {
+    const name = this.value;
+    const id = name.toLowerCase()
+                  .replace(/[^a-z0-9\s]/g, '')
+                  .replace(/\s+/g, '_')
+                  .substring(0, 20);
+    document.getElementById('cluster_id').value = id;
+});
+
+// Cluster management functions
+function switchCluster(clusterId) {
+    if (confirm('Switch to this cluster? This will reload the page.')) {
+        fetch(`/api/switch-cluster/${clusterId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                localStorage.setItem('selectedClusterId', clusterId);
+                window.location.href = '/';
+            } else {
+                alert('Failed to switch cluster: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(error => {
+            alert('Network error: ' + error.message);
+        });
+    }
+}
+
+function editCluster(clusterId) {
+    // TODO: Implement cluster editing
+    alert('Cluster editing is not yet implemented. You can manually edit the config.toml file.');
+}
+
+function deleteCluster(clusterId, clusterName) {
+    if (confirm(`Are you sure you want to delete cluster "${clusterName}"? This action cannot be undone.`)) {
+        fetch(`/api/delete-cluster/${clusterId}`, {
+            method: 'DELETE',
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert('Cluster deleted successfully');
+                window.location.reload();
+            } else {
+                alert('Failed to delete cluster: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(error => {
+            alert('Network error: ' + error.message);
+        });
+    }
+}
+
+// Check cluster status on page load
+document.addEventListener('DOMContentLoaded', function() {
+    {% if existing_clusters %}
+    {% for cluster in existing_clusters %}
+    checkClusterStatus('{{ cluster.id }}');
+    {% endfor %}
+    {% endif %}
+});
+
+function checkClusterStatus(clusterId) {
+    const statusElement = document.getElementById(`status-${clusterId}`);
+    if (!statusElement) return;
+    
+    statusElement.innerHTML = '<small class="text-muted"><i class="bi bi-arrow-clockwise spin"></i> Checking...</small>';
+    
+    fetch(`/api/cluster-status/${clusterId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                statusElement.innerHTML = `<small class="text-success"><i class="bi bi-check-circle-fill"></i> Online</small>`;
+            } else {
+                statusElement.innerHTML = `<small class="text-danger"><i class="bi bi-exclamation-triangle-fill"></i> Offline</small>`;
+            }
+        })
+        .catch(error => {
+            statusElement.innerHTML = `<small class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> Error</small>`;
+        });
+}
+</script>
+{% endblock %}

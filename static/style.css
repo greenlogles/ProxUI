@@ -89,6 +89,16 @@ body {
     border-width: 0.1em;
 }
 
+/* Spinning animation for cluster switching */
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.spin {
+    animation: spin 1s linear infinite;
+}
+
 /* Form improvements */
 .form-label {
     font-weight: 500;

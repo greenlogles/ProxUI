@@ -1,10 +1,21 @@
-[cluster]
-name = "My Proxmox Cluster"
+[[clusters]]
+id = "main"
+name = "My Proxmox Cluster 1"
 
-[[nodes]]
-host = "localhost"
-user = "root@pam"
-password = "admin"
-verify_ssl = false
+    [[clusters.nodes]]
+    host = "x.y.z.1"
+    user = "root@pam"
+    password = "admin"
+    verify_ssl = false
 
+ 
+# Example second cluster (uncomment and configure as needed)
+#[[clusters]]
+#id = "secondary"
+#name = "My Proxmox Cluster 2"
 #
+#   [[clusters.nodes]]
+#    host = "x.y.z.2"
+#    user = "root@pam"
+#    password = "admin"
+#    verify_ssl = false

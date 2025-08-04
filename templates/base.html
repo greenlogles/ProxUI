@@ -56,6 +56,43 @@
                         </a>
                     </li>
                 </ul>
+                
+                <!-- Cluster Selector -->
+                {% if all_clusters|length > 1 %}
+                <div class="navbar-nav ms-auto">
+                    <div class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" id="clusterDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="bi bi-diagram-2 me-2"></i>
+                            <span id="currentClusterName">{{ current_cluster.name }}</span>
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="clusterDropdown">
+                            <li><h6 class="dropdown-header"><i class="bi bi-diagram-2"></i> Switch Cluster</h6></li>
+                            <li><hr class="dropdown-divider"></li>
+                            {% for cluster in all_clusters %}
+                            <li>
+                                <a class="dropdown-item cluster-option {% if cluster.id == current_cluster.id %}active{% endif %}" 
+                                   href="#" 
+                                   data-cluster-id="{{ cluster.id }}"
+                                   data-cluster-name="{{ cluster.name }}">
+                                    {% if cluster.id == current_cluster.id %}
+                                        <i class="bi bi-check-circle-fill text-success me-2"></i>
+                                    {% else %}
+                                        <i class="bi bi-circle me-2"></i>
+                                    {% endif %}
+                                    {{ cluster.name }}
+                                </a>
+                            </li>
+                            {% endfor %}
+                            <li><hr class="dropdown-divider"></li>
+                            <li>
+                                <a class="dropdown-item" href="{{ url_for('connect') }}">
+                                    <i class="bi bi-gear me-2"></i> Manage Clusters
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+                {% endif %}
             </div>
         </div>
     </nav>
@@ -77,6 +114,139 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
+    
+    <!-- Cluster Switching JavaScript -->
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const clusterOptions = document.querySelectorAll('.cluster-option');
+        const currentClusterName = document.getElementById('currentClusterName');
+        
+        // Load saved cluster preference from localStorage
+        const savedClusterId = localStorage.getItem('selectedClusterId');
+        if (savedClusterId && savedClusterId !== '{{ current_cluster.id }}') {
+            // Auto-switch to saved cluster if it's different from current
+            switchToCluster(savedClusterId);
+        }
+        
+        // Add click handlers for cluster switching
+        clusterOptions.forEach(option => {
+            option.addEventListener('click', function(e) {
+                e.preventDefault();
+                
+                const clusterId = this.dataset.clusterId;
+                const clusterName = this.dataset.clusterName;
+                
+                // Don't switch if it's the current cluster
+                if (this.classList.contains('active')) {
+                    return;
+                }
+                
+                switchToCluster(clusterId, clusterName);
+            });
+        });
+        
+        function switchToCluster(clusterId, clusterName = null) {
+            // Show loading state
+            if (currentClusterName) {
+                currentClusterName.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Switching...';
+            }
+            
+            // Show loading overlay
+            showLoadingOverlay('Switching to cluster...');
+            
+            // Make API call to switch cluster
+            fetch(`/api/switch-cluster/${clusterId}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Save cluster preference
+                    localStorage.setItem('selectedClusterId', clusterId);
+                    localStorage.setItem('selectedClusterName', data.cluster.name);
+                    
+                    // Show success message
+                    showNotification(`Switched to ${data.cluster.name}`, 'success');
+                    
+                    // Reload the page to refresh all data
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1000);
+                } else {
+                    hideLoadingOverlay();
+                    showNotification(data.error || 'Failed to switch cluster', 'error');
+                    
+                    // Reset cluster name
+                    if (currentClusterName) {
+                        currentClusterName.textContent = '{{ current_cluster.name }}';
+                    }
+                }
+            })
+            .catch(error => {
+                hideLoadingOverlay();
+                console.error('Error switching cluster:', error);
+                showNotification('Network error while switching cluster', 'error');
+                
+                // Reset cluster name
+                if (currentClusterName) {
+                    currentClusterName.textContent = '{{ current_cluster.name }}';
+                }
+            });
+        }
+        
+        function showLoadingOverlay(message = 'Loading...') {
+            let overlay = document.getElementById('loadingOverlay');
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = 'loadingOverlay';
+                overlay.className = 'position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center';
+                overlay.style.backgroundColor = 'rgba(0,0,0,0.5)';
+                overlay.style.zIndex = '9999';
+                overlay.innerHTML = `
+                    <div class="bg-white rounded p-4 text-center">
+                        <div class="spinner-border text-primary mb-2" role="status"></div>
+                        <div>${message}</div>
+                    </div>
+                `;
+                document.body.appendChild(overlay);
+            }
+            overlay.style.display = 'flex';
+        }
+        
+        function hideLoadingOverlay() {
+            const overlay = document.getElementById('loadingOverlay');
+            if (overlay) {
+                overlay.style.display = 'none';
+            }
+        }
+        
+        function showNotification(message, type = 'info') {
+            // Create notification element
+            const notification = document.createElement('div');
+            notification.className = `alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show position-fixed`;
+            notification.style.top = '20px';
+            notification.style.right = '20px';
+            notification.style.zIndex = '10000';
+            notification.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            
+            document.body.appendChild(notification);
+            
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 5000);
+        }
+    });
+    </script>
+    
     {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -16,24 +16,62 @@ app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'
 
 # Load configuration
+config_file_exists = True
 try:
     with open('config.toml', 'r') as f:
         config = toml.load(f)
+        if not config.get('clusters'):
+            config_file_exists = False
+            config = {'clusters': []}
 except Exception as e:
     print(f"Error loading config.toml: {e}")
-    config = {'cluster': {'name': 'Proxmox Cluster'}, 'nodes': []}
+    config_file_exists = False
+    config = {'clusters': []}
 
-# Store Proxmox connections
-proxmox_nodes = {}
-cluster_nodes = []  # Store all nodes from all connections
+# Store Proxmox connections for multiple clusters
+all_clusters = {}  # cluster_id -> cluster config
+current_cluster_id = None
+proxmox_nodes = {}  # node_name -> proxmox connection for current cluster
+cluster_nodes = []  # Store all nodes from current cluster
 
-def init_proxmox_connections():
-    """Initialize connections to all Proxmox nodes and discover cluster members"""
-    global cluster_nodes
+def init_all_clusters():
+    """Initialize all cluster configurations"""
+    global all_clusters, current_cluster_id
+    
+    # Load all clusters from config
+    if 'clusters' in config:
+        for cluster_config in config['clusters']:
+            cluster_id = cluster_config.get('id', 'default')
+            all_clusters[cluster_id] = cluster_config
+    
+    # Set default cluster if none specified
+    if all_clusters and not current_cluster_id:
+        current_cluster_id = list(all_clusters.keys())[0]
+    
+    print(f"Loaded {len(all_clusters)} cluster(s): {list(all_clusters.keys())}")
+
+def init_proxmox_connections(cluster_id=None):
+    """Initialize connections to Proxmox nodes for specified cluster"""
+    global cluster_nodes, proxmox_nodes, current_cluster_id
+    
+    if cluster_id:
+        current_cluster_id = cluster_id
+    
+    if not current_cluster_id or current_cluster_id not in all_clusters:
+        print("No valid cluster selected")
+        return False
+    
+    # Clear existing connections
+    proxmox_nodes.clear()
+    cluster_nodes.clear()
+    
+    cluster_config = all_clusters[current_cluster_id]
     discovered_nodes = set()
     
-    # First, connect to configured nodes
-    for node_config in config['nodes']:
+    print(f"Initializing connections for cluster: {cluster_config.get('name', current_cluster_id)}")
+    
+    # Connect to configured nodes for this cluster
+    for node_config in cluster_config.get('nodes', []):
         try:
             proxmox = ProxmoxAPI(
                 node_config['host'],
@@ -71,6 +109,7 @@ def init_proxmox_connections():
     
     print(f"Discovered {len(cluster_nodes)} cluster nodes: {[n['name'] for n in cluster_nodes]}")
     print(f"Active connections to {len(proxmox_nodes)} nodes")
+    return len(proxmox_nodes) > 0
 
 def get_proxmox_for_node(node_name):
     """Get the appropriate Proxmox connection for a specific node"""
@@ -346,6 +385,266 @@ def parse_ssh_keys(ssh_keys_string):
     return parsed_keys
 
 # ROUTES - Make sure all routes are defined
+
+@app.route('/api/clusters')
+def api_clusters():
+    """API endpoint to get all available clusters"""
+    clusters_info = []
+    for cluster_id, cluster_config in all_clusters.items():
+        clusters_info.append({
+            'id': cluster_id,
+            'name': cluster_config.get('name', cluster_id),
+            'active': cluster_id == current_cluster_id
+        })
+    return jsonify({
+        'clusters': clusters_info,
+        'current': current_cluster_id
+    })
+
+@app.route('/api/switch-cluster/<cluster_id>', methods=['POST'])
+def api_switch_cluster(cluster_id):
+    """API endpoint to switch to a different cluster"""
+    global current_cluster_id
+    
+    if cluster_id not in all_clusters:
+        return jsonify({'error': 'Cluster not found'}), 404
+    
+    try:
+        success = init_proxmox_connections(cluster_id)
+        if success:
+            return jsonify({
+                'success': True,
+                'cluster': {
+                    'id': current_cluster_id,
+                    'name': all_clusters[current_cluster_id].get('name', current_cluster_id)
+                }
+            })
+        else:
+            return jsonify({'error': 'Failed to connect to cluster nodes'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Template context processor to make cluster info available in all templates
+@app.context_processor
+def inject_cluster_info():
+    return {
+        'current_cluster': {
+            'id': current_cluster_id,
+            'name': all_clusters.get(current_cluster_id, {}).get('name', current_cluster_id) if current_cluster_id else 'No Cluster'
+        },
+        'all_clusters': [
+            {
+                'id': cluster_id,
+                'name': cluster_config.get('name', cluster_id)
+            }
+            for cluster_id, cluster_config in all_clusters.items()
+        ]
+    }
+
+@app.route('/connect', methods=['GET', 'POST'])
+def connect():
+    """Connection setup page"""
+    global config, config_file_exists, all_clusters, current_cluster_id
+    
+    if request.method == 'GET':
+        # Pass existing clusters to template
+        existing_clusters = []
+        for cluster_id, cluster_config in all_clusters.items():
+            existing_clusters.append({
+                'id': cluster_id,
+                'name': cluster_config.get('name', cluster_id),
+                'nodes': cluster_config.get('nodes', [])
+            })
+        
+        return render_template('connect.html', 
+                             existing_clusters=existing_clusters)
+    
+    # Handle form submission
+    
+    try:
+        cluster_name = request.form.get('cluster_name')
+        cluster_id = request.form.get('cluster_id')
+        node_host = request.form.get('node_host')
+        node_user = request.form.get('node_user')
+        node_password = request.form.get('node_password')
+        verify_ssl = 'verify_ssl' in request.form
+        
+        # Check if cluster ID already exists
+        if cluster_id in all_clusters:
+            flash(f'Cluster ID "{cluster_id}" already exists. Please choose a different ID.', 'error')
+            return render_template('connect.html', existing_clusters=[
+                {'id': cid, 'name': cfg.get('name', cid), 'nodes': cfg.get('nodes', [])}
+                for cid, cfg in all_clusters.items()
+            ])
+        
+        # Create new cluster config
+        new_cluster = {
+            'id': cluster_id,
+            'name': cluster_name,
+            'nodes': [{
+                'host': node_host,
+                'user': node_user,
+                'password': node_password,
+                'verify_ssl': verify_ssl
+            }]
+        }
+        
+        # Add to existing config or create new
+        if config.get('clusters'):
+            config['clusters'].append(new_cluster)
+        else:
+            config['clusters'] = [new_cluster]
+        
+        # Test connection first
+        try:
+            test_proxmox = ProxmoxAPI(
+                node_host,
+                user=node_user,
+                password=node_password,
+                verify_ssl=verify_ssl
+            )
+            version = test_proxmox.version.get()
+            print(f"Test connection successful - PVE {version['version']}")
+        except Exception as e:
+            flash(f'Connection test failed: {str(e)}', 'error')
+            return render_template('connect.html')
+        
+        # Save config file
+        with open('config.toml', 'w') as f:
+            toml.dump(config, f)
+        
+        # Reload configuration
+        config_file_exists = True
+        
+        # Reinitialize clusters
+        init_all_clusters()
+        
+        # Switch to the new cluster if no current cluster or it's the first one
+        if not current_cluster_id or len(all_clusters) == 1:
+            init_proxmox_connections(cluster_id)
+        
+        flash(f'Successfully added cluster "{cluster_name}"!', 'success')
+        return redirect(url_for('connect'))
+        
+    except Exception as e:
+        flash(f'Error saving configuration: {str(e)}', 'error')
+        return render_template('connect.html')
+
+@app.route('/api/test-connection', methods=['POST'])
+def api_test_connection():
+    """Test connection to Proxmox without saving config"""
+    try:
+        node_host = request.form.get('node_host')
+        node_user = request.form.get('node_user')
+        node_password = request.form.get('node_password')
+        verify_ssl = 'verify_ssl' in request.form
+        
+        # Test connection
+        test_proxmox = ProxmoxAPI(
+            node_host,
+            user=node_user,
+            password=node_password,
+            verify_ssl=verify_ssl
+        )
+        
+        version = test_proxmox.version.get()
+        nodes = test_proxmox.nodes.get()
+        
+        return jsonify({
+            'success': True,
+            'version': version['version'],
+            'node_name': nodes[0]['node'] if nodes else 'Unknown',
+            'nodes_count': len(nodes)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/api/delete-cluster/<cluster_id>', methods=['DELETE'])
+def api_delete_cluster(cluster_id):
+    """Delete a cluster configuration"""
+    global config, all_clusters, current_cluster_id
+    
+    try:
+        if cluster_id not in all_clusters:
+            return jsonify({'error': 'Cluster not found'}), 404
+        
+        # Don't allow deleting the last cluster
+        if len(all_clusters) <= 1:
+            return jsonify({'error': 'Cannot delete the last cluster'}), 400
+        
+        # Remove cluster from config
+        config['clusters'] = [c for c in config['clusters'] if c.get('id') != cluster_id]
+        
+        # Save config file
+        with open('config.toml', 'w') as f:
+            toml.dump(config, f)
+        
+        # If we deleted the current cluster, switch to another one
+        if current_cluster_id == cluster_id:
+            init_all_clusters()
+            remaining_clusters = list(all_clusters.keys())
+            if remaining_clusters:
+                init_proxmox_connections(remaining_clusters[0])
+        else:
+            # Just reload cluster list
+            init_all_clusters()
+        
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cluster-status/<cluster_id>')
+def api_cluster_status(cluster_id):
+    """Check if cluster is reachable"""
+    try:
+        if cluster_id not in all_clusters:
+            return jsonify({'success': False, 'error': 'Cluster not found'})
+        
+        cluster_config = all_clusters[cluster_id]
+        nodes = cluster_config.get('nodes', [])
+        
+        if not nodes:
+            return jsonify({'success': False, 'error': 'No nodes configured'})
+        
+        # Test connection to first node
+        node = nodes[0]
+        test_proxmox = ProxmoxAPI(
+            node['host'],
+            user=node['user'],
+            password=node['password'],
+            verify_ssl=node.get('verify_ssl', True)
+        )
+        
+        # Simple version check to test connectivity
+        version = test_proxmox.version.get()
+        
+        return jsonify({
+            'success': True,
+            'version': version.get('version', 'Unknown'),
+            'node_count': len(nodes)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False, 
+            'error': str(e)
+        })
+
+# Redirect to connect page if no config
+@app.before_request
+def check_config():
+    # Skip check for connect-related routes and static files
+    if request.endpoint in ['connect', 'api_test_connection', 'api_delete_cluster', 'api_cluster_status', 'static']:
+        return
+    
+    # Redirect to connect page if no valid config
+    if not config_file_exists or not all_clusters:
+        return redirect(url_for('connect'))
 
 @app.route('/')
 def index():
@@ -809,8 +1108,11 @@ def networks():
 @app.route('/cluster')
 def cluster():
     """Show cluster information"""
+    # Get current cluster info
+    current_cluster_config = all_clusters.get(current_cluster_id, {})
     cluster_info = {
-        'name': config['cluster']['name'],
+        'id': current_cluster_id,
+        'name': current_cluster_config.get('name', current_cluster_id or 'Unknown Cluster'),
         'nodes': []
     }
     
@@ -1243,13 +1545,16 @@ def internal_error(error):
     return render_template('500.html'), 500
 
 if __name__ == '__main__':
-    print("Initializing Proxmox connections...")
-    init_proxmox_connections()
+    print("Initializing cluster configurations...")
+    init_all_clusters()
     
-    if not proxmox_nodes:
+    print("Initializing Proxmox connections...")
+    success = init_proxmox_connections()
+    
+    if not success or not proxmox_nodes:
         print("WARNING: No Proxmox connections established!")
     else:
         print(f"Successfully connected to {len(proxmox_nodes)} Proxmox nodes")
-        print(f"Cluster contains {len(cluster_nodes)} total nodes")
+        print(f"Current cluster '{current_cluster_id}' contains {len(cluster_nodes)} total nodes")
     
     app.run(debug=True, host='0.0.0.0', port=8080)
