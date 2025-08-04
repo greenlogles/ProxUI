@@ -15,16 +15,28 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'
 
+# Configuration file path for Docker volume
+import os
+
+# Try Docker path first, fallback to local data directory
+try:
+    CONFIG_FILE_PATH = os.environ.get('CONFIG_FILE_PATH', '/app/data/config.toml')
+    os.makedirs(os.path.dirname(CONFIG_FILE_PATH), exist_ok=True)
+except PermissionError:
+    # Fallback to local data directory for development
+    CONFIG_FILE_PATH = './data/config.toml'
+    os.makedirs(os.path.dirname(CONFIG_FILE_PATH), exist_ok=True)
+
 # Load configuration
 config_file_exists = True
 try:
-    with open('config.toml', 'r') as f:
+    with open(CONFIG_FILE_PATH, 'r') as f:
         config = toml.load(f)
         if not config.get('clusters'):
             config_file_exists = False
             config = {'clusters': []}
 except Exception as e:
-    print(f"Error loading config.toml: {e}")
+    print(f"Error loading {CONFIG_FILE_PATH}: {e}")
     config_file_exists = False
     config = {'clusters': []}
 
@@ -510,7 +522,7 @@ def connect():
             return render_template('connect.html')
         
         # Save config file
-        with open('config.toml', 'w') as f:
+        with open(CONFIG_FILE_PATH, 'w') as f:
             toml.dump(config, f)
         
         # Reload configuration
@@ -580,7 +592,7 @@ def api_delete_cluster(cluster_id):
         config['clusters'] = [c for c in config['clusters'] if c.get('id') != cluster_id]
         
         # Save config file
-        with open('config.toml', 'w') as f:
+        with open(CONFIG_FILE_PATH, 'w') as f:
             toml.dump(config, f)
         
         # If we deleted the current cluster, switch to another one
