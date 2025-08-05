@@ -59,7 +59,7 @@
                         </dd>
                         
                         <dt class="col-sm-4">Uptime:</dt>
-                        <dd class="col-sm-8">{{ node.uptime|default('N/A') }}</dd>
+                        <dd class="col-sm-8">{{ node.uptime|humanize_uptime }}</dd>
                         
                         <dt class="col-sm-4">Kernel:</dt>
                         <dd class="col-sm-8">{{ node.kversion|default('N/A') }}</dd>

@@ -15,6 +15,35 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'
 
+# Custom Jinja filters
+def humanize_uptime(seconds):
+    """Convert uptime seconds to human readable format"""
+    if not seconds or seconds == 0:
+        return "N/A"
+    
+    try:
+        seconds = int(float(seconds))
+    except (ValueError, TypeError):
+        return "N/A"
+    
+    if seconds < 60:
+        return f"{seconds}s"
+    elif seconds < 3600:
+        minutes = seconds // 60
+        secs = seconds % 60
+        return f"{minutes}m {secs}s"
+    elif seconds < 86400:
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        return f"{hours}h {minutes}m"
+    else:
+        days = seconds // 86400
+        hours = (seconds % 86400) // 3600
+        minutes = ((seconds % 86400) % 3600) // 60
+        return f"{days}d {hours}h {minutes}m"
+
+app.jinja_env.filters['humanize_uptime'] = humanize_uptime
+
 # Configuration file path for Docker volume
 import os
 

@@ -33,90 +33,6 @@
 </div>
 {% endif %}
 
-<div class="row mt-3">
-    <!-- Performance Metrics Charts -->
-    <div class="col-12 mb-3">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="bi bi-graph-up"></i> Performance Metrics</h5>
-                <div class="d-flex gap-2 align-items-center">
-                    <select class="form-select form-select-sm" id="timeframeSelect" style="width: auto;">
-                        <option value="hour">Last Hour</option>
-                        <option value="day" selected>Last Day</option>
-                        <option value="week">Last Week</option>
-                        <option value="month">Last Month</option>
-                        <option value="year">Last Year</option>
-                    </select>
-                    <small class="text-muted" id="metricsLastUpdate">Loading...</small>
-                    <button class="btn btn-sm btn-outline-primary" id="refreshMetrics" title="Refresh Metrics">
-                        <i class="bi bi-arrow-clockwise"></i>
-                    </button>
-                </div>
-            </div>
-            <div class="card-body">
-                <!-- Current Status Row -->
-                <div class="row mb-4" id="currentStatusRow">
-                    <div class="col-md-3 col-sm-6 mb-2">
-                        <div class="text-center">
-                            <small class="text-muted">Status</small>
-                            <div class="fw-bold" id="currentStatus">Loading...</div>
-                        </div>
-                    </div>
-                    <div class="col-md-3 col-sm-6 mb-2">
-                        <div class="text-center">
-                            <small class="text-muted">CPU</small>
-                            <div class="fw-bold" id="currentCpu">Loading...</div>
-                        </div>
-                    </div>
-                    <div class="col-md-3 col-sm-6 mb-2">
-                        <div class="text-center">
-                            <small class="text-muted">Memory</small>
-                            <div class="fw-bold" id="currentMemory">Loading...</div>
-                        </div>
-                    </div>
-                    <div class="col-md-3 col-sm-6 mb-2">
-                        <div class="text-center">
-                            <small class="text-muted">Uptime</small>
-                            <div class="fw-bold" id="currentUptime">Loading...</div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Charts Row -->
-                <div class="row">
-                    <div class="col-md-6 mb-3">
-                        <h6><i class="bi bi-cpu"></i> CPU Usage (%)</h6>
-                        <div style="height: 250px;">
-                            <canvas id="cpuChart"></canvas>
-                        </div>
-                    </div>
-                    <div class="col-md-6 mb-3">
-                        <h6><i class="bi bi-memory"></i> Memory Usage (%)</h6>
-                        <div style="height: 250px;">
-                            <canvas id="memoryChart"></canvas>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="row">
-                    <div class="col-md-6 mb-3">
-                        <h6><i class="bi bi-diagram-3"></i> Network I/O (MB)</h6>
-                        <div style="height: 250px;">
-                            <canvas id="networkChart"></canvas>
-                        </div>
-                    </div>
-                    <div class="col-md-6 mb-3">
-                        <h6><i class="bi bi-hdd"></i> Disk I/O (MB)</h6>
-                        <div style="height: 250px;">
-                            <canvas id="diskChart"></canvas>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
 <div class="row">
     <!-- Status Card -->
     <div class="col-md-4 mb-3">
@@ -138,7 +54,7 @@
                     </dd>
                     
                     <dt class="col-sm-4">Uptime:</dt>
-                    <dd class="col-sm-8">{{ status.uptime|default('N/A') }}</dd>
+                    <dd class="col-sm-8">{{ status.uptime|humanize_uptime }}</dd>
                     
                     <dt class="col-sm-4">CPU:</dt>
                     <dd class="col-sm-8">
@@ -244,9 +160,70 @@
         </div>
     </div>
 
-    <!-- Guest Disk Usage Card -->
-    {% if guest_disk_info and vm_type == 'qemu' %}
-    <div class="col-md-4 mb-3">
+</div>
+
+<div class="row mt-3">
+    <!-- Performance Metrics Charts -->
+    <div class="col-12 mb-3">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-graph-up"></i> Performance Metrics</h5>
+                <div class="d-flex gap-2 align-items-center">
+                    <select class="form-select form-select-sm" id="timeframeSelect" style="width: auto;">
+                        <option value="hour">Last Hour</option>
+                        <option value="day" selected>Last Day</option>
+                        <option value="week">Last Week</option>
+                        <option value="month">Last Month</option>
+                        <option value="year">Last Year</option>
+                    </select>
+                    <small class="text-muted" id="metricsLastUpdate">Loading...</small>
+                    <button class="btn btn-sm btn-outline-primary" id="refreshMetrics" title="Refresh Metrics">
+                        <i class="bi bi-arrow-clockwise"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <!-- Charts Row -->
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <h6><i class="bi bi-cpu"></i> CPU Usage (%)</h6>
+                        <div style="height: 250px;">
+                            <canvas id="cpuChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <h6><i class="bi bi-memory"></i> Memory Usage (%)</h6>
+                        <div style="height: 250px;">
+                            <canvas id="memoryChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <h6><i class="bi bi-diagram-3"></i> Network I/O (MB)</h6>
+                        <div style="height: 250px;">
+                            <canvas id="networkChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <h6><i class="bi bi-hdd"></i> Disk I/O (MB)</h6>
+                        <div style="height: 250px;">
+                            <canvas id="diskChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+<div class="row">
+    
+    <div class="col-md-6 mb-3">
+        {% if guest_disk_info and vm_type == 'qemu' %}
+        <!-- Guest Disk Usage Card -->
         <div class="card">
             <div class="card-header">
                 <h5 class="mb-0"><i class="bi bi-hdd"></i> Guest Disk Usage</h5>
@@ -280,13 +257,9 @@
                 {% endif %}
             </div>
         </div>
-    </div>
-    {% endif %}
-</div>
+        {% endif %}
 
-<div class="row">
-    <!-- Recent Tasks -->
-    <div class="col-md-6 mb-3">
+        <!-- Recent Tasks -->
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0"><i class="bi bi-list-task"></i> Recent Tasks</h5>
@@ -824,40 +797,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     return;
                 }
                 
-                updateCurrentStatus(data.current);
                 updateCharts(data.historical);
                 metricsLastUpdate.textContent = `Last update: ${data.timestamp}`;
             })
             .catch(error => {
                 console.error('Error fetching VM metrics:', error);
             });
-    }
-    
-    // Update current status display
-    function updateCurrentStatus(current) {
-        // Format uptime
-        function formatUptime(seconds) {
-            if (!seconds) return 'N/A';
-            const days = Math.floor(seconds / 86400);
-            const hours = Math.floor((seconds % 86400) / 3600);
-            const minutes = Math.floor((seconds % 3600) / 60);
-            
-            if (days > 0) {
-                return `${days}d ${hours}h ${minutes}m`;
-            } else if (hours > 0) {
-                return `${hours}h ${minutes}m`;
-            } else {
-                return `${minutes}m`;
-            }
-        }
-        
-        const statusBadgeClass = current.status === 'running' ? 'badge bg-success' : 
-                                current.status === 'stopped' ? 'badge bg-danger' : 'badge bg-warning';
-        
-        document.getElementById('currentStatus').innerHTML = `<span class="${statusBadgeClass}">${current.status}</span>`;
-        document.getElementById('currentCpu').textContent = `${current.cpu.current.toFixed(1)}% (${current.cpu.cores} cores)`;
-        document.getElementById('currentMemory').textContent = `${current.memory.used_gb.toFixed(1)}/${current.memory.max_gb.toFixed(1)} GB (${current.memory.usage_percent.toFixed(1)}%)`;
-        document.getElementById('currentUptime').textContent = formatUptime(current.uptime);
     }
     
     // Update charts with new data
