@@ -968,6 +968,13 @@ def create_vm():
                     params['scsi0'] = f"{storage}:{disk_size}"
                     params['bootdisk'] = 'scsi0'
                 
+                # Add ISO image if specified
+                iso_image = request.form.get('iso')
+                if iso_image:
+                    params['ide2'] = f"{iso_image},media=cdrom"
+                    # Update boot order to include CD-ROM first for OS installation
+                    params['boot'] = 'dc'  # CD-ROM first, then disk
+                
                 # Create the VM
                 proxmox.nodes(node).qemu.create(**params)
                 
@@ -1303,6 +1310,34 @@ def api_node_templates(node):
             print(f"Error getting LXC templates: {e}")
             
         return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/node/<node>/iso-images')
+def api_node_iso_images(node):
+    """API endpoint to get ISO images for a specific node"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        return jsonify({'error': 'Node not found'}), 404
+    
+    try:
+        iso_images = []
+        
+        # Get all storages and look for ISO content
+        storages = proxmox.nodes(node).storage.get()
+        for storage in storages:
+            if storage.get('enabled', 0) == 1 and 'iso' in storage.get('content', '').split(','):
+                # Get ISO files in this storage
+                try:
+                    isos = proxmox.nodes(node).storage(storage['storage']).content.get(content='iso')
+                    iso_images.extend(isos)
+                except Exception as e:
+                    print(f"Error getting ISOs from storage {storage.get('storage')}: {e}")
+        
+        # Sort by filename
+        iso_images.sort(key=lambda x: x.get('volid', '').split('/')[-1].lower())
+        
+        return jsonify(iso_images)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
