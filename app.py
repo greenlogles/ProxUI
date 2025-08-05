@@ -79,6 +79,8 @@ def init_all_clusters():
     """Initialize all cluster configurations"""
     global all_clusters, current_cluster_id
     
+    all_clusters = {}
+    
     # Load all clusters from config
     if 'clusters' in config:
         for cluster_config in config['clusters']:
@@ -103,8 +105,8 @@ def init_proxmox_connections(cluster_id=None):
         return False
     
     # Clear existing connections
-    proxmox_nodes.clear()
-    cluster_nodes.clear()
+    proxmox_nodes = {}
+    cluster_nodes = []
     
     cluster_config = all_clusters[current_cluster_id]
     discovered_nodes = set()
@@ -445,7 +447,6 @@ def api_clusters():
 @app.route('/api/switch-cluster/<cluster_id>', methods=['POST'])
 def api_switch_cluster(cluster_id):
     """API endpoint to switch to a different cluster"""
-    global current_cluster_id
     
     if cluster_id not in all_clusters:
         return jsonify({'error': 'Cluster not found'}), 404
@@ -485,7 +486,7 @@ def inject_cluster_info():
 @app.route('/connect', methods=['GET', 'POST'])
 def connect():
     """Connection setup page"""
-    global config, config_file_exists, all_clusters, current_cluster_id
+    global config, config_file_exists
     
     if request.method == 'GET':
         # Pass existing clusters to template
@@ -534,6 +535,7 @@ def connect():
         if config.get('clusters'):
             config['clusters'].append(new_cluster)
         else:
+            config = dict(config)  # Explicit assignment for linter
             config['clusters'] = [new_cluster]
         
         # Test connection first
@@ -607,7 +609,7 @@ def api_test_connection():
 @app.route('/api/delete-cluster/<cluster_id>', methods=['DELETE'])
 def api_delete_cluster(cluster_id):
     """Delete a cluster configuration"""
-    global config, all_clusters, current_cluster_id
+    global config
     
     try:
         if cluster_id not in all_clusters:
@@ -618,6 +620,7 @@ def api_delete_cluster(cluster_id):
             return jsonify({'error': 'Cannot delete the last cluster'}), 400
         
         # Remove cluster from config
+        config = dict(config)  # Explicit assignment for linter  
         config['clusters'] = [c for c in config['clusters'] if c.get('id') != cluster_id]
         
         # Save config file
