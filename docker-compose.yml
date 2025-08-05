@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  proxui:
+    image: git.lagoland.xyz/greenlogles/proxui2:latest
+    container_name: proxui
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - FLASK_ENV=production
+    restart: unless-stopped

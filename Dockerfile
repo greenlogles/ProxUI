@@ -6,6 +6,15 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Labels
+LABEL maintainer="contact@proxui.app"
+LABEL org.label-schema.name="ProxUI"
+LABEL org.label-schema.description="ProxUI - A modern web-based management interface for Proxmox VE with multi-cluster support."
+LABEL org.label-schema.vendor="greenlogles"
+LABEL org.label-schema.url="https://proxui.app"
+LABEL org.label-schema.vcs-url="https://github.com/greenlogles/proxui"
+LABEL org.opencontainers.image.source="https://github.com/greenlogles/proxui"
+
 # Copy application files
 COPY ./ /app/
 
@@ -19,6 +28,7 @@ USER proxui
 # Set environment variables
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
+ENV CONFIG_FILE_PATH=/app/data/config.toml
 
 # Expose web dashboard port
 EXPOSE 8080
