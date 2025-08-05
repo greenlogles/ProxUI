@@ -1,0 +1,748 @@
+{% extends "base.html" %}
+
+{% block title %}Edit VM {{ vm.name }} - Proxmox Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h1><i class="bi bi-gear"></i> Edit VM {{ vm.name }}</h1>
+            <div>
+                <span class="badge bg-{{ 'success' if vm.status == 'running' else 'danger' if vm.status == 'stopped' else 'warning' }}">
+                    {{ vm.status }}
+                </span>
+                <a href="{{ url_for('vm_detail', node=node, vmid=vm.vmid) }}" class="btn btn-outline-secondary ms-2">
+                    <i class="bi bi-arrow-left"></i> Back to Details
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if vm.status == 'running' %}
+<div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle"></i>
+    <strong>Warning:</strong> Some configuration changes require the VM to be stopped to take effect.
+    Memory and CPU changes can be applied to running VMs but may need a restart for optimal performance.
+</div>
+{% endif %}
+
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-cpu"></i> VM Configuration</h5>
+            </div>
+            <div class="card-body">
+                <form id="vmConfigForm">
+                    <!-- CPU Configuration -->
+                    <div class="mb-4">
+                        <h6 class="text-primary mb-3"><i class="bi bi-cpu"></i> CPU Configuration</h6>
+                        
+                        <div class="mb-3">
+                            <label for="cpu_type" class="form-label">CPU Type</label>
+                            <select class="form-select" id="cpu_type" name="cpu_type">
+                                <option value="host">Host (Recommended)</option>
+                                <option value="kvm64">KVM64</option>
+                                <option value="qemu64">QEMU64</option>
+                                <option value="Haswell">Intel Haswell</option>
+                                <option value="Skylake-Client">Intel Skylake</option>
+                                <option value="EPYC">AMD EPYC</option>
+                            </select>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="sockets" class="form-label">Sockets</label>
+                                <input type="number" class="form-control" id="sockets" name="sockets" 
+                                       min="1" max="4" value="{{ config.sockets or 1 }}">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="cores" class="form-label">Cores</label>
+                                <input type="number" class="form-control" id="cores" name="cores" 
+                                       min="1" max="128" value="{{ config.cores or 1 }}">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Memory Configuration -->
+                    <div class="mb-4">
+                        <h6 class="text-primary mb-3"><i class="bi bi-memory"></i> Memory Configuration</h6>
+                        
+                        <div class="mb-3">
+                            <label for="memory" class="form-label">Memory (MB)</label>
+                            <input type="number" class="form-control" id="memory" name="memory" 
+                                   min="64" max="4194304" step="64" value="{{ config.memory or 512 }}">
+                        </div>
+                    </div>
+
+                    <!-- Disk Configuration -->
+                    <div class="mb-4">
+                        <h6 class="text-primary mb-3"><i class="bi bi-hdd"></i> Disk Configuration</h6>
+                        
+                        <div id="diskInterfaces">
+                            <!-- Disk interfaces will be loaded here -->
+                        </div>
+                    </div>
+
+                    <!-- Network Interfaces -->
+                    <div class="mb-4">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h6 class="text-primary mb-0"><i class="bi bi-diagram-3"></i> Network Interfaces</h6>
+                            <button type="button" class="btn btn-sm btn-success" id="addNetworkBtn">
+                                <i class="bi bi-plus-circle"></i> Add Interface
+                            </button>
+                        </div>
+                        
+                        <div id="networkInterfaces">
+                            <!-- Network interfaces will be loaded here -->
+                        </div>
+                    </div>
+
+                    <!-- Boot Options -->
+                    <div class="mb-4">
+                        <h6 class="text-primary mb-3"><i class="bi bi-power"></i> Boot Options</h6>
+                        
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="autostart" name="autostart">
+                            <label class="form-check-label" for="autostart">
+                                Auto-start VM on node boot
+                            </label>
+                            <div class="form-text">VM will automatically start when the Proxmox node boots</div>
+                        </div>
+                    </div>
+
+                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                        <button type="button" class="btn btn-secondary" onclick="window.history.back()">
+                            <i class="bi bi-x-circle"></i> Cancel
+                        </button>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-circle"></i> Save Configuration
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Loading overlay -->
+<div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center" 
+     style="background-color: rgba(0,0,0,0.5); z-index: 9999;">
+    <div class="bg-white rounded p-4 text-center">
+        <div class="spinner-border text-primary mb-2" role="status"></div>
+        <div>Updating configuration...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const node = '{{ node }}';
+const vmid = '{{ vm.vmid }}';
+
+// Global functions for network management
+function addNetworkInterface() {
+    const bridge = document.getElementById('newBridge').value;
+    const model = document.getElementById('newModel').value;
+    
+    if (!bridge) {
+        showNotification('Please select a network bridge', 'warning');
+        return;
+    }
+    
+    // Find next available interface number
+    fetch(`/api/vm/${node}/${vmid}/config`)
+        .then(response => response.json())
+        .then(data => {
+            let nextId = 0;
+            while (data[`net${nextId}`]) {
+                nextId++;
+            }
+            
+            const newConfig = `${model},bridge=${bridge}`;
+            const updateData = {};
+            updateData[`net${nextId}`] = newConfig;
+            
+            return fetch(`/api/vm/${node}/${vmid}/config`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updateData)
+            });
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(result => {
+            console.log('API Response:', result); // Debug log
+            if (result.success) {
+                showNotification('Network interface added successfully', 'success');
+                loadNetworkInterfaces(); // Reload interface list
+                
+                // Close modal
+                const modal = bootstrap.Modal.getInstance(document.getElementById('addNetworkModal'));
+                if (modal) {
+                    modal.hide();
+                }
+            } else {
+                showNotification(result.error || 'Failed to add network interface', 'error');
+            }
+        })
+        .catch(error => {
+            console.error('Error adding network interface:', error);
+            showNotification('Network error while adding interface: ' + error.message, 'error');
+        });
+}
+
+function removeNetworkInterface(interfaceKey) {
+    if (!confirm(`Are you sure you want to remove network interface ${interfaceKey}?`)) {
+        return;
+    }
+    
+    // Remove interface by setting it to empty string
+    const updateData = {};
+    updateData[interfaceKey] = '';
+    
+    fetch(`/api/vm/${node}/${vmid}/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updateData)
+    })
+    .then(response => response.json())
+    .then(result => {
+        if (result.success) {
+            showNotification(`Network interface ${interfaceKey} removed`, 'success');
+            loadNetworkInterfaces(); // Reload interface list
+        } else {
+            showNotification(result.error || 'Failed to remove interface', 'error');
+        }
+    })
+    .catch(error => {
+        showNotification('Network error while removing interface', 'error');
+    });
+}
+
+function showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.className = `alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show position-fixed`;
+    notification.style.top = '20px';
+    notification.style.right = '20px';
+    notification.style.zIndex = '10000';
+    notification.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    document.body.appendChild(notification);
+    
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        if (notification.parentNode) {
+            notification.parentNode.removeChild(notification);
+        }
+    }, 5000);
+}
+
+function loadNetworkInterfaces() {
+    fetch(`/api/vm/${node}/${vmid}/config`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error loading network interfaces:', data.error);
+                return;
+            }
+            
+            const container = document.getElementById('networkInterfaces');
+            if (!container) return;
+            
+            container.innerHTML = '';
+            
+            // Parse network interfaces from config
+            const interfaces = [];
+            for (const [key, value] of Object.entries(data)) {
+                if (key.startsWith('net') && key.match(/^net\d+$/)) {
+                    interfaces.push({
+                        key: key,
+                        config: value
+                    });
+                }
+            }
+            
+            // Sort interfaces by number
+            interfaces.sort((a, b) => {
+                const aNum = parseInt(a.key.replace('net', ''));
+                const bNum = parseInt(b.key.replace('net', ''));
+                return aNum - bNum;
+            });
+            
+            if (interfaces.length === 0) {
+                container.innerHTML = '<div class="text-muted">No network interfaces configured</div>';
+            } else {
+                interfaces.forEach(iface => {
+                    container.appendChild(createNetworkInterfaceCard(iface));
+                });
+            }
+        })
+        .catch(error => {
+            console.error('Error loading network interfaces:', error);
+        });
+}
+
+function createNetworkInterfaceCard(iface) {
+    const div = document.createElement('div');
+    div.className = 'card mb-2';
+    
+    // Parse interface config (e.g., "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0")
+    const parts = iface.config.split(',');
+    let model = 'virtio';
+    let bridge = 'unknown';
+    let macAddr = '';
+    
+    for (const part of parts) {
+        if (part.includes('=')) {
+            const [key, value] = part.split('=', 2);
+            if (key === 'bridge') {
+                bridge = value;
+            } else if (key.match(/^(virtio|e1000|rtl8139)$/)) {
+                model = key;
+                macAddr = value;
+            }
+        } else if (part.match(/^(virtio|e1000|rtl8139)$/)) {
+            model = part;
+        }
+    }
+    
+    div.innerHTML = `
+        <div class="card-body py-2">
+            <div class="row align-items-center">
+                <div class="col-md-3">
+                    <strong>${iface.key}</strong><br>
+                    <small class="text-muted">${model}</small>
+                </div>
+                <div class="col-md-4">
+                    <select class="form-select form-select-sm bridge-select" data-interface="${iface.key}">
+                        <option value="">Loading bridges...</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <small class="text-muted">${macAddr ? macAddr.substring(0, 17) : 'Auto MAC'}</small>
+                </div>
+                <div class="col-md-2">
+                    <button class="btn btn-sm btn-outline-danger" onclick="removeNetworkInterface('${iface.key}')">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Populate bridge select with current value
+    const bridgeSelect = div.querySelector('.bridge-select');
+    setTimeout(() => {
+        populateBridgeSelect(bridgeSelect, bridge);
+    }, 100);
+    
+    return div;
+}
+
+function populateBridgeSelect(selectElement, currentBridge) {
+    if (!window.availableBridges) {
+        setTimeout(() => populateBridgeSelect(selectElement, currentBridge), 100);
+        return;
+    }
+    
+    selectElement.innerHTML = '<option value="">Select bridge...</option>';
+    
+    window.availableBridges.forEach(bridge => {
+        const option = document.createElement('option');
+        option.value = bridge.iface;
+        option.textContent = bridge.iface;
+        if (bridge.iface === currentBridge) {
+            option.selected = true;
+        }
+        selectElement.appendChild(option);
+    });
+    
+    // Add change listener
+    selectElement.addEventListener('change', function() {
+        updateNetworkInterface(this.dataset.interface, this.value);
+    });
+}
+
+function updateNetworkInterface(interfaceKey, newBridge) {
+    if (!newBridge) return;
+    
+    // Get current interface config to preserve other settings
+    fetch(`/api/vm/${node}/${vmid}/config`)
+        .then(response => response.json())
+        .then(data => {
+            const currentConfig = data[interfaceKey];
+            if (!currentConfig) return;
+            
+            // Parse current config and update bridge
+            const parts = currentConfig.split(',');
+            let bridgeFound = false;
+            
+            for (let i = 0; i < parts.length; i++) {
+                if (parts[i].startsWith('bridge=')) {
+                    parts[i] = `bridge=${newBridge}`;
+                    bridgeFound = true;
+                }
+            }
+            
+            if (!bridgeFound) {
+                parts.push(`bridge=${newBridge}`);
+            }
+            
+            const newConfig = parts.join(',');
+            
+            // Update via API
+            const updateData = {};
+            updateData[interfaceKey] = newConfig;
+            
+            fetch(`/api/vm/${node}/${vmid}/config`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updateData)
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (result.success) {
+                    showNotification(`Network interface ${interfaceKey} updated`, 'success');
+                } else {
+                    showNotification(result.error || 'Failed to update interface', 'error');
+                    loadNetworkInterfaces(); // Reload to revert changes
+                }
+            })
+            .catch(error => {
+                showNotification('Network error while updating interface', 'error');
+                loadNetworkInterfaces(); // Reload to revert changes
+            });
+        });
+}
+
+function loadAvailableBridges() {
+    fetch(`/api/node/${node}/networks`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error loading network bridges:', data.error);
+                return;
+            }
+            
+            window.availableBridges = data.filter(net => net.type === 'bridge');
+        })
+        .catch(error => {
+            console.error('Error loading network bridges:', error);
+            window.availableBridges = [];
+        });
+}
+
+function showAddNetworkModal() {
+    if (!window.availableBridges || window.availableBridges.length === 0) {
+        showNotification('No network bridges available', 'warning');
+        return;
+    }
+    
+    const bridgeOptions = window.availableBridges.map(bridge => 
+        `<option value="${bridge.iface}">${bridge.iface}</option>`
+    ).join('');
+    
+    const modalHtml = `
+        <div class="modal fade" id="addNetworkModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Add Network Interface</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label for="newBridge" class="form-label">Network Bridge</label>
+                            <select class="form-select" id="newBridge">
+                                <option value="">Select bridge...</option>
+                                ${bridgeOptions}
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="newModel" class="form-label">Network Model</label>
+                            <select class="form-select" id="newModel">
+                                <option value="virtio">VirtIO (Recommended)</option>
+                                <option value="e1000">Intel E1000</option>
+                                <option value="rtl8139">Realtek RTL8139</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary" id="addNetworkSubmitBtn">Add Interface</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Remove existing modal if any
+    const existingModal = document.getElementById('addNetworkModal');
+    if (existingModal) {
+        existingModal.remove();
+    }
+    
+    // Add modal to body
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    
+    // Show modal
+    const modal = new bootstrap.Modal(document.getElementById('addNetworkModal'));
+    modal.show();
+    
+    // Add event listener to submit button
+    document.getElementById('addNetworkSubmitBtn').addEventListener('click', addNetworkInterface);
+}
+
+function loadDiskInterfaces() {
+    fetch(`/api/vm/${node}/${vmid}/config`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error loading disk interfaces:', data.error);
+                return;
+            }
+            
+            const container = document.getElementById('diskInterfaces');
+            if (!container) return;
+            
+            container.innerHTML = '';
+            
+            // Parse disk interfaces from config
+            const disks = [];
+            for (const [key, value] of Object.entries(data)) {
+                if ((key.startsWith('scsi') || key.startsWith('virtio') || key.startsWith('ide') || key.startsWith('sata')) && key.match(/^(scsi|virtio|ide|sata)\d+$/)) {
+                    // Skip ISO images and cloud-init disks
+                    if (value.includes('.iso') || value.includes('media=cdrom') || value.includes('cloudinit')) {
+                        continue;
+                    }
+                    disks.push({
+                        key: key,
+                        config: value
+                    });
+                }
+            }
+            
+            // Sort disks by type and number
+            disks.sort((a, b) => {
+                const aType = a.key.replace(/\d+$/, '');
+                const bType = b.key.replace(/\d+$/, '');
+                if (aType !== bType) return aType.localeCompare(bType);
+                const aNum = parseInt(a.key.replace(/^[a-z]+/, ''));
+                const bNum = parseInt(b.key.replace(/^[a-z]+/, ''));
+                return aNum - bNum;
+            });
+            
+            if (disks.length === 0) {
+                container.innerHTML = '<div class="text-muted">No disks configured</div>';
+            } else {
+                disks.forEach(disk => {
+                    container.appendChild(createDiskInterfaceCard(disk));
+                });
+            }
+        })
+        .catch(error => {
+            console.error('Error loading disk interfaces:', error);
+        });
+}
+
+function createDiskInterfaceCard(disk) {
+    const div = document.createElement('div');
+    div.className = 'card mb-2';
+    
+    // Parse disk config (e.g., "local-lvm:vm-123-disk-0,size=32G")
+    const parts = disk.config.split(',');
+    let storage = '';
+    let size = '';
+    let format = '';
+    
+    for (const part of parts) {
+        if (part.includes(':')) {
+            storage = part.split(':')[0];
+        } else if (part.startsWith('size=')) {
+            size = part.replace('size=', '');
+        } else if (part.startsWith('format=')) {
+            format = part.replace('format=', '');
+        }
+    }
+    
+    // Convert size to GB for display
+    let sizeGB = size;
+    if (size.endsWith('G')) {
+        sizeGB = parseInt(size.replace('G', ''));
+    } else if (size.endsWith('M')) {
+        sizeGB = Math.round(parseInt(size.replace('M', '')) / 1024 * 10) / 10;
+    }
+    
+    div.innerHTML = `
+        <div class="card-body py-2">
+            <div class="row align-items-center">
+                <div class="col-md-2">
+                    <strong>${disk.key}</strong><br>
+                    <small class="text-muted">${storage}</small>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small mb-1">Current Size</label>
+                    <div><strong>${size}</strong></div>
+                </div>
+                <div class="col-md-4">
+                    <label for="resize_${disk.key}" class="form-label small mb-1">Resize to (GB)</label>
+                    <input type="number" class="form-control form-control-sm" 
+                           id="resize_${disk.key}" 
+                           min="${sizeGB}" 
+                           value="${sizeGB}" 
+                           step="1">
+                    <small class="text-muted">Can only expand</small>
+                </div>
+                <div class="col-md-3">
+                    <button class="btn btn-sm btn-outline-primary" onclick="resizeDisk('${disk.key}')">
+                        <i class="bi bi-arrows-expand"></i> Resize
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    return div;
+}
+
+function resizeDisk(diskKey) {
+    const newSizeInput = document.getElementById(`resize_${diskKey}`);
+    const newSize = parseInt(newSizeInput.value);
+    
+    if (!newSize || newSize <= 0) {
+        showNotification('Please enter a valid size', 'warning');
+        return;
+    }
+    
+    if (!confirm(`Resize disk ${diskKey} to ${newSize}GB? This action cannot be undone.`)) {
+        return;
+    }
+    
+    // Use dedicated disk resize API endpoint
+    fetch(`/api/vm/${node}/${vmid}/resize-disk`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            disk: diskKey,
+            size: newSize
+        })
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        return response.json();
+    })
+    .then(result => {
+        console.log('Resize result:', result);
+        if (result.success) {
+            showNotification(`Disk ${diskKey} resized to ${newSize}GB successfully`, 'success');
+            loadDiskInterfaces(); // Reload disk list
+        } else {
+            showNotification(result.error || 'Failed to resize disk', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error resizing disk:', error);
+        showNotification('Network error while resizing disk: ' + error.message, 'error');
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Load current configuration
+    loadVMConfiguration();
+    loadNetworkInterfaces();
+    loadDiskInterfaces();
+    loadAvailableBridges();
+    
+    // Form event listeners
+    document.getElementById('vmConfigForm').addEventListener('submit', handleFormSubmit);
+    document.getElementById('addNetworkBtn').addEventListener('click', showAddNetworkModal);
+    
+    function loadVMConfiguration() {
+        fetch(`/api/vm/${node}/${vmid}/config`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    showNotification('Error loading VM configuration: ' + data.error, 'error');
+                    return;
+                }
+                
+                // Populate form fields
+                if (data.cpu) {
+                    document.getElementById('cpu_type').value = data.cpu;
+                }
+                
+                document.getElementById('autostart').checked = (data.onboot === 1);
+            })
+            .catch(error => {
+                console.error('Error loading VM configuration:', error);
+                showNotification('Failed to load VM configuration', 'error');
+            });
+    }
+    
+    
+    
+    function handleFormSubmit(e) {
+        e.preventDefault();
+        
+        // Show loading overlay
+        document.getElementById('loadingOverlay').classList.remove('d-none');
+        document.getElementById('loadingOverlay').classList.add('d-flex');
+        
+        // Collect form data
+        const formData = {
+            cpu: document.getElementById('cpu_type').value,
+            sockets: parseInt(document.getElementById('sockets').value),
+            cores: parseInt(document.getElementById('cores').value),
+            memory: parseInt(document.getElementById('memory').value),
+            onboot: document.getElementById('autostart').checked ? 1 : 0
+        };
+        
+        // Send API request
+        fetch(`/api/vm/${node}/${vmid}/config`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(formData)
+        })
+        .then(response => response.json())
+        .then(data => {
+            // Hide loading overlay
+            document.getElementById('loadingOverlay').classList.remove('d-flex');
+            document.getElementById('loadingOverlay').classList.add('d-none');
+            
+            if (data.success) {
+                showNotification('VM configuration updated successfully', 'success');
+                
+                // Redirect back to VM details after 2 seconds
+                setTimeout(() => {
+                    window.location.href = `/vm/${node}/${vmid}`;
+                }, 2000);
+            } else {
+                showNotification(data.error || 'Failed to update VM configuration', 'error');
+            }
+        })
+        .catch(error => {
+            // Hide loading overlay
+            document.getElementById('loadingOverlay').classList.remove('d-flex');
+            document.getElementById('loadingOverlay').classList.add('d-none');
+            
+            console.error('Error updating VM configuration:', error);
+            showNotification('Network error while updating configuration', 'error');
+        });
+    }
+    
+});
+</script>
+{% endblock %}

@@ -805,6 +805,27 @@ def vm_detail(node, vmid):
         flash(f'Error getting VM details: {e}', 'error')
         return redirect(url_for('vms'))
 
+@app.route('/vm/<node>/<vmid>/edit')
+def vm_edit(node, vmid):
+    """Show VM configuration edit page"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        flash('Node connection not found', 'error')
+        return redirect(url_for('vms'))
+    
+    try:
+        # Get VM info and config
+        vm_info = proxmox.nodes(node).qemu(vmid).status.current.get()
+        config = proxmox.nodes(node).qemu(vmid).config.get()
+        
+        return render_template('vm_edit.html',
+                             node=node,
+                             vm=vm_info,
+                             config=config)
+    except Exception as e:
+        flash(f'Error loading VM configuration: {e}', 'error')
+        return redirect(url_for('vm_detail', node=node, vmid=vmid))
+
 @app.route('/vm/<node>/<vmid>/<action>', methods=['POST'])
 def vm_action(node, vmid, action):
     """Perform action on VM"""
@@ -1614,6 +1635,102 @@ def api_vm_metrics(node, vmid):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     
+
+# VM Configuration API
+@app.route('/api/vm/<node>/<vmid>/config', methods=['GET', 'PUT'])
+def api_vm_config(node, vmid):
+    """Get or update VM configuration"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        return jsonify({'error': 'Node not found'}), 404
+    
+    try:
+        if request.method == 'GET':
+            # Get VM configuration
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+            return jsonify(config)
+        
+        elif request.method == 'PUT':
+            # Update VM configuration
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'No configuration data provided'}), 400
+            
+            # Build update parameters
+            params = {}
+            
+            # CPU configuration
+            if 'cpu' in data:
+                params['cpu'] = data['cpu']
+            if 'sockets' in data:
+                params['sockets'] = int(data['sockets'])
+            if 'cores' in data:
+                params['cores'] = int(data['cores'])
+            
+            # Memory configuration
+            if 'memory' in data:
+                params['memory'] = int(data['memory'])
+            
+            # Boot configuration
+            if 'onboot' in data:
+                params['onboot'] = int(data['onboot'])
+            
+            # Network interfaces (net0, net1, etc.)
+            import re
+            delete_params = []
+            for key, value in data.items():
+                if key.startswith('net') and re.match(r'^net\d+$', key):
+                    if value == '' or value is None:
+                        # Mark for deletion
+                        delete_params.append(key)
+                    else:
+                        params[key] = value
+            
+            # Disk interfaces (scsi0, virtio0, ide0, sata0, etc.)
+            for key, value in data.items():
+                if re.match(r'^(scsi|virtio|ide|sata)\d+$', key):
+                    params[key] = value
+            
+            # Add delete parameter for removing interfaces
+            if delete_params:
+                params['delete'] = ','.join(delete_params)
+            
+            # Update VM configuration
+            proxmox.nodes(node).qemu(vmid).config.put(**params)
+            
+            return jsonify({'success': True, 'message': 'VM configuration updated successfully'})
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/vm/<node>/<vmid>/resize-disk', methods=['PUT'])
+def api_vm_resize_disk(node, vmid):
+    """Resize VM disk"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        return jsonify({'error': 'Node not found'}), 404
+    
+    try:
+        data = request.get_json()
+        if not data or 'disk' not in data or 'size' not in data:
+            return jsonify({'error': 'Missing disk or size parameter'}), 400
+        
+        disk = data['disk']
+        size = data['size']
+        
+        # Validate size format (should be like "32G")
+        if isinstance(size, int):
+            size = f"{size}G"
+        elif isinstance(size, str) and not size.endswith('G'):
+            size = f"{size}G"
+        
+        # Use Proxmox API to resize disk
+        result = proxmox.nodes(node).qemu(vmid).resize.put(disk=disk, size=size)
+        
+        return jsonify({'success': True, 'message': f'Disk {disk} resized to {size}', 'result': result})
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.errorhandler(404)
 def not_found(error):

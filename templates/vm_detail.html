@@ -5,11 +5,20 @@
 {% block content %}
 <div class="row">
     <div class="col-12">
-        <h1>
-            <i class="bi bi-{{ 'pc-display' if vm_type == 'qemu' else 'box' }}"></i> 
-            {{ config.name or ('VM ' + vmid) }}
-        </h1>
-        <p class="text-muted">{{ vm_type|upper }} {{ vmid }} on {{ node }}</p>
+        <div class="d-flex justify-content-between align-items-center">
+            <div>
+                <h1>
+                    <i class="bi bi-{{ 'pc-display' if vm_type == 'qemu' else 'box' }}"></i> 
+                    {{ config.name or ('VM ' + vmid) }}
+                </h1>
+                <p class="text-muted">{{ vm_type|upper }} {{ vmid }} on {{ node }}</p>
+            </div>
+            <div>
+                <a href="{{ url_for('vm_edit', node=node, vmid=vmid) }}" class="btn btn-outline-primary">
+                    <i class="bi bi-gear"></i> Edit Configuration
+                </a>
+            </div>
+        </div>
     </div>
 </div>
 
