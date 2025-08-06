@@ -325,7 +325,7 @@ async function loadTemplates(nodeName) {
             vmContainer.innerHTML = '<div class="text-muted">No VM templates found</div>';
         } else {
             let html = '<div class="table-responsive"><table class="table table-sm">';
-            html += '<thead><tr><th>ID</th><th>Name</th><th>Memory</th><th>CPU</th><th>Status</th></tr></thead><tbody>';
+            html += '<thead><tr><th>ID</th><th>Name</th><th>Memory</th><th>CPU</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
             
             data.qemu.forEach(vm => {
                 const memoryGB = vm.maxmem ? (vm.maxmem / (1024 * 1024 * 1024)).toFixed(1) : 'Unknown';
@@ -338,6 +338,11 @@ async function loadTemplates(nodeName) {
                         <td>${memoryGB} GB</td>
                         <td>${cpuInfo}</td>
                         <td><span class="badge bg-info">Template</span></td>
+                        <td>
+                            <a href="/vm/${nodeName}/${vm.vmid}/clone" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-files"></i> Clone
+                            </a>
+                        </td>
                     </tr>
                 `;
             });

@@ -941,6 +941,37 @@ def vm_edit(node, vmid):
         return redirect(url_for("vm_detail", node=node, vmid=vmid))
 
 
+@app.route("/vm/<node>/<vmid>/clone")
+def vm_clone(node, vmid):
+    """Show VM clone page"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        flash("Node connection not found", "error")
+        return redirect(url_for("vms"))
+
+    try:
+        # Get VM info and config
+        vm_info = proxmox.nodes(node).qemu(vmid).status.current.get()
+        config = proxmox.nodes(node).qemu(vmid).config.get()
+
+        # Get available nodes for cloning
+        available_nodes = [
+            n["name"] for n in cluster_nodes if n.get("status") == "online"
+        ]
+
+        return render_template(
+            "vm_clone.html",
+            node=node,
+            vmid=vmid,
+            vm=vm_info,
+            config=config,
+            available_nodes=available_nodes,
+        )
+    except Exception as e:
+        flash(f"Error loading VM information: {e}", "error")
+        return redirect(url_for("vms"))
+
+
 @app.route("/vm/<node>/<vmid>/<action>", methods=["POST"])
 def vm_action(node, vmid, action):
     """Perform action on VM"""
@@ -2106,6 +2137,61 @@ def api_vm_resize_disk(node, vmid):
                 "success": True,
                 "message": f"Disk {disk} resized to {size}",
                 "result": result,
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/clone", methods=["POST"])
+def api_vm_clone(node, vmid):
+    """Clone a VM"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        data = request.get_json()
+        if not data or "name" not in data or "vmid" not in data:
+            return jsonify({"error": "Missing name or vmid parameter"}), 400
+
+        clone_name = data["name"]
+        clone_vmid = data["vmid"]
+        target_node = data.get("target_node", node)
+        target_storage = data.get("target_storage", "")
+        clone_type = data.get("clone_type", "full")
+        description = data.get("description", "")
+
+        # Prepare clone parameters
+        clone_params = {
+            "newid": int(clone_vmid),
+            "name": clone_name,
+            "full": 1 if clone_type == "full" else 0,
+        }
+
+        # Add target node if different from source
+        if target_node != node:
+            clone_params["target"] = target_node
+
+        # Add target storage if specified
+        if target_storage:
+            clone_params["storage"] = target_storage
+
+        # Add description if provided
+        if description:
+            clone_params["description"] = description
+
+        # Execute clone operation
+        result = proxmox.nodes(node).qemu(vmid).clone.post(**clone_params)
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"VM {vmid} cloned successfully as {clone_vmid}",
+                "new_vmid": clone_vmid,
+                "target_node": target_node,
+                "task": result,
             }
         )
 

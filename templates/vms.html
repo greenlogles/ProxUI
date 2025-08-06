@@ -119,18 +119,26 @@
                                            class="btn btn-outline-primary" title="Details">
                                             <i class="bi bi-info-circle"></i>
                                         </a>
-                                        {% if vm.status == 'stopped' %}
-                                        <form method="POST" action="{{ url_for('vm_action', node=vm.node, vmid=vm.vmid, action='start') }}" style="display: inline;">
-                                            <button type="submit" class="btn btn-outline-success" title="Start">
-                                                <i class="bi bi-play-fill"></i>
-                                            </button>
-                                        </form>
+
+                                        {% if vm.get('template') == 1 %}
+                                        <a href="{{ url_for('vm_clone', node=vm.node, vmid=vm.vmid) }}" class="btn btn-sm btn-outline-primary">
+                                            <i class="bi bi-files"></i> Clone
+                                        </a>
+
                                         {% else %}
-                                        <form method="POST" action="{{ url_for('vm_action', node=vm.node, vmid=vm.vmid, action='shutdown') }}" style="display: inline;">
-                                            <button type="submit" class="btn btn-outline-warning" title="Shutdown">
-                                                <i class="bi bi-power"></i>
-                                            </button>
-                                        </form>
+                                            {% if vm.status == 'stopped' %}
+                                            <form method="POST" action="{{ url_for('vm_action', node=vm.node, vmid=vm.vmid, action='start') }}" style="display: inline;">
+                                                <button type="submit" class="btn btn-outline-success" title="Start">
+                                                    <i class="bi bi-play-fill"></i>
+                                                </button>
+                                            </form>
+                                            {% else %}
+                                            <form method="POST" action="{{ url_for('vm_action', node=vm.node, vmid=vm.vmid, action='shutdown') }}" style="display: inline;">
+                                                <button type="submit" class="btn btn-outline-warning" title="Shutdown">
+                                                    <i class="bi bi-power"></i>
+                                                </button>
+                                            </form>
+                                            {% endif %}
                                         {% endif %}
                                     </div>
                                 </td>

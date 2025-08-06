@@ -1,0 +1,293 @@
+{% extends "base.html" %}
+
+{% block title %}Clone VM {{ config.name or vmid }} - Proxmox Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h1><i class="bi bi-files"></i> Clone VM {{ config.name or vmid }}</h1>
+            <div>
+                <span class="badge bg-{{ 'success' if vm.status == 'running' else 'danger' if vm.status == 'stopped' else 'warning' }}">
+                    {{ vm.status }}
+                </span>
+                <a href="{{ url_for('vm_detail', node=node, vmid=vmid) }}" class="btn btn-outline-secondary ms-2">
+                    <i class="bi bi-arrow-left"></i> Back to VM
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-files"></i> Clone Configuration</h5>
+            </div>
+            <div class="card-body">
+                <!-- Source VM Info -->
+                <div class="mb-4">
+                    <h6 class="text-primary mb-3"><i class="bi bi-pc-display"></i> Source VM</h6>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="bg-light p-3 rounded">
+                                <div><strong>ID:</strong> {{ vmid }}</div>
+                                <div><strong>Name:</strong> {{ config.name or 'Unnamed' }}</div>
+                                <div><strong>Node:</strong> {{ node }}</div>
+                                <div><strong>Memory:</strong> 
+                                    {% if config.memory %}
+                                        {% if config.memory | string | length > 3 %}
+                                            {{ ((config.memory | int) / 1024) | round(1) }} GB
+                                        {% else %}
+                                            {{ config.memory }} MB
+                                        {% endif %}
+                                    {% else %}
+                                        Unknown
+                                    {% endif %}
+                                </div>
+                                <div><strong>CPU:</strong> {{ config.cores or 1 }} cores</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <form id="cloneForm">
+                    <!-- Clone Options -->
+                    <div class="mb-4">
+                        <h6 class="text-primary mb-3"><i class="bi bi-gear"></i> Clone Settings</h6>
+                        
+                        <div class="mb-3">
+                            <label for="clone_name" class="form-label">New VM Name <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="clone_name" name="clone_name" 
+                                   placeholder="Enter name for the cloned VM" required>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="clone_vmid" class="form-label">New VM ID <span class="text-danger">*</span></label>
+                            <input type="number" class="form-control" id="clone_vmid" name="clone_vmid" 
+                                   min="100" max="999999999" placeholder="Auto-generate" required>
+                            <div class="form-text">Leave empty to auto-generate next available ID</div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="target_node" class="form-label">Target Node</label>
+                            <select class="form-select" id="target_node" name="target_node">
+                                {% for available_node in available_nodes %}
+                                <option value="{{ available_node }}" {{ 'selected' if available_node == node else '' }}>
+                                    {{ available_node }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-text">Node where the cloned VM will be created</div>
+                        </div>
+                    </div>
+
+                    <!-- Storage Options -->
+                    <div class="mb-4">
+                        <h6 class="text-primary mb-3"><i class="bi bi-hdd"></i> Storage Configuration</h6>
+                        
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="clone_type" id="clone_full" value="full" checked>
+                            <label class="form-check-label" for="clone_full">
+                                <strong>Full Clone</strong>
+                            </label>
+                            <div class="form-text">Creates a complete independent copy of the VM (recommended)</div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="target_storage" class="form-label">Target Storage</label>
+                            <select class="form-select" id="target_storage" name="target_storage">
+                                <option value="">Same as source (default)</option>
+                                <!-- Storage options will be loaded here -->
+                            </select>
+                            <div class="form-text">Storage where cloned disks will be placed</div>
+                        </div>
+                    </div>
+
+                    <!-- Advanced Options -->
+                    <div class="mb-4">
+                        <h6 class="text-primary mb-3"><i class="bi bi-sliders"></i> Advanced Options</h6>
+                        
+                        <div class="mb-3">
+                            <label for="clone_description" class="form-label">Description</label>
+                            <textarea class="form-control" id="clone_description" name="clone_description" 
+                                      rows="3" placeholder="Optional description for the cloned VM"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                        <button type="button" class="btn btn-secondary" onclick="window.history.back()">
+                            <i class="bi bi-x-circle"></i> Cancel
+                        </button>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-files"></i> Clone VM
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Loading overlay -->
+<div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center" 
+     style="background-color: rgba(0,0,0,0.5); z-index: 9999;">
+    <div class="bg-white rounded p-4 text-center">
+        <div class="spinner-border text-primary mb-2" role="status"></div>
+        <div>Cloning VM...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const node = '{{ node }}';
+const vmid = '{{ vmid }}';
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Load next available VMID
+    loadNextVMID();
+    
+    // Load storages when target node changes
+    document.getElementById('target_node').addEventListener('change', loadTargetStorages);
+    
+    // Load storages for initial node
+    loadTargetStorages();
+    
+    // Form submission
+    document.getElementById('cloneForm').addEventListener('submit', handleCloneSubmit);
+});
+
+async function loadNextVMID() {
+    try {
+        const response = await fetch('/api/cluster/nextid');
+        const data = await response.json();
+        if (data.vmid) {
+            document.getElementById('clone_vmid').value = data.vmid;
+        }
+    } catch (error) {
+        console.error('Error loading next VMID:', error);
+    }
+}
+
+async function loadTargetStorages() {
+    const targetNode = document.getElementById('target_node').value;
+    const storageSelect = document.getElementById('target_storage');
+    
+    // Reset storage options
+    storageSelect.innerHTML = '<option value="">Same as source (default)</option><option value="">Loading storages...</option>';
+    
+    try {
+        const response = await fetch(`/api/node/${targetNode}/storages?vm_type=qemu`);
+        const data = await response.json();
+        
+        // Clear loading option
+        storageSelect.innerHTML = '<option value="">Same as source (default)</option>';
+        
+        if (data.error) {
+            console.error('Error loading storages:', data.error);
+            return;
+        }
+        
+        data.forEach(storage => {
+            const option = document.createElement('option');
+            option.value = storage.storage;
+            let displayText = `${storage.storage} (${storage.type})`;
+            if (storage.available_gb !== undefined) {
+                displayText += ` - ${storage.available_gb} GB free`;
+            }
+            option.textContent = displayText;
+            storageSelect.appendChild(option);
+        });
+        
+    } catch (error) {
+        console.error('Error loading storages:', error);
+        storageSelect.innerHTML = '<option value="">Same as source (default)</option><option value="">Error loading storages</option>';
+    }
+}
+
+async function handleCloneSubmit(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(e.target);
+    const cloneData = {
+        name: formData.get('clone_name'),
+        vmid: formData.get('clone_vmid'),
+        target_node: formData.get('target_node'),
+        target_storage: formData.get('target_storage'),
+        clone_type: formData.get('clone_type'),
+        description: formData.get('clone_description')
+    };
+    
+    // Validation
+    if (!cloneData.name) {
+        showNotification('Please enter a name for the cloned VM', 'warning');
+        return;
+    }
+    
+    if (!cloneData.vmid) {
+        showNotification('Please enter a VM ID', 'warning');
+        return;
+    }
+    
+    // Show loading overlay
+    document.getElementById('loadingOverlay').classList.remove('d-none');
+    document.getElementById('loadingOverlay').classList.add('d-flex');
+    
+    try {
+        const response = await fetch(`/api/vm/${node}/${vmid}/clone`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(cloneData)
+        });
+        
+        const result = await response.json();
+        
+        // Hide loading overlay
+        document.getElementById('loadingOverlay').classList.remove('d-flex');
+        document.getElementById('loadingOverlay').classList.add('d-none');
+        
+        if (result.success) {
+            showNotification(`VM cloned successfully! New VM ID: ${cloneData.vmid}`, 'success');
+            
+            // Redirect to new VM details after 2 seconds
+            setTimeout(() => {
+                window.location.href = `/vm/${cloneData.target_node}/${cloneData.vmid}`;
+            }, 2000);
+        } else {
+            showNotification(result.error || 'Failed to clone VM', 'error');
+        }
+        
+    } catch (error) {
+        // Hide loading overlay
+        document.getElementById('loadingOverlay').classList.remove('d-flex');
+        document.getElementById('loadingOverlay').classList.add('d-none');
+        
+        console.error('Error cloning VM:', error);
+        showNotification('Network error while cloning VM', 'error');
+    }
+}
+
+function showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.className = `alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show position-fixed`;
+    notification.style.top = '20px';
+    notification.style.right = '20px';
+    notification.style.zIndex = '10000';
+    notification.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    document.body.appendChild(notification);
+    
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        if (notification.parentNode) {
+            notification.parentNode.removeChild(notification);
+        }
+    }, 5000);
+}
+</script>
+{% endblock %}
