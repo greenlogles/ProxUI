@@ -138,6 +138,9 @@ async function loadNodes() {
             return;
         }
         
+        // Sort nodes alphabetically by name
+        allNodes.sort((a, b) => a.name.localeCompare(b.name));
+        
         createNodeTabs();
         await loadAllNodeData();
         hideLoading();

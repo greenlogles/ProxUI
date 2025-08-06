@@ -859,11 +859,13 @@ def vm_detail(node, vmid):
             status = proxmox.nodes(node).lxc(vmid).status.current.get()
 
         # Get available nodes for migration (all cluster nodes except current)
-        available_nodes = [
-            n["name"]
-            for n in cluster_nodes
-            if n["name"] != node and n.get("status") == "online"
-        ]
+        available_nodes = sorted(
+            [
+                n["name"]
+                for n in cluster_nodes
+                if n["name"] != node and n.get("status") == "online"
+            ]
+        )
 
         # Get guest agent disk information for QEMU VMs
         guest_disk_info = None
@@ -955,9 +957,9 @@ def vm_clone(node, vmid):
         config = proxmox.nodes(node).qemu(vmid).config.get()
 
         # Get available nodes for cloning
-        available_nodes = [
-            n["name"] for n in cluster_nodes if n.get("status") == "online"
-        ]
+        available_nodes = sorted(
+            [n["name"] for n in cluster_nodes if n.get("status") == "online"]
+        )
 
         return render_template(
             "vm_clone.html",
@@ -1185,7 +1187,7 @@ def create_vm():
             flash(f"Error creating VM: {e}", "error")
 
     # Get all online nodes for the form
-    nodes = [n["name"] for n in cluster_nodes if n.get("status") == "online"]
+    nodes = sorted([n["name"] for n in cluster_nodes if n.get("status") == "online"])
 
     return render_template("create_vm.html", nodes=nodes)
 
@@ -1221,6 +1223,10 @@ def storages():
 
     # Group shared storage by storage name
     grouped_storages = group_shared_storages(all_storages)
+
+    # Sort storages alphabetically by storage name
+    grouped_storages.sort(key=lambda x: x.get("storage", "").lower())
+
     return render_template("storages.html", storages=grouped_storages)
 
 
@@ -1404,6 +1410,8 @@ def api_nodes():
         nodes.append(
             {"name": node_info["name"], "status": node_info.get("status", "unknown")}
         )
+    # Sort nodes alphabetically by name
+    nodes.sort(key=lambda x: x["name"])
     return jsonify(nodes)
 
 
