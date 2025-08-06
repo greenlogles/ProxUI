@@ -82,7 +82,8 @@ document.addEventListener('DOMContentLoaded', function() {
             filteredTasks = allTasks.filter(task => {
                 const status = task.status?.toLowerCase() || '';
                 if (filter === 'running') {
-                    return status.includes('running');
+                    // Task is running if it has no end time or explicitly marked as running
+                    return status.includes('running') || !task.endtime;
                 } else if (filter === 'ok') {
                     return status.includes('ok') || status === 'stopped';
                 } else if (filter === 'error') {
@@ -157,7 +158,7 @@ document.addEventListener('DOMContentLoaded', function() {
         tasks.forEach(task => {
             const taskId = task.id || '';
             const taskType = task.type || 'unknown';
-            const taskStatus = task.status || 'unknown';
+            const taskStatus = task.status || (!task.endtime ? 'running' : 'unknown');
             const startTime = task.start_time_formatted || 'Unknown';
             const endTime = task.end_time_formatted;
             const statusClass = task.status_class || 'secondary';

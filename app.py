@@ -1798,90 +1798,92 @@ def api_vm_tasks(node, vmid):
 
 @app.route("/api/tasks")
 def api_cluster_tasks():
-    """API endpoint to get all recent tasks from the cluster"""
-    all_tasks = []
-    processed_tasks = set()  # Track processed tasks to avoid duplicates
+    """API endpoint to get all recent tasks from the cluster using /cluster/tasks endpoint"""
+    if not proxmox_nodes:
+        return jsonify({"error": "No Proxmox connections available"}), 500
 
-    # Collect tasks from all cluster nodes
-    for node_info in cluster_nodes:
-        try:
-            node_name = node_info["name"]
-            proxmox = node_info["connection"]
+    try:
+        # Get any working connection to access cluster endpoint
+        proxmox = next(iter(proxmox_nodes.values()))
 
-            # Get tasks from this node
-            node_tasks = proxmox.nodes(node_name).tasks.get()
+        # Get limit from query parameter, default to 50
+        limit = request.args.get("limit", 50, type=int)
 
-            for task in node_tasks:
-                # Create unique task identifier
-                task_key = f"{node_name}-{task.get('upid', task.get('id', ''))}"
+        # Use Proxmox cluster tasks endpoint which includes all tasks (including running ones)
+        cluster_tasks = proxmox.cluster.tasks.get()
 
-                if task_key not in processed_tasks:
-                    processed_tasks.add(task_key)
+        processed_tasks = []
+        for task in cluster_tasks[:limit]:
+            # Add human-readable timestamps
+            if task.get("starttime"):
+                task["start_time_formatted"] = datetime.fromtimestamp(
+                    task["starttime"]
+                ).strftime("%Y-%m-%d %H:%M:%S")
+            if task.get("endtime"):
+                task["end_time_formatted"] = datetime.fromtimestamp(
+                    task["endtime"]
+                ).strftime("%Y-%m-%d %H:%M:%S")
 
-                    # Add node information
-                    task["node"] = node_name
+            # Add status badge class for UI
+            status = task.get("status", "running").lower()
+            has_endtime = task.get("endtime") is not None
 
-                    # Add human-readable timestamps
-                    if task.get("starttime"):
-                        task["start_time_formatted"] = datetime.fromtimestamp(
-                            task["starttime"]
-                        ).strftime("%Y-%m-%d %H:%M:%S")
-                    if task.get("endtime"):
-                        task["end_time_formatted"] = datetime.fromtimestamp(
-                            task["endtime"]
-                        ).strftime("%Y-%m-%d %H:%M:%S")
+            if "ok" in status or status == "stopped":
+                task["status_class"] = "success"
+            elif "error" in status or "failed" in status:
+                task["status_class"] = "danger"
+            elif "running" in status or not has_endtime:
+                # Task is explicitly running or has no end time (still in progress)
+                task["status_class"] = "primary"
+            else:
+                task["status_class"] = "secondary"
 
-                    # Add status badge class for UI
-                    status = task.get("status", "").lower()
-                    if "ok" in status or status == "stopped":
-                        task["status_class"] = "success"
-                    elif "error" in status or "failed" in status:
-                        task["status_class"] = "danger"
-                    elif "running" in status:
-                        task["status_class"] = "primary"
-                    else:
-                        task["status_class"] = "secondary"
+            # Extract VMID from task UPID if possible
+            upid = task.get("upid", "")
+            task_type = task.get("type", "")
 
-                    # Extract VMID from task if possible
-                    task_id = task.get("id", "")
-                    task_type = task.get("type", "")
-                    if task_type in [
-                        "qmstart",
-                        "qmstop",
-                        "qmshutdown",
-                        "qmreset",
-                        "qmigrate",
-                        "qmclone",
-                        "qmcreate",
-                        "qmdestroy",
-                        "vzstart",
-                        "vzstop",
-                        "vzshutdown",
-                        "vzmigrate",
-                        "vzclone",
-                        "vzcreate",
-                        "vzdestroy",
-                    ]:
-                        # Try to extract VMID from task ID
-                        import re
+            # Parse UPID format: UPID:node:pid:starttime:type:id:user@realm:status
+            if upid and task_type in [
+                "qmstart",
+                "qmstop",
+                "qmshutdown",
+                "qmreset",
+                "qmreboot",
+                "qmigrate",
+                "qmclone",
+                "qmcreate",
+                "qmdestroy",
+                "qmtemplate",
+                "qmdisk",
+                "vzstart",
+                "vzstop",
+                "vzshutdown",
+                "vzmigrate",
+                "vzclone",
+                "vzcreate",
+                "vzdestroy",
+                "vzdump",
+            ]:
+                try:
+                    upid_parts = upid.split(":")
+                    if len(upid_parts) >= 6:
+                        # The 6th part (index 5) should be the VMID for VM/CT operations
+                        potential_vmid = upid_parts[5]
+                        if potential_vmid.isdigit():
+                            task["vmid"] = potential_vmid
+                except:
+                    pass  # Ignore parsing errors
 
-                        vmid_match = re.search(r":(\d+):", task_id)
-                        if vmid_match:
-                            task["vmid"] = vmid_match.group(1)
+            processed_tasks.append(task)
 
-                    all_tasks.append(task)
+        # Sort by start time (most recent first)
+        processed_tasks.sort(key=lambda x: x.get("starttime", 0), reverse=True)
 
-        except Exception as e:
-            print(f"Error getting tasks from node {node_info['name']}: {e}")
+        return jsonify(processed_tasks)
 
-    # Sort by start time (most recent first)
-    all_tasks.sort(key=lambda x: x.get("starttime", 0), reverse=True)
-
-    # Get limit from query parameter, default to 50
-    limit = request.args.get("limit", 50, type=int)
-    all_tasks = all_tasks[:limit]
-
-    return jsonify(all_tasks)
+    except Exception as e:
+        print(f"Error getting cluster tasks: {e}")
+        return jsonify({"error": f"Failed to retrieve tasks: {str(e)}"}), 500
 
 
 @app.route("/api/vm/<node>/<vmid>/metrics")

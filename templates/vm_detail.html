@@ -578,18 +578,30 @@ document.addEventListener('DOMContentLoaded', function() {
                 'qmstop': 'Stop VM', 
                 'qmshutdown': 'Shutdown VM',
                 'qmreset': 'Reset VM',
-                'qmmigrate': 'Migrate VM',
+                'qmreboot': 'Reboot VM',
+                'qmigrate': 'Migrate VM',
                 'qmclone': 'Clone VM',
                 'qmcreate': 'Create VM',
                 'qmdestroy': 'Destroy VM',
+                'qmtemplate': 'Create VM template',
                 'vzstart': 'Start Container',
                 'vzstop': 'Stop Container',
                 'vzshutdown': 'Shutdown Container',
                 'vzmigrate': 'Migrate Container',
                 'vzclone': 'Clone Container',
                 'vzcreate': 'Create Container',
-                'vzdestroy': 'Destroy Container'
-            };
+                'vzdestroy': 'Destroy Container',
+                'vzdump': 'Backup Container',
+                'download': 'Download ISO',
+                'aptupdate': 'Update package database',
+                'startall': 'Bulk start VMs and Containers',
+                'stopall': 'Bulk stop VMs and Containers',
+                'srvreload': 'SRV networking - reload',
+                'vncproxy': 'VNC Console',
+                'clusterjoin': 'Add node to cluster',
+                'resize': 'Disk resize'
+        };
+        
             
             const displayName = taskTypeNames[taskType] || taskType.toUpperCase();
             
