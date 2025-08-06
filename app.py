@@ -1314,6 +1314,12 @@ def networks():
     return render_template("networks.html", networks=all_networks)
 
 
+@app.route("/isos-templates")
+def isos_templates():
+    """Show ISOs and Templates management page"""
+    return render_template("isos_templates.html")
+
+
 @app.route("/cluster")
 def cluster():
     """Show cluster information"""
@@ -1464,7 +1470,10 @@ def api_node_templates(node):
         try:
             storages = proxmox.nodes(node).storage.get()
             for storage in storages:
-                if "vztmpl" in storage.get("content", "").split(","):
+                if (
+                    "vztmpl" in storage.get("content", "").split(",")
+                    and storage.get("enabled", 0) == 1
+                ):
                     # Get templates in this storage
                     try:
                         templates = (

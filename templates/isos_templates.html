@@ -1,0 +1,338 @@
+{% extends "base.html" %}
+
+{% block title %}ISOs & Templates - Proxmox Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1><i class="bi bi-disc"></i> ISOs & Templates</h1>
+        <p class="text-muted">Manage ISO images, VM templates, and container templates across all cluster nodes.</p>
+    </div>
+</div>
+
+<!-- Node Tabs -->
+<ul class="nav nav-tabs mb-4" id="nodeTab" role="tablist">
+    <!-- Node tabs will be populated here -->
+</ul>
+
+<div class="tab-content" id="nodeTabContent">
+    <!-- Node content will be populated here -->
+</div>
+
+<!-- Loading overlay -->
+<div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center" 
+     style="background-color: rgba(0,0,0,0.5); z-index: 9999;">
+    <div class="bg-white rounded p-4 text-center">
+        <div class="spinner-border text-primary mb-2" role="status"></div>
+        <div>Loading data...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allNodes = [];
+let currentData = {};
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadNodes();
+});
+
+function showLoading() {
+    document.getElementById('loadingOverlay').classList.remove('d-none');
+    document.getElementById('loadingOverlay').classList.add('d-flex');
+}
+
+function hideLoading() {
+    document.getElementById('loadingOverlay').classList.remove('d-flex');
+    document.getElementById('loadingOverlay').classList.add('d-none');
+}
+
+function showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.className = `alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show position-fixed`;
+    notification.style.top = '20px';
+    notification.style.right = '20px';
+    notification.style.zIndex = '10000';
+    notification.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    document.body.appendChild(notification);
+    
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        if (notification.parentNode) {
+            notification.parentNode.removeChild(notification);
+        }
+    }, 5000);
+}
+
+async function loadNodes() {
+    try {
+        showLoading();
+        const response = await fetch('/api/nodes');
+        const nodes = await response.json();
+        
+        if (!Array.isArray(nodes) || nodes.length === 0) {
+            document.getElementById('nodeTabContent').innerHTML = 
+                '<div class="alert alert-warning">No nodes available</div>';
+            hideLoading();
+            return;
+        }
+        
+        allNodes = nodes.filter(node => node.status === 'online');
+        
+        if (allNodes.length === 0) {
+            document.getElementById('nodeTabContent').innerHTML = 
+                '<div class="alert alert-warning">No online nodes available</div>';
+            hideLoading();
+            return;
+        }
+        
+        createNodeTabs();
+        await loadAllNodeData();
+        hideLoading();
+        
+    } catch (error) {
+        console.error('Error loading nodes:', error);
+        showNotification('Error loading nodes: ' + error.message, 'error');
+        hideLoading();
+    }
+}
+
+function createNodeTabs() {
+    const tabContainer = document.getElementById('nodeTab');
+    const contentContainer = document.getElementById('nodeTabContent');
+    
+    // Clear existing content
+    tabContainer.innerHTML = '';
+    contentContainer.innerHTML = '';
+    
+    allNodes.forEach((node, index) => {
+        // Create tab
+        const tabId = `node-tab-${node.name}`;
+        const contentId = `node-content-${node.name}`;
+        const isActive = index === 0;
+        
+        const tabItem = document.createElement('li');
+        tabItem.className = 'nav-item';
+        tabItem.innerHTML = `
+            <button class="nav-link ${isActive ? 'active' : ''}" 
+                    id="${tabId}" 
+                    data-bs-toggle="tab" 
+                    data-bs-target="#${contentId}" 
+                    type="button" 
+                    role="tab">
+                <i class="bi bi-server"></i> ${node.name}
+            </button>
+        `;
+        tabContainer.appendChild(tabItem);
+        
+        // Create content
+        const contentItem = document.createElement('div');
+        contentItem.className = `tab-pane fade ${isActive ? 'show active' : ''}`;
+        contentItem.id = contentId;
+        contentItem.innerHTML = `
+            <div class="row">
+                <!-- ISO Images -->
+                <div class="col-12 mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-disc"></i> ISO Images</h5>
+                        </div>
+                        <div class="card-body">
+                            <div id="iso-content-${node.name}">
+                                <div class="text-center">
+                                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                                    Loading ISO images...
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- VM Templates -->
+                <div class="col-12 mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-pc-display"></i> VM Templates</h5>
+                        </div>
+                        <div class="card-body">
+                            <div id="vm-templates-${node.name}">
+                                <div class="text-center">
+                                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                                    Loading VM templates...
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Container Templates -->
+                <div class="col-12 mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-box"></i> Container Templates</h5>
+                        </div>
+                        <div class="card-body">
+                            <div id="lxc-templates-${node.name}">
+                                <div class="text-center">
+                                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                                    Loading container templates...
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        contentContainer.appendChild(contentItem);
+    });
+}
+
+async function loadAllNodeData() {
+    const promises = allNodes.map(node => loadNodeData(node.name));
+    await Promise.all(promises);
+}
+
+async function loadNodeData(nodeName) {
+    try {
+        // Load ISO images
+        await loadISOImages(nodeName);
+        
+        // Load VM and LXC templates
+        await loadTemplates(nodeName);
+        
+    } catch (error) {
+        console.error(`Error loading data for node ${nodeName}:`, error);
+        showNotification(`Error loading data for node ${nodeName}: ${error.message}`, 'error');
+    }
+}
+
+async function loadISOImages(nodeName) {
+    try {
+        const response = await fetch(`/api/node/${nodeName}/iso-images`);
+        const data = await response.json();
+        
+        const container = document.getElementById(`iso-content-${nodeName}`);
+        
+        if (data.error) {
+            container.innerHTML = `<div class="alert alert-danger">Error: ${data.error}</div>`;
+            return;
+        }
+        
+        if (!Array.isArray(data) || data.length === 0) {
+            container.innerHTML = '<div class="text-muted">No ISO images found</div>';
+            return;
+        }
+        
+        let html = '<div class="table-responsive"><table class="table table-sm">';
+        html += '<thead><tr><th>Name</th><th>Storage</th><th>Size</th><th>Format</th></tr></thead><tbody>';
+        
+        data.forEach(iso => {
+            const parts = iso.volid.split('/');
+            const storage = parts[0];
+            const filename = parts[1];
+            const sizeGB = iso.size ? (iso.size / (1024 * 1024 * 1024)).toFixed(2) : 'Unknown';
+            
+            html += `
+                <tr>
+                    <td><strong>${filename}</strong></td>
+                    <td><span class="badge bg-secondary">${storage}</span></td>
+                    <td>${sizeGB} GB</td>
+                    <td>${iso.format || 'iso'}</td>
+                </tr>
+            `;
+        });
+        
+        html += '</tbody></table></div>';
+        container.innerHTML = html;
+        
+    } catch (error) {
+        const container = document.getElementById(`iso-content-${nodeName}`);
+        container.innerHTML = `<div class="alert alert-danger">Error loading ISO images: ${error.message}</div>`;
+    }
+}
+
+async function loadTemplates(nodeName) {
+    try {
+        const response = await fetch(`/api/node/${nodeName}/templates`);
+        const data = await response.json();
+        
+        if (data.error) {
+            document.getElementById(`vm-templates-${nodeName}`).innerHTML = 
+                `<div class="alert alert-danger">Error: ${data.error}</div>`;
+            document.getElementById(`lxc-templates-${nodeName}`).innerHTML = 
+                `<div class="alert alert-danger">Error: ${data.error}</div>`;
+            return;
+        }
+        
+        // Load VM templates
+        const vmContainer = document.getElementById(`vm-templates-${nodeName}`);
+        if (!Array.isArray(data.qemu) || data.qemu.length === 0) {
+            vmContainer.innerHTML = '<div class="text-muted">No VM templates found</div>';
+        } else {
+            let html = '<div class="table-responsive"><table class="table table-sm">';
+            html += '<thead><tr><th>ID</th><th>Name</th><th>Memory</th><th>CPU</th><th>Status</th></tr></thead><tbody>';
+            
+            data.qemu.forEach(vm => {
+                const memoryGB = vm.maxmem ? (vm.maxmem / (1024 * 1024 * 1024)).toFixed(1) : 'Unknown';
+                const cpuInfo = vm.cpus ? `${vm.cpus} cores` : 'Unknown';
+                
+                html += `
+                    <tr>
+                        <td><strong>${vm.vmid}</strong></td>
+                        <td>${vm.name || 'Unnamed'}</td>
+                        <td>${memoryGB} GB</td>
+                        <td>${cpuInfo}</td>
+                        <td><span class="badge bg-info">Template</span></td>
+                    </tr>
+                `;
+            });
+            
+            html += '</tbody></table></div>';
+            vmContainer.innerHTML = html;
+        }
+        
+        // Load LXC templates
+        const lxcContainer = document.getElementById(`lxc-templates-${nodeName}`);
+        if (!Array.isArray(data.lxc) || data.lxc.length === 0) {
+            lxcContainer.innerHTML = '<div class="text-muted">No container templates found</div>';
+        } else {
+            let html = '<div class="table-responsive"><table class="table table-sm">';
+            html += '<thead><tr><th>Template</th><th>Storage</th><th>Size</th><th>Description</th></tr></thead><tbody>';
+            
+            data.lxc.forEach(template => {
+                const parts = template.volid.split('/');
+                const storage = parts[0];
+                const filename = parts[1];
+                const sizeGB = template.size ? (template.size / (1024 * 1024 * 1024)).toFixed(2) : 'Unknown';
+                
+                // Extract OS info from filename
+                const osInfo = filename.replace('.tar.xz', '').replace('.tar.gz', '');
+                
+                html += `
+                    <tr>
+                        <td><strong>${osInfo}</strong></td>
+                        <td><span class="badge bg-secondary">${storage}</span></td>
+                        <td>${sizeGB} GB</td>
+                        <td><small class="text-muted">${filename}</small></td>
+                    </tr>
+                `;
+            });
+            
+            html += '</tbody></table></div>';
+            lxcContainer.innerHTML = html;
+        }
+        
+    } catch (error) {
+        document.getElementById(`vm-templates-${nodeName}`).innerHTML = 
+            `<div class="alert alert-danger">Error loading VM templates: ${error.message}</div>`;
+        document.getElementById(`lxc-templates-${nodeName}`).innerHTML = 
+            `<div class="alert alert-danger">Error loading LXC templates: ${error.message}</div>`;
+    }
+}
+</script>
+{% endblock %}
