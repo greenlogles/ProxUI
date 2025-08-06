@@ -17,6 +17,9 @@
                 <a href="{{ url_for('vm_edit', node=node, vmid=vmid) }}" class="btn btn-outline-primary">
                     <i class="bi bi-gear"></i> Edit Configuration
                 </a>
+                <button type="button" class="btn btn-outline-danger ms-2" data-bs-toggle="modal" data-bs-target="#deleteModal">
+                    <i class="bi bi-trash"></i> Delete VM
+                </button>
             </div>
         </div>
     </div>
@@ -473,10 +476,60 @@
         </div>
     </div>
 </div>
+
+<!-- Delete VM Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title text-danger">
+                    <i class="bi bi-exclamation-triangle"></i> Delete VM {{ vmid }}
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <strong>Warning:</strong> This action cannot be undone!
+                </div>
+                
+                <p>Are you sure you want to delete VM <strong>{{ config.name or vmid }}</strong>?</p>
+                
+                <p class="text-muted">This will permanently remove:</p>
+                <ul class="text-muted">
+                    <li>VM configuration</li>
+                    <li>All VM disks and data</li>
+                    <li>All snapshots (if any)</li>
+                </ul>
+                
+                <div id="deleteStatus" class="mt-3"></div>
+                
+                {% if status.status != 'stopped' %}
+                <div class="alert alert-warning">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    VM must be stopped before deletion. Current status: <strong>{{ status.status }}</strong>
+                </div>
+                {% endif %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmDeleteBtn" onclick="deleteVM()" 
+                        {{ 'disabled' if status.status != 'stopped' else '' }}>
+                    <i class="bi bi-trash"></i> Delete VM
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+// VM/Container details - declared globally for access in all functions
+const node = '{{ node }}';
+const vmid = '{{ vmid }}';
+const vmType = '{{ vm_type }}';
+
 document.addEventListener('DOMContentLoaded', function() {
     const targetNodeSelect = document.getElementById('target_node');
     const targetStorageSelect = document.getElementById('target_storage');
@@ -485,11 +538,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const refreshMetricsBtn = document.getElementById('refreshMetrics');
     const metricsLastUpdate = document.getElementById('metricsLastUpdate');
     const timeframeSelect = document.getElementById('timeframeSelect');
-    
-    // VM/Container details
-    const node = '{{ node }}';
-    const vmid = '{{ vmid }}';
-    const vmType = '{{ vm_type }}';
     
     // Check if migration form is disabled
     const migrationDisabled = {{ 'true' if migration_info else 'false' }};
@@ -901,5 +949,46 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+
+// VM Deletion functionality
+function deleteVM() {
+    const deleteBtn = document.getElementById('confirmDeleteBtn');
+    const deleteStatus = document.getElementById('deleteStatus');
+    
+    // Disable button and show loading
+    deleteBtn.disabled = true;
+    deleteBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Deleting...';
+    
+    deleteStatus.innerHTML = '<div class="alert alert-info"><i class="bi bi-info-circle"></i> Deleting VM...</div>';
+    
+    fetch(`/api/vm/${node}/${vmid}/delete`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({})
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            deleteStatus.innerHTML = '<div class="alert alert-success"><i class="bi bi-check-circle"></i> ' + data.message + '</div>';
+            
+            // Redirect to VMs list after 2 seconds
+            setTimeout(() => {
+                window.location.href = '/vms';
+            }, 2000);
+        } else {
+            deleteStatus.innerHTML = '<div class="alert alert-danger"><i class="bi bi-exclamation-triangle"></i> ' + data.error + '</div>';
+            deleteBtn.disabled = false;
+            deleteBtn.innerHTML = '<i class="bi bi-trash"></i> Delete VM';
+        }
+    })
+    .catch(error => {
+        console.error('Error deleting VM:', error);
+        deleteStatus.innerHTML = '<div class="alert alert-danger"><i class="bi bi-exclamation-triangle"></i> Network error while deleting VM</div>';
+        deleteBtn.disabled = false;
+        deleteBtn.innerHTML = '<i class="bi bi-trash"></i> Delete VM';
+    });
+}
 </script>
 {% endblock %}

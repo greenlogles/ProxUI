@@ -2209,6 +2209,58 @@ def api_vm_clone(node, vmid):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/vm/<node>/<vmid>/delete", methods=["POST"])
+def api_vm_delete(node, vmid):
+    """API endpoint to delete a VM"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        # Get VM status first
+        vm_status = proxmox.nodes(node).qemu(vmid).status.current.get()
+
+        # Check if VM is stopped
+        if vm_status.get("status") != "stopped":
+            return (
+                jsonify(
+                    {
+                        "error": f"VM must be stopped before deletion. Current status: {vm_status.get('status')}"
+                    }
+                ),
+                400,
+            )
+
+        # Get VM config for name
+        try:
+            vm_config = proxmox.nodes(node).qemu(vmid).config.get()
+            vm_name = vm_config.get("name", vmid)
+        except:
+            vm_name = vmid
+
+        # Delete the VM (this will remove disks by default)
+        result = proxmox.nodes(node).qemu(vmid).delete(purge=1)
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"VM {vm_name} (ID: {vmid}) has been deleted successfully",
+                "task": result,
+            }
+        )
+
+    except Exception as e:
+        error_msg = str(e)
+
+        # Check for common error patterns
+        if "does not exist" in error_msg.lower():
+            return jsonify({"error": f"VM {vmid} does not exist"}), 404
+        elif "not stopped" in error_msg.lower() or "running" in error_msg.lower():
+            return jsonify({"error": "VM must be stopped before deletion"}), 400
+        else:
+            return jsonify({"error": f"Failed to delete VM: {error_msg}"}), 500
+
+
 @app.errorhandler(404)
 def not_found(error):
     return render_template("404.html"), 404
