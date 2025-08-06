@@ -19,6 +19,53 @@
     <!-- Node content will be populated here -->
 </div>
 
+<!-- Download ISO Modal -->
+<div class="modal fade" id="downloadModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-download"></i> Download ISO from URL</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="downloadForm">
+                    <div class="mb-3">
+                        <label for="downloadUrl" class="form-label">ISO URL <span class="text-danger">*</span></label>
+                        <input type="url" class="form-control" id="downloadUrl" placeholder="https://example.com/image.iso" required>
+                        <div class="form-text">Enter the direct URL to download the ISO image</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="downloadFilename" class="form-label">Filename</label>
+                        <input type="text" class="form-control" id="downloadFilename" placeholder="Auto-detect from URL">
+                        <div class="form-text">Leave empty to auto-detect from URL</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="downloadStorage" class="form-label">Storage <span class="text-danger">*</span></label>
+                        <select class="form-select" id="downloadStorage" required>
+                            <option value="">Loading storages...</option>
+                        </select>
+                        <div class="form-text">Select storage that supports ISO content</div>
+                    </div>
+                    
+                    <div id="downloadProgress" class="d-none">
+                        <div class="alert alert-info">
+                            <i class="bi bi-download"></i> Download started. Check the Tasks page for progress.
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="startDownloadBtn" onclick="startDownload()">
+                    <i class="bi bi-download"></i> Start Download
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Loading overlay -->
 <div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center" 
      style="background-color: rgba(0,0,0,0.5); z-index: 9999;">
@@ -139,8 +186,11 @@ function createNodeTabs() {
                 <!-- ISO Images -->
                 <div class="col-12 mb-4">
                     <div class="card">
-                        <div class="card-header">
+                        <div class="card-header d-flex justify-content-between align-items-center">
                             <h5 class="mb-0"><i class="bi bi-disc"></i> ISO Images</h5>
+                            <button class="btn btn-success btn-sm" onclick="showDownloadModal('${node.name}')">
+                                <i class="bi bi-download"></i> Download from URL
+                            </button>
                         </div>
                         <div class="card-body">
                             <div id="iso-content-${node.name}">
@@ -333,6 +383,176 @@ async function loadTemplates(nodeName) {
         document.getElementById(`lxc-templates-${nodeName}`).innerHTML = 
             `<div class="alert alert-danger">Error loading LXC templates: ${error.message}</div>`;
     }
+}
+
+let currentDownloadNode = '';
+
+async function showDownloadModal(nodeName) {
+    currentDownloadNode = nodeName;
+    
+    // Reset form
+    document.getElementById('downloadForm').reset();
+    document.getElementById('downloadProgress').classList.add('d-none');
+    document.getElementById('startDownloadBtn').disabled = false;
+    
+    // Load available storages
+    try {
+        const response = await fetch(`/api/node/${nodeName}/iso-storages`);
+        const storages = await response.json();
+        
+        const storageSelect = document.getElementById('downloadStorage');
+        storageSelect.innerHTML = '<option value="">Select storage...</option>';
+        
+        if (storages.error) {
+            storageSelect.innerHTML = '<option value="">Error loading storages</option>';
+            showNotification('Error loading storages: ' + storages.error, 'error');
+            return;
+        }
+        
+        if (!Array.isArray(storages) || storages.length === 0) {
+            storageSelect.innerHTML = '<option value="">No ISO-compatible storages found</option>';
+            showNotification('No storages that support ISO content found on this node', 'warning');
+            return;
+        }
+        
+        storages.forEach(storage => {
+            const option = document.createElement('option');
+            option.value = storage.storage;
+            option.textContent = `${storage.storage} (${storage.type}) - ${storage.available_gb} GB free`;
+            storageSelect.appendChild(option);
+        });
+        
+        // Show modal
+        const modal = new bootstrap.Modal(document.getElementById('downloadModal'));
+        modal.show();
+        
+    } catch (error) {
+        showNotification('Error loading storages: ' + error.message, 'error');
+    }
+}
+
+async function startDownload() {
+    const url = document.getElementById('downloadUrl').value;
+    const filename = document.getElementById('downloadFilename').value;
+    const storage = document.getElementById('downloadStorage').value;
+    
+    if (!url) {
+        showNotification('Please enter a URL', 'warning');
+        return;
+    }
+    
+    if (!storage) {
+        showNotification('Please select a storage', 'warning');
+        return;
+    }
+    
+    try {
+        // Disable the button and show progress
+        const startBtn = document.getElementById('startDownloadBtn');
+        startBtn.disabled = true;
+        startBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Starting...';
+        
+        const response = await fetch(`/api/node/${currentDownloadNode}/download-iso`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                url: url,
+                storage: storage,
+                filename: filename
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            // Show progress message
+            document.getElementById('downloadProgress').classList.remove('d-none');
+            showNotification(result.message, 'success');
+            
+            // Refresh ISO list after a short delay
+            setTimeout(() => {
+                loadISOImages(currentDownloadNode);
+            }, 2000);
+            
+            // Close modal after 3 seconds
+            setTimeout(() => {
+                const modal = bootstrap.Modal.getInstance(document.getElementById('downloadModal'));
+                if (modal) {
+                    modal.hide();
+                }
+            }, 3000);
+            
+        } else {
+            // Check if it's a manual download case
+            if (response.status === 501 && result.manual_instructions) {
+                // Show manual instructions
+                const instructionsHtml = `
+                    <div class="alert alert-warning">
+                        <h6><i class="bi bi-exclamation-triangle"></i> Manual Download Required</h6>
+                        <p>${result.error}</p>
+                        <hr>
+                        <div class="d-flex gap-2 mt-2">
+                            <button type="button" class="btn btn-sm btn-secondary" onclick="copyToClipboard('${url}')">
+                                <i class="bi bi-clipboard"></i> Copy URL
+                            </button>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('downloadProgress').innerHTML = instructionsHtml;
+                document.getElementById('downloadProgress').classList.remove('d-none');
+                showNotification('Manual download required', 'warning');
+            } else {
+                showNotification(result.error || 'Download failed', 'error');
+            }
+            
+            startBtn.disabled = false;
+            startBtn.innerHTML = '<i class="bi bi-download"></i> Start Download';
+        }
+        
+    } catch (error) {
+        showNotification('Network error: ' + error.message, 'error');
+        const startBtn = document.getElementById('startDownloadBtn');
+        startBtn.disabled = false;
+        startBtn.innerHTML = '<i class="bi bi-download"></i> Start Download';
+    }
+}
+
+// Auto-fill filename when URL changes
+document.addEventListener('DOMContentLoaded', function() {
+    const urlInput = document.getElementById('downloadUrl');
+    const filenameInput = document.getElementById('downloadFilename');
+    
+    if (urlInput && filenameInput) {
+        urlInput.addEventListener('input', function() {
+            if (this.value && !filenameInput.value) {
+                const filename = this.value.split('/').pop();
+                if (filename && filename.includes('.')) {
+                    filenameInput.value = filename;
+                }
+            }
+        });
+    }
+});
+
+// Copy to clipboard helper function
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(function() {
+        showNotification('URL copied to clipboard!', 'success');
+    }, function(err) {
+        // Fallback for older browsers
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            showNotification('URL copied to clipboard!', 'success');
+        } catch (err) {
+            showNotification('Failed to copy URL', 'error');
+        }
+        document.body.removeChild(textArea);
+    });
 }
 </script>
 {% endblock %}

@@ -1531,6 +1531,117 @@ def api_node_iso_images(node):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/node/<node>/iso-storages")
+def api_node_iso_storages(node):
+    """API endpoint to get storage pools that support ISO content for a specific node"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        storages = proxmox.nodes(node).storage.get()
+        iso_storages = []
+
+        for storage in storages:
+            if storage.get("enabled", 0) == 1 and "iso" in storage.get(
+                "content", ""
+            ).split(","):
+                # Calculate available space
+                if storage.get("total") and storage.get("total") > 0:
+                    storage["available_bytes"] = storage.get("total", 0) - storage.get(
+                        "used", 0
+                    )
+                    storage["available_gb"] = round(
+                        storage["available_bytes"] / (1024**3), 2
+                    )
+                    storage["used_percent"] = (
+                        storage.get("used", 0) / storage["total"]
+                    ) * 100
+                else:
+                    storage["available_bytes"] = 0
+                    storage["available_gb"] = 0
+                    storage["used_percent"] = 0
+
+                iso_storages.append(storage)
+
+        # Sort by available space (descending - most space first)
+        iso_storages.sort(key=lambda x: x["available_bytes"], reverse=True)
+        return jsonify(iso_storages)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/node/<node>/download-iso", methods=["POST"])
+def api_node_download_iso(node):
+    """API endpoint to download ISO from URL to a specific node storage"""
+    proxmox = get_proxmox_for_node(node)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        data = request.get_json()
+        if not data or "url" not in data or "storage" not in data:
+            return jsonify({"error": "Missing URL or storage parameter"}), 400
+
+        url = data["url"]
+        storage = data["storage"]
+        filename = data.get("filename", "")
+
+        # If no filename provided, extract from URL
+        if not filename:
+            filename = url.split("/")[-1]
+            if not filename.endswith(".iso"):
+                filename += ".iso"
+
+        # Validate filename
+        if not filename.endswith(".iso"):
+            return jsonify({"error": "Filename must end with .iso"}), 400
+
+        # Check Proxmox version and try appropriate download method
+        try:
+            # Get Proxmox version to determine API capabilities
+            version_info = proxmox.version.get()
+
+            # Try the newer download-url endpoint (PVE 7.0+)
+            try:
+                result = (
+                    proxmox.nodes(node)
+                    .storage(storage)("download-url")
+                    .post(content="iso", filename=filename, url=url)
+                )
+            except Exception as download_error:
+                # If download-url doesn't work, provide fallback message
+                if "not implemented" in str(download_error).lower() or "501" in str(
+                    download_error
+                ):
+                    return (
+                        jsonify(
+                            {
+                                "error": "Direct URL download is not supported on this Proxmox version. Please download the ISO manually and upload it to the storage.",
+                            }
+                        ),
+                        501,
+                    )
+                else:
+                    # Other error, re-raise
+                    raise download_error
+
+        except Exception as e:
+            # Handle any other errors
+            return jsonify({"error": f"Failed to start download: {str(e)}"}), 500
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Download started for {filename}",
+                "task": result,
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/node/<node>/networks")
 def api_node_networks(node):
     """API endpoint to get network interfaces for a specific node"""
