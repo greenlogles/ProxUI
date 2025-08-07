@@ -16,7 +16,9 @@ LABEL org.label-schema.vcs-url="https://github.com/greenlogles/proxui"
 LABEL org.opencontainers.image.source="https://github.com/greenlogles/proxui"
 
 # Copy application files
-COPY ./ /app/
+COPY ./static/ /app/static/
+COPY ./templates/ /app/templates/
+COPY ./app.py /app/
 
 # Create non-root user for security
 RUN useradd -r -u 1000 -m -d /app -s /bin/bash proxui && \

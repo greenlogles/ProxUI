@@ -12,3 +12,4 @@ README.md
 *.md
 
 venv/
+data/

@@ -32,13 +32,35 @@ ProxUI isn't a replacement for Proxmox web interface, but a light-weight additio
 ### User Experience
 - Focus on desktop and mobile devices
 
+## Screenshots
+
+### Desktop
+<div style="display: flex; gap: 10px;">
+  <img src="misc/screenshots/main.png" alt="Main Dashboard" width="400">
+  <img src="misc/screenshots/vms.png" alt="Virtual Machines List" width="400">
+  <img src="misc/screenshots/vmdetails.png" alt="VM Details" width="400">
+  <img src="misc/screenshots/storage.png" alt="Storage Overview" width="400">
+  <img src="misc/screenshots/isos_templates.png" alt="ISOs and Templates" width="400">
+  <img src="misc/screenshots/clusterinfo.png" alt="Cluster view" width="400">
+  <img src="misc/screenshots/clustermanage.png" alt="Manage hosts and clusters" width="400">
+  <img src="misc/screenshots/tasks.png" alt="Tasks" width="400">
+</div>
+
+### Mobile
+<div style="display: flex; gap: 10px;">
+  <img src="misc/screenshots/mobile_1.png" alt="Mobile View 1" width="200">
+  <img src="misc/screenshots/mobile_2.png" alt="Mobile View 2" width="200">
+  <img src="misc/screenshots/mobile_3.png" alt="Mobile View 3" width="200">
+  <img src="misc/screenshots/mobile_4.png" alt="Mobile View 4" width="200">
+</div>
+
 ## Quick Start
 
 ### Using Docker Compose (Recommended)
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/greenlogles/proxui
 cd proxui
 ```
 
@@ -102,7 +124,7 @@ The application is designed for Docker deployment with persistent volume mountin
 version: '3.8'
 services:
   proxui:
-    image: git.lagoland.xyz/greenlogles/proxui2:latest
+    image: ghcr.io/greenlogles/proxui:latest
     container_name: proxui
     ports:
       - "8080:8080"
