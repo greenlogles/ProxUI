@@ -76,6 +76,7 @@ all_clusters = {}  # cluster_id -> cluster config
 current_cluster_id = None
 proxmox_nodes = {}  # node_name -> proxmox connection for current cluster
 cluster_nodes = []  # Store all nodes from current cluster
+connection_metadata = {}  # Store connection metadata for renewal
 
 
 def init_all_clusters():
@@ -99,7 +100,7 @@ def init_all_clusters():
 
 def init_proxmox_connections(cluster_id=None):
     """Initialize connections to Proxmox nodes for specified cluster"""
-    global cluster_nodes, proxmox_nodes, current_cluster_id
+    global cluster_nodes, proxmox_nodes, current_cluster_id, connection_metadata
 
     if cluster_id:
         current_cluster_id = cluster_id
@@ -111,6 +112,7 @@ def init_proxmox_connections(cluster_id=None):
     # Clear existing connections
     proxmox_nodes = {}
     cluster_nodes = []
+    connection_metadata = {}
 
     cluster_config = all_clusters[current_cluster_id]
     discovered_nodes = set()
@@ -133,6 +135,15 @@ def init_proxmox_connections(cluster_id=None):
             version = proxmox.version.get()
             print(f"Connected to {node_config['host']} - PVE {version['version']}")
 
+            # Store connection metadata for renewal
+            connection_metadata[node_config["host"]] = {
+                "host": node_config["host"],
+                "user": node_config["user"],
+                "password": node_config["password"],
+                "verify_ssl": node_config.get("verify_ssl", True),
+                "last_authenticated": datetime.now(),
+            }
+
             # Get all nodes in the cluster through this connection
             try:
                 nodes = proxmox.nodes.get()
@@ -143,6 +154,9 @@ def init_proxmox_connections(cluster_id=None):
                         # Store the connection that can access this node
                         if node_name not in proxmox_nodes:
                             proxmox_nodes[node_name] = proxmox
+                            # Store metadata for each node
+                            if node_name not in connection_metadata:
+                                connection_metadata[node_name] = connection_metadata[node_config["host"]]
                         cluster_nodes.append(
                             {
                                 "name": node_name,
@@ -163,6 +177,126 @@ def init_proxmox_connections(cluster_id=None):
     )
     print(f"Active connections to {len(proxmox_nodes)} nodes")
     return len(proxmox_nodes) > 0
+
+
+def is_authentication_error(error):
+    """Check if an error is related to authentication/authorization"""
+    error_str = str(error).lower()
+    auth_indicators = [
+        "couldn't authenticate",
+        "authentication failed",
+        "401",
+        "unauthorized",
+        "permission denied",
+        "ticket",
+        "authentication failure",
+        "invalid ticket",
+        "authentication required"
+    ]
+    return any(indicator in error_str for indicator in auth_indicators)
+
+
+def renew_proxmox_connection(node_name):
+    """Renew a Proxmox connection for a specific node"""
+    global proxmox_nodes, cluster_nodes, connection_metadata
+    
+    if node_name not in connection_metadata:
+        print(f"No connection metadata found for node {node_name}")
+        return None
+    
+    metadata = connection_metadata[node_name]
+    
+    try:
+        print(f"Renewing connection for node {node_name}...")
+        
+        # Create new connection
+        new_proxmox = ProxmoxAPI(
+            metadata["host"],
+            user=metadata["user"],
+            password=metadata["password"],
+            verify_ssl=metadata["verify_ssl"],
+        )
+        
+        # Test the new connection
+        version = new_proxmox.version.get()
+        print(f"Successfully renewed connection to {node_name} - PVE {version['version']}")
+        
+        # Update the stored connection
+        proxmox_nodes[node_name] = new_proxmox
+        
+        # Update cluster_nodes list
+        for node_info in cluster_nodes:
+            if node_info["name"] == node_name:
+                node_info["connection"] = new_proxmox
+                break
+        
+        # Update metadata timestamp
+        metadata["last_authenticated"] = datetime.now()
+        
+        return new_proxmox
+        
+    except Exception as e:
+        print(f"Failed to renew connection for {node_name}: {e}")
+        return None
+
+
+def get_proxmox_connection(node_name, auto_renew=True):
+    """Get a Proxmox connection with automatic renewal on auth errors"""
+    connection = get_proxmox_for_node(node_name)
+    
+    if not connection:
+        return None
+    
+    # If auto_renew is disabled, return the connection as-is
+    if not auto_renew:
+        return connection
+    
+    # Test the connection with a simple API call
+    try:
+        connection.version.get()
+        return connection
+    except Exception as e:
+        if is_authentication_error(e):
+            print(f"Authentication error detected for {node_name}, attempting renewal...")
+            renewed_connection = renew_proxmox_connection(node_name)
+            if renewed_connection:
+                return renewed_connection
+            else:
+                print(f"Failed to renew connection for {node_name}")
+                return None
+        else:
+            # Non-authentication error, return original connection
+            return connection
+
+
+def proxmox_api_call(connection, api_func, *args, **kwargs):
+    """Execute a Proxmox API call with automatic retry on authentication errors"""
+    max_retries = 2
+    
+    for attempt in range(max_retries):
+        try:
+            return api_func(*args, **kwargs)
+        except Exception as e:
+            if is_authentication_error(e) and attempt < max_retries - 1:
+                print(f"Authentication error on attempt {attempt + 1}, retrying...")
+                # Find the node name for this connection
+                node_name = None
+                for name, conn in proxmox_nodes.items():
+                    if conn == connection:
+                        node_name = name
+                        break
+                
+                if node_name:
+                    renewed_connection = renew_proxmox_connection(node_name)
+                    if renewed_connection:
+                        connection = renewed_connection
+                        # Update the api_func if it's bound to the old connection
+                        continue
+                
+            # If we get here, either it's not an auth error or renewal failed
+            raise e
+    
+    return None
 
 
 def get_proxmox_for_node(node_name):
@@ -191,8 +325,13 @@ def get_all_vms_and_containers():
     # Use the first available connection to get cluster-wide resources
     if proxmox_nodes:
         try:
-            # Get any working connection
-            proxmox = next(iter(proxmox_nodes.values()))
+            # Get any working connection with auto-renewal
+            node_name = next(iter(proxmox_nodes.keys()))
+            proxmox = get_proxmox_connection(node_name, auto_renew=True)
+            
+            if not proxmox:
+                print("No valid Proxmox connection available")
+                return []
 
             # Get all VMs and containers from cluster endpoint
             resources = proxmox.cluster.resources.get(type="vm")
@@ -242,7 +381,11 @@ def get_all_vms_and_containers_fallback():
     for node_info in cluster_nodes:
         try:
             node_name = node_info["name"]
-            proxmox = node_info["connection"]
+            proxmox = get_proxmox_connection(node_name, auto_renew=True)
+            
+            if not proxmox:
+                print(f"No valid connection for node {node_name}")
+                continue
 
             # Get VMs
             vms = proxmox.nodes(node_name).qemu.get()
@@ -838,7 +981,7 @@ def vms():
 @app.route("/vm/<node>/<vmid>")
 def vm_detail(node, vmid):
     """Show detailed VM information"""
-    proxmox = get_proxmox_for_node(node)
+    proxmox = get_proxmox_connection(node, auto_renew=True)
     if not proxmox:
         flash("Node connection not found", "error")
         return redirect(url_for("vms"))
@@ -927,7 +1070,7 @@ def vm_detail(node, vmid):
 @app.route("/vm/<node>/<vmid>/edit")
 def vm_edit(node, vmid):
     """Show VM configuration edit page"""
-    proxmox = get_proxmox_for_node(node)
+    proxmox = get_proxmox_connection(node, auto_renew=True)
     if not proxmox:
         flash("Node connection not found", "error")
         return redirect(url_for("vms"))
@@ -977,7 +1120,7 @@ def vm_clone(node, vmid):
 @app.route("/vm/<node>/<vmid>/<action>", methods=["POST"])
 def vm_action(node, vmid, action):
     """Perform action on VM"""
-    proxmox = get_proxmox_for_node(node)
+    proxmox = get_proxmox_connection(node, auto_renew=True)
     if not proxmox:
         return jsonify({"error": "Node connection not found"}), 404
 
@@ -1107,7 +1250,7 @@ def create_vm():
                 "bridge", "vmbr0"
             )  # Default to vmbr0 if not specified
 
-            proxmox = get_proxmox_for_node(node)
+            proxmox = get_proxmox_connection(node, auto_renew=True)
             if not proxmox:
                 flash("Invalid node selected", "error")
                 return redirect(url_for("create_vm"))
@@ -1201,7 +1344,12 @@ def storages():
     # Try to get storage info from cluster endpoint first
     if proxmox_nodes:
         try:
-            proxmox = next(iter(proxmox_nodes.values()))
+            node_name = next(iter(proxmox_nodes.keys()))
+            proxmox = get_proxmox_connection(node_name, auto_renew=True)
+            
+            if not proxmox:
+                return get_storages_fallback()
+                
             storages = proxmox.cluster.resources.get(type="storage")
 
             for storage in storages:
@@ -1238,7 +1386,11 @@ def get_storages_fallback():
     for node_info in cluster_nodes:
         try:
             node_name = node_info["name"]
-            proxmox = node_info["connection"]
+            proxmox = get_proxmox_connection(node_name, auto_renew=True)
+            
+            if not proxmox:
+                print(f"No valid connection for node {node_name}")
+                continue
 
             storages = proxmox.nodes(node_name).storage.get()
             for storage in storages:
@@ -1425,7 +1577,7 @@ def api_resources():
 @app.route("/api/node/<node>/status")
 def api_node_status(node):
     """API endpoint to get specific node status"""
-    proxmox = get_proxmox_for_node(node)
+    proxmox = get_proxmox_connection(node, auto_renew=True)
     if not proxmox:
         return jsonify({"error": "Node not found"}), 404
 
@@ -1704,8 +1856,12 @@ def api_next_vmid():
         return jsonify({"error": "No Proxmox connections available"}), 500
 
     try:
-        # Get any working connection
-        proxmox = next(iter(proxmox_nodes.values()))
+        # Get any working connection with auto-renewal
+        node_name = next(iter(proxmox_nodes.keys()))
+        proxmox = get_proxmox_connection(node_name, auto_renew=True)
+        
+        if not proxmox:
+            return jsonify({"error": "No valid Proxmox connection available"}), 500
 
         # Get next available VMID
         next_id = proxmox.cluster.nextid.get()
@@ -1803,8 +1959,12 @@ def api_cluster_tasks():
         return jsonify({"error": "No Proxmox connections available"}), 500
 
     try:
-        # Get any working connection to access cluster endpoint
-        proxmox = next(iter(proxmox_nodes.values()))
+        # Get any working connection to access cluster endpoint with auto-renewal
+        node_name = next(iter(proxmox_nodes.keys()))
+        proxmox = get_proxmox_connection(node_name, auto_renew=True)
+        
+        if not proxmox:
+            return jsonify({"error": "No valid Proxmox connection available"}), 500
 
         # Get limit from query parameter, default to 50
         limit = request.args.get("limit", 50, type=int)
