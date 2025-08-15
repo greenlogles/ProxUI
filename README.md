@@ -118,13 +118,21 @@ pveum acl modify / --users proxui-readonly@pve --roles PVEAuditor --propagate 1
 
 ## Docker Deployment
 
-The application is designed for Docker deployment with persistent volume mounting:
+The application is designed for Docker deployment with persistent volume mounting. Docker images are automatically built and published via CI/CD pipeline.
+
+### Available Image Tags
+
+- **`ghcr.io/greenlogles/proxui:latest`** - Latest stable release (recommended for production)
+- **`ghcr.io/greenlogles/proxui:testing`** - Latest development build from main branch
+- **`ghcr.io/greenlogles/proxui:v1.2.3`** - Specific version tags for releases
+
+### Docker Compose (Recommended)
 
 ```yaml
 version: '3.8'
 services:
   proxui:
-    image: ghcr.io/greenlogles/proxui:latest
+    image: ghcr.io/greenlogles/proxui:latest  # or :testing for latest development
     container_name: proxui
     ports:
       - "8080:8080"
@@ -134,6 +142,37 @@ services:
       - CONFIG_FILE_PATH=/app/data/config.toml
     restart: unless-stopped
 ```
+
+### Docker Run
+
+```bash
+# Latest stable release
+docker run -d \
+  --name proxui \
+  -p 8080:8080 \
+  -v ./data:/app/data \
+  -e CONFIG_FILE_PATH=/app/data/config.toml \
+  ghcr.io/greenlogles/proxui:latest
+
+# Latest development build
+docker run -d \
+  --name proxui \
+  -p 8080:8080 \
+  -v ./data:/app/data \
+  -e CONFIG_FILE_PATH=/app/data/config.toml \
+  ghcr.io/greenlogles/proxui:testing
+```
+
+### CI/CD and Automated Builds
+
+ProxUI uses GitHub Actions for automated testing and Docker image building with GitHub Container Registry:
+
+- **Testing Images**: Built automatically on every push to `main` branch (`:testing` tag)
+- **Release Images**: Built automatically when GitHub releases are created (`:latest` + version tags)
+- **Multi-platform**: Images support both `linux/amd64` and `linux/arm64`
+- **No Setup Required**: Uses built-in GitHub authentication and permissions
+
+Images are published to GitHub Container Registry at `ghcr.io/greenlogles/proxui`.
 
 ## Requirements
 
