@@ -1,5 +1,6 @@
 __pycache__
 config.toml
+tests/__pycache__
 
 .git/
 .gitignore

@@ -1193,38 +1193,58 @@ def vm_action(node, vmid, action):
                     # Two-step process: migrate VM/container, then move storage
                     try:
                         # Step 1: Migrate the VM/container with local disks
-                        migrate_params = {"target": target_node, "online": 1}
-
-                        # Always migrate with local disks when storage is specified
                         if vm_type == "qemu":
-                            migrate_params["with-local-disks"] = 1
+                            # VMs can use live migration
+                            migrate_params = {
+                                "target": target_node,
+                                "online": 1,
+                                "with-local-disks": 1,
+                            }
                         else:
-                            migrate_params["with-local-disks"] = 1
+                            # LXC containers must use offline migration with restart
+                            migrate_params = {
+                                "target": target_node,
+                                "with-local-disks": 1,
+                                "restart": 1,
+                            }
 
                         vm.migrate.post(**migrate_params)
 
+                        migration_type = "live" if vm_type == "qemu" else "offline"
                         flash(
-                            f"{vm_type_name} {vmid} migration to {target_node} started (storage will remain on current storage)",
+                            f"{vm_type_name} {vmid} {migration_type} migration to {target_node} started (storage will remain on current storage)",
                             "success",
                         )
 
                     except Exception as migrate_error:
                         # If migration with storage fails, try without storage migration
                         try:
-                            simple_params = {"target": target_node, "online": 1}
+                            if vm_type == "qemu":
+                                simple_params = {"target": target_node, "online": 1}
+                            else:
+                                simple_params = {"target": target_node, "restart": 1}
+
                             vm.migrate.post(**simple_params)
+                            migration_type = "live" if vm_type == "qemu" else "offline"
                             flash(
-                                f"{vm_type_name} {vmid} migration to {target_node} started (storage migration not supported)",
+                                f"{vm_type_name} {vmid} {migration_type} migration to {target_node} started (storage migration not supported)",
                                 "warning",
                             )
                         except Exception as simple_error:
                             raise migrate_error
                 else:
                     # Simple migration without storage
-                    migrate_params = {"target": target_node, "online": 1}
+                    if vm_type == "qemu":
+                        # VMs can use live migration
+                        migrate_params = {"target": target_node, "online": 1}
+                    else:
+                        # LXC containers must use offline migration with restart
+                        migrate_params = {"target": target_node, "restart": 1}
+
                     vm.migrate.post(**migrate_params)
+                    migration_type = "live" if vm_type == "qemu" else "offline"
                     flash(
-                        f"{vm_type_name} {vmid} migration to {target_node} started",
+                        f"{vm_type_name} {vmid} {migration_type} migration to {target_node} started",
                         "success",
                     )
             else:
