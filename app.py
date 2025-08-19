@@ -1079,20 +1079,28 @@ def vm_detail(node, vmid):
 
 @app.route("/vm/<node>/<vmid>/edit")
 def vm_edit(node, vmid):
-    """Show VM configuration edit page"""
+    """Show VM/Container configuration edit page"""
     proxmox = get_proxmox_connection(node, auto_renew=True)
     if not proxmox:
         flash("Node connection not found", "error")
         return redirect(url_for("vms"))
 
     try:
-        # Get VM info and config
-        vm_info = proxmox.nodes(node).qemu(vmid).status.current.get()
-        config = proxmox.nodes(node).qemu(vmid).config.get()
+        # Determine VM type and get info/config
+        vm_type = "qemu"
+        try:
+            vm_info = proxmox.nodes(node).qemu(vmid).status.current.get()
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+        except:
+            vm_type = "lxc"
+            vm_info = proxmox.nodes(node).lxc(vmid).status.current.get()
+            config = proxmox.nodes(node).lxc(vmid).config.get()
 
-        return render_template("vm_edit.html", node=node, vm=vm_info, config=config)
+        return render_template(
+            "vm_edit.html", node=node, vm=vm_info, config=config, vm_type=vm_type
+        )
     except Exception as e:
-        flash(f"Error loading VM configuration: {e}", "error")
+        flash(f"Error loading VM/Container configuration: {e}", "error")
         return redirect(url_for("vm_detail", node=node, vmid=vmid))
 
 
@@ -2342,6 +2350,164 @@ def api_vm_resize_disk(node, vmid):
                 "success": True,
                 "message": f"Disk {disk} resized to {size}",
                 "result": result,
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/iso/attach", methods=["POST"])
+def api_vm_iso_attach(node, vmid):
+    """Attach ISO image to VM/Container"""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        data = request.get_json()
+        if not data or "iso_image" not in data:
+            return jsonify({"error": "Missing iso_image parameter"}), 400
+
+        iso_image = data["iso_image"]
+        interface = data.get("interface", "ide2")  # Default to ide2 for CD-ROM
+
+        # Determine VM type and get configuration
+        vm_type = "qemu"
+        try:
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+            vm_obj = proxmox.nodes(node).qemu(vmid)
+        except:
+            vm_type = "lxc"
+            config = proxmox.nodes(node).lxc(vmid).config.get()
+            vm_obj = proxmox.nodes(node).lxc(vmid)
+
+        # LXC containers don't support ISO attachment
+        if vm_type == "lxc":
+            return (
+                jsonify({"error": "LXC containers do not support ISO attachment"}),
+                400,
+            )
+
+        if interface in config:
+            return jsonify({"error": f"Interface {interface} is already in use"}), 400
+
+        # Attach ISO to specified interface
+        update_params = {interface: f"{iso_image},media=cdrom"}
+
+        vm_obj.config.put(**update_params)
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"ISO {iso_image} attached to {interface}",
+                "interface": interface,
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/iso/detach", methods=["POST"])
+def api_vm_iso_detach(node, vmid):
+    """Detach ISO image from VM/Container"""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        data = request.get_json()
+        if not data or "interface" not in data:
+            return jsonify({"error": "Missing interface parameter"}), 400
+
+        interface = data["interface"]
+
+        # Determine VM type and get configuration
+        vm_type = "qemu"
+        try:
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+            vm_obj = proxmox.nodes(node).qemu(vmid)
+        except:
+            vm_type = "lxc"
+            config = proxmox.nodes(node).lxc(vmid).config.get()
+            vm_obj = proxmox.nodes(node).lxc(vmid)
+
+        # LXC containers don't support ISO attachment/detachment
+        if vm_type == "lxc":
+            return (
+                jsonify({"error": "LXC containers do not support ISO attachment"}),
+                400,
+            )
+
+        if interface not in config:
+            return jsonify({"error": f"Interface {interface} not found"}), 404
+
+        # Remove ISO by deleting the interface
+        update_params = {"delete": interface}
+
+        vm_obj.config.put(**update_params)
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"ISO detached from {interface}",
+                "interface": interface,
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/boot-order", methods=["PUT"])
+def api_vm_boot_order(node, vmid):
+    """Update VM boot order"""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        data = request.get_json()
+        if not data or "boot_devices" not in data:
+            return jsonify({"error": "Missing boot_devices parameter"}), 400
+
+        boot_devices = data["boot_devices"]
+        if not isinstance(boot_devices, list):
+            return jsonify({"error": "boot_devices must be an array"}), 400
+
+        # Determine VM type and get configuration
+        vm_type = "qemu"
+        try:
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+            vm_obj = proxmox.nodes(node).qemu(vmid)
+        except:
+            vm_type = "lxc"
+            return (
+                jsonify(
+                    {"error": "LXC containers do not support boot order configuration"}
+                ),
+                400,
+            )
+
+        # Build boot order string
+        if len(boot_devices) == 0:
+            # No boot devices specified, use default
+            boot_order = "c"
+        else:
+            # Use the new "order=" format for specific devices
+            boot_order = "order=" + ";".join(boot_devices)
+
+        # Update boot configuration
+        update_params = {"boot": boot_order}
+
+        vm_obj.config.put(**update_params)
+
+        return jsonify(
+            {
+                "success": True,
+                "message": "Boot order updated successfully",
+                "boot_order": boot_order,
             }
         )
 
