@@ -160,6 +160,13 @@
                         <div class="form-text">Leave empty to keep disks on current storage</div>
                     </div>
                     
+                    {% if vm_type == 'lxc' %}
+                    <div class="alert alert-info mb-3">
+                        <i class="bi bi-info-circle"></i>
+                        <strong>Note:</strong> LXC containers don't support live migration. The container will be restarted during the migration process (shutdown → migrate → start on target node).
+                    </div>
+                    {% endif %}
+                    
                     <button type="submit" class="btn btn-primary w-100" onclick="return confirm('Migrate {{ 'VM' if vm_type == 'qemu' else 'container' }} to selected node?')" {{ 'disabled' if migration_info else '' }}>
                         <i class="bi bi-arrow-right-circle"></i> 
                         {% if migration_info %}Migration in Progress{% else %}Migrate{% endif %}
