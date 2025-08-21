@@ -2,6 +2,129 @@
 
 {% block title %}Edit VM {{ vm.name }} - Proxmox Manager{% endblock %}
 
+{% block extra_head %}
+<style>
+.boot-device-item {
+    cursor: move;
+    user-select: none;
+    transition: all 0.2s ease;
+    min-height: 60px;
+    padding: 12px;
+}
+
+.boot-device-item:hover {
+    background-color: #f8f9fa !important;
+}
+
+.boot-device-item.dragging {
+    opacity: 0.5;
+    transform: rotate(2deg);
+}
+
+.boot-device-item .drag-handle {
+    color: #6c757d;
+    font-size: 1.2em;
+    min-width: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.boot-device-item .drag-handle:hover {
+    color: #495057;
+}
+
+/* Mobile-friendly touch targets */
+@media (max-width: 768px) {
+    .boot-device-item {
+        min-height: 70px;
+        padding: 16px 12px;
+    }
+    
+    .boot-device-item .drag-handle {
+        min-width: 32px;
+        font-size: 1.4em;
+    }
+    
+    .fallback-controls .btn {
+        padding: 8px 12px;
+        font-size: 1.1em;
+    }
+}
+
+.boot-order-placeholder {
+    border: 2px dashed #dee2e6;
+    background-color: #f8f9fa;
+    min-height: 60px;
+    border-radius: 0.375rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #6c757d;
+    font-style: italic;
+}
+
+.sortable-ghost {
+    opacity: 0.4;
+    background-color: #e9ecef !important;
+}
+
+.sortable-chosen {
+    background-color: #e3f2fd !important;
+    transform: scale(1.02);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.sortable-drag {
+    opacity: 0.8;
+    transform: rotate(3deg);
+    box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+}
+
+/* Fallback controls styling */
+.fallback-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: center;
+}
+
+.fallback-controls .btn {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+}
+
+.fallback-controls .btn:disabled {
+    opacity: 0.3;
+}
+
+/* Touch-friendly improvements */
+.boot-device-item .form-check-input {
+    transform: scale(1.2);
+    margin-right: 8px;
+}
+
+.boot-priority-badge .badge {
+    font-size: 0.9em;
+    padding: 6px 10px;
+}
+
+/* Animation for reordering */
+@keyframes reorder {
+    0% { transform: translateX(-10px); opacity: 0.8; }
+    100% { transform: translateX(0); opacity: 1; }
+}
+
+.boot-device-item.reordered {
+    animation: reorder 0.3s ease;
+}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="row">
     <div class="col-12">
@@ -85,6 +208,22 @@
                         </div>
                     </div>
 
+                    <!-- ISO/CD-ROM Configuration (QEMU VMs only) -->
+                    {% if vm_type|default('qemu') == 'qemu' %}
+                    <div class="mb-4">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h6 class="text-primary mb-0"><i class="bi bi-disc"></i> ISO/CD-ROM Images</h6>
+                            <button type="button" class="btn btn-sm btn-success" id="attachIsoBtn">
+                                <i class="bi bi-plus-circle"></i> Attach ISO
+                            </button>
+                        </div>
+                        
+                        <div id="isoInterfaces">
+                            <!-- ISO interfaces will be loaded here -->
+                        </div>
+                    </div>
+                    {% endif %}
+
                     <!-- Network Interfaces -->
                     <div class="mb-4">
                         <div class="d-flex justify-content-between align-items-center mb-3">
@@ -102,6 +241,24 @@
                     <!-- Boot Options -->
                     <div class="mb-4">
                         <h6 class="text-primary mb-3"><i class="bi bi-power"></i> Boot Options</h6>
+                        
+                        <div class="mb-3">
+                            <label for="bootOrder" class="form-label">Boot Order</label>
+                            <div class="card">
+                                <div class="card-header bg-light">
+                                    <small class="text-muted">Drag and drop to reorder boot devices</small>
+                                </div>
+                                <div class="card-body p-2">
+                                    <div id="bootOrderList" class="list-group list-group-flush">
+                                        <!-- Boot order items will be loaded here -->
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-text mt-2">
+                                The VM will attempt to boot from devices in the order shown above.
+                                Available devices depend on your VM configuration.
+                            </div>
+                        </div>
                         
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="autostart" name="autostart">
@@ -137,9 +294,11 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 <script>
 const node = '{{ node }}';
 const vmid = '{{ vm.vmid }}';
+const vmType = '{{ vm_type|default("qemu") }}';
 
 // Global functions for network management
 function addNetworkInterface() {
@@ -657,16 +816,649 @@ function resizeDisk(diskKey) {
     });
 }
 
+function loadIsoInterfaces() {
+    fetch(`/api/vm/${node}/${vmid}/config`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error loading ISO interfaces:', data.error);
+                return;
+            }
+            
+            const container = document.getElementById('isoInterfaces');
+            if (!container) return;
+            
+            container.innerHTML = '';
+            
+            // Parse ISO interfaces from config (ide0, ide1, ide2, ide3)
+            const isos = [];
+            for (const [key, value] of Object.entries(data)) {
+                if (key.startsWith('ide') && key.match(/^ide\d+$/) && 
+                    (value.includes('.iso') || value.includes('media=cdrom'))) {
+                    isos.push({
+                        key: key,
+                        config: value
+                    });
+                }
+            }
+            
+            // Sort ISO interfaces by number
+            isos.sort((a, b) => {
+                const aNum = parseInt(a.key.replace('ide', ''));
+                const bNum = parseInt(b.key.replace('ide', ''));
+                return aNum - bNum;
+            });
+            
+            if (isos.length === 0) {
+                container.innerHTML = '<div class="text-muted">No ISO images attached</div>';
+            } else {
+                isos.forEach(iso => {
+                    container.appendChild(createIsoInterfaceCard(iso));
+                });
+            }
+        })
+        .catch(error => {
+            console.error('Error loading ISO interfaces:', error);
+        });
+}
+
+function createIsoInterfaceCard(iso) {
+    const div = document.createElement('div');
+    div.className = 'card mb-2';
+    
+    // Parse ISO config (e.g., "local:iso/ubuntu-20.04.iso,media=cdrom")
+    const parts = iso.config.split(',');
+    let isoPath = '';
+    let isoName = '';
+    
+    for (const part of parts) {
+        if (part.includes(':') && (part.includes('.iso') || part.includes('media=cdrom'))) {
+            isoPath = part;
+            // Extract just the filename
+            const pathParts = part.split('/');
+            isoName = pathParts[pathParts.length - 1];
+            if (isoName.includes(',')) {
+                isoName = isoName.split(',')[0];
+            }
+            break;
+        }
+    }
+    
+    div.innerHTML = `
+        <div class="card-body py-2">
+            <div class="row align-items-center">
+                <div class="col-md-2">
+                    <strong>${iso.key}</strong><br>
+                    <small class="text-muted">CD-ROM</small>
+                </div>
+                <div class="col-md-7">
+                    <div class="d-flex align-items-center">
+                        <i class="bi bi-disc me-2"></i>
+                        <div>
+                            <div><strong>${isoName || 'Unknown ISO'}</strong></div>
+                            <small class="text-muted">${isoPath}</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <button class="btn btn-sm btn-outline-danger" onclick="detachIso('${iso.key}')">
+                        <i class="bi bi-eject"></i> Detach
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    return div;
+}
+
+function showAttachIsoModal() {
+    // Load available ISO images first
+    fetch(`/api/node/${node}/iso-images`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                showNotification('Error loading ISO images: ' + data.error, 'error');
+                return;
+            }
+            
+            if (data.length === 0) {
+                showNotification('No ISO images available on this node', 'warning');
+                return;
+            }
+            
+            const isoOptions = data.map(iso => {
+                const filename = iso.volid.split('/').pop();
+                return `<option value="${iso.volid}">${filename}</option>`;
+            }).join('');
+            
+            const modalHtml = `
+                <div class="modal fade" id="attachIsoModal" tabindex="-1">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title">Attach ISO Image</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="mb-3">
+                                    <label for="isoSelect" class="form-label">ISO Image</label>
+                                    <select class="form-select" id="isoSelect">
+                                        <option value="">Select ISO image...</option>
+                                        ${isoOptions}
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="isoInterface" class="form-label">Interface</label>
+                                    <select class="form-select" id="isoInterface">
+                                        <option value="ide2">ide2 (Recommended)</option>
+                                        <option value="ide0">ide0</option>
+                                        <option value="ide1">ide1</option>
+                                        <option value="ide3">ide3</option>
+                                    </select>
+                                    <div class="form-text">CD-ROM drives use IDE interfaces</div>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <button type="button" class="btn btn-primary" id="attachIsoSubmitBtn">Attach ISO</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Remove existing modal if any
+            const existingModal = document.getElementById('attachIsoModal');
+            if (existingModal) {
+                existingModal.remove();
+            }
+            
+            // Add modal to body
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            
+            // Show modal
+            const modal = new bootstrap.Modal(document.getElementById('attachIsoModal'));
+            modal.show();
+            
+            // Add event listener to submit button
+            document.getElementById('attachIsoSubmitBtn').addEventListener('click', attachIso);
+        })
+        .catch(error => {
+            console.error('Error loading ISO images:', error);
+            showNotification('Network error while loading ISO images', 'error');
+        });
+}
+
+function attachIso() {
+    const isoSelect = document.getElementById('isoSelect');
+    const interfaceSelect = document.getElementById('isoInterface');
+    
+    const isoImage = isoSelect.value;
+    const interface = interfaceSelect.value;
+    
+    if (!isoImage) {
+        showNotification('Please select an ISO image', 'warning');
+        return;
+    }
+    
+    fetch(`/api/vm/${node}/${vmid}/iso/attach`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            iso_image: isoImage,
+            interface: interface
+        })
+    })
+    .then(response => response.json())
+    .then(result => {
+        if (result.success) {
+            showNotification(result.message, 'success');
+            loadIsoInterfaces(); // Reload ISO list
+            
+            // Close modal
+            const modal = bootstrap.Modal.getInstance(document.getElementById('attachIsoModal'));
+            if (modal) {
+                modal.hide();
+            }
+        } else {
+            showNotification(result.error || 'Failed to attach ISO', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error attaching ISO:', error);
+        showNotification('Network error while attaching ISO: ' + error.message, 'error');
+    });
+}
+
+function detachIso(interface) {
+    if (!confirm(`Are you sure you want to detach the ISO from ${interface}?`)) {
+        return;
+    }
+    
+    fetch(`/api/vm/${node}/${vmid}/iso/detach`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            interface: interface
+        })
+    })
+    .then(response => response.json())
+    .then(result => {
+        if (result.success) {
+            showNotification(result.message, 'success');
+            loadIsoInterfaces(); // Reload ISO list
+        } else {
+            showNotification(result.error || 'Failed to detach ISO', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error detaching ISO:', error);
+        showNotification('Network error while detaching ISO: ' + error.message, 'error');
+    });
+}
+
+function loadBootOrder() {
+    if (vmType !== 'qemu') {
+        // Hide boot order section for LXC containers
+        const bootSection = document.querySelector('.mb-4:has(#bootOrderList)');
+        if (bootSection) {
+            bootSection.style.display = 'none';
+        }
+        return;
+    }
+    
+    fetch(`/api/vm/${node}/${vmid}/config`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error loading boot order:', data.error);
+                return;
+            }
+            
+            const container = document.getElementById('bootOrderList');
+            if (!container) return;
+            
+            // Parse current boot configuration
+            const bootDevices = parseBootOrder(data, data.boot);
+            
+            // Render boot order items
+            renderBootOrder(bootDevices);
+            
+            // Initialize drag and drop with delay to ensure Sortable is loaded
+            setTimeout(initBootOrderSorting, 100);
+        })
+        .catch(error => {
+            console.error('Error loading boot order:', error);
+        });
+}
+
+function parseBootOrder(config, bootConfig) {
+    const devices = [];
+    
+    // Available device types with icons and labels
+    const deviceTypes = {
+        'disk': { icon: 'bi-hdd', label: 'Hard Disk', priority: 1 },
+        'cdrom': { icon: 'bi-disc', label: 'CD/DVD-ROM', priority: 2 },
+        'network': { icon: 'bi-ethernet', label: 'Network (PXE)', priority: 3 }
+    };
+    
+    // Find actual devices in the config
+    const availableDevices = [];
+    
+    // Find disk devices
+    for (const [key, value] of Object.entries(config)) {
+        if ((key.startsWith('scsi') || key.startsWith('virtio') || key.startsWith('ide') || key.startsWith('sata')) && 
+            key.match(/^(scsi|virtio|ide|sata)\d+$/) && 
+            !value.includes('media=cdrom') && !value.includes('.iso')) {
+            availableDevices.push({
+                id: key,
+                type: 'disk',
+                name: `${key.toUpperCase()} (Disk)`,
+                ...deviceTypes.disk
+            });
+        }
+        // Find CD-ROM devices
+        else if ((key.startsWith('ide') && key.match(/^ide\d+$/)) && 
+                (value.includes('media=cdrom') || value.includes('.iso'))) {
+            availableDevices.push({
+                id: key,
+                type: 'cdrom',
+                name: `${key.toUpperCase()} (CD-ROM)`,
+                ...deviceTypes.cdrom
+            });
+        }
+    }
+    
+    // Always add network boot option
+    availableDevices.push({
+        id: 'net',
+        type: 'network',
+        name: 'Network Boot (PXE)',
+        ...deviceTypes.network
+    });
+    
+    // Parse current boot order
+    let orderedDevices = [];
+    
+    if (bootConfig && bootConfig.startsWith('order=')) {
+        // New format: "order=scsi0;ide2;net"
+        const orderList = bootConfig.replace('order=', '').split(';');
+        orderList.forEach(deviceId => {
+            const device = availableDevices.find(d => d.id === deviceId);
+            if (device) {
+                orderedDevices.push(device);
+            }
+        });
+        
+        // Add remaining devices not in boot order
+        availableDevices.forEach(device => {
+            if (!orderedDevices.find(d => d.id === device.id)) {
+                orderedDevices.push({...device, enabled: false});
+            }
+        });
+    } else {
+        // Legacy format or default
+        availableDevices.sort((a, b) => a.priority - b.priority);
+        orderedDevices = availableDevices;
+    }
+    
+    return orderedDevices;
+}
+
+function renderBootOrder(devices) {
+    const container = document.getElementById('bootOrderList');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    
+    if (devices.length === 0) {
+        container.innerHTML = `
+            <div class="boot-order-placeholder">
+                <span>No bootable devices available</span>
+            </div>
+        `;
+        return;
+    }
+    
+    devices.forEach((device, index) => {
+        const isEnabled = device.enabled !== false;
+        const item = document.createElement('div');
+        item.className = `list-group-item boot-device-item ${isEnabled ? '' : 'text-muted'}`;
+        item.dataset.deviceId = device.id;
+        
+        item.innerHTML = `
+            <div class="d-flex align-items-center">
+                <div class="drag-handle me-3">
+                    <i class="bi bi-grip-vertical"></i>
+                </div>
+                <div class="form-check me-3">
+                    <input class="form-check-input" type="checkbox" 
+                           id="boot_${device.id}" 
+                           ${isEnabled ? 'checked' : ''}
+                           onchange="toggleBootDevice('${device.id}', this.checked)">
+                </div>
+                <div class="device-icon me-3">
+                    <i class="bi ${device.icon} fs-5"></i>
+                </div>
+                <div class="flex-grow-1">
+                    <div class="fw-semibold">${device.name}</div>
+                    <small class="text-muted">Priority: ${index + 1}</small>
+                </div>
+                <div class="boot-priority-badge">
+                    <span class="badge bg-secondary">${index + 1}</span>
+                </div>
+            </div>
+        `;
+        
+        container.appendChild(item);
+    });
+}
+
+function initBootOrderSorting() {
+    const container = document.getElementById('bootOrderList');
+    if (!container) return;
+    
+    // Check if we're on a mobile device
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+                    window.innerWidth < 768;
+    
+    // Check if Sortable is available
+    if (typeof Sortable === 'undefined') {
+        console.warn('Sortable library not loaded, adding fallback buttons');
+        addFallbackButtons();
+        return;
+    }
+    
+    // Use fallback buttons for very small screens or touch-only devices
+    if (isMobile && window.innerWidth < 576) {
+        console.log('Using fallback buttons for small mobile screen');
+        addFallbackButtons();
+        return;
+    }
+    
+    try {
+        const sortableInstance = new Sortable(container, {
+            handle: '.drag-handle',
+            ghostClass: 'sortable-ghost',
+            chosenClass: 'sortable-chosen',
+            animation: 150,
+            // Mobile-friendly options
+            touchStartThreshold: 3,
+            delay: isMobile ? 200 : 0, // Longer delay for mobile
+            delayOnTouchStart: true,
+            forceFallback: false,
+            fallbackOnBody: true,
+            swapThreshold: 0.65,
+            dragoverBubble: false,
+            removeCloneOnHide: true,
+            onEnd: function(evt) {
+                updateBootOrderPriorities();
+                saveBootOrder();
+            },
+            onStart: function(evt) {
+                // Add visual feedback
+                evt.item.classList.add('sortable-drag');
+                document.body.style.overflow = 'hidden'; // Prevent scrolling during drag
+            },
+            onUnchoose: function(evt) {
+                // Reset visual feedback
+                evt.item.classList.remove('sortable-drag');
+                evt.item.style.transform = '';
+                evt.item.style.zIndex = '';
+                document.body.style.overflow = '';
+            },
+            onMove: function(evt, originalEvent) {
+                // Provide haptic feedback on mobile if available
+                if (navigator.vibrate && isMobile) {
+                    navigator.vibrate(10);
+                }
+                return true;
+            }
+        });
+        
+        // Test if drag and drop actually works after a short delay
+        setTimeout(() => {
+            if (!testDragDropSupport()) {
+                console.warn('Drag and drop not working properly, switching to fallback');
+                sortableInstance.destroy();
+                addFallbackButtons();
+            }
+        }, 1000);
+        
+    } catch (error) {
+        console.warn('Failed to initialize Sortable:', error);
+        addFallbackButtons();
+    }
+}
+
+function testDragDropSupport() {
+    // Simple test to see if drag and drop events are supported
+    const testDiv = document.createElement('div');
+    return (
+        ('draggable' in testDiv) || 
+        ('ondragstart' in testDiv && 'ondrop' in testDiv)
+    );
+}
+
+function addFallbackButtons() {
+    const container = document.getElementById('bootOrderList');
+    if (!container) return;
+    
+    // Add up/down buttons for each item
+    const items = container.querySelectorAll('.boot-device-item');
+    items.forEach((item, index) => {
+        const buttonsDiv = document.createElement('div');
+        buttonsDiv.className = 'fallback-controls ms-2';
+        buttonsDiv.innerHTML = `
+            <button type="button" class="btn btn-sm btn-outline-secondary me-1" 
+                    onclick="moveBootDevice('${item.dataset.deviceId}', 'up')"
+                    ${index === 0 ? 'disabled' : ''}>
+                <i class="bi bi-arrow-up"></i>
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" 
+                    onclick="moveBootDevice('${item.dataset.deviceId}', 'down')"
+                    ${index === items.length - 1 ? 'disabled' : ''}>
+                <i class="bi bi-arrow-down"></i>
+            </button>
+        `;
+        
+        // Replace drag handle with buttons
+        const dragHandle = item.querySelector('.drag-handle');
+        if (dragHandle) {
+            dragHandle.replaceWith(buttonsDiv);
+        }
+    });
+}
+
+function moveBootDevice(deviceId, direction) {
+    const container = document.getElementById('bootOrderList');
+    if (!container) return;
+    
+    const item = container.querySelector(`[data-device-id="${deviceId}"]`);
+    if (!item) return;
+    
+    // Add animation class
+    item.classList.add('reordered');
+    
+    if (direction === 'up') {
+        const prevItem = item.previousElementSibling;
+        if (prevItem) {
+            container.insertBefore(item, prevItem);
+        }
+    } else if (direction === 'down') {
+        const nextItem = item.nextElementSibling;
+        if (nextItem) {
+            container.insertBefore(nextItem, item);
+        }
+    }
+    
+    updateBootOrderPriorities();
+    saveBootOrder();
+    
+    // Remove animation class
+    setTimeout(() => {
+        item.classList.remove('reordered');
+    }, 300);
+    
+    // Refresh fallback buttons
+    setTimeout(() => {
+        container.querySelectorAll('.fallback-controls').forEach(el => el.remove());
+        addFallbackButtons();
+    }, 100);
+}
+
+function updateBootOrderPriorities() {
+    const container = document.getElementById('bootOrderList');
+    if (!container) return;
+    
+    const items = container.querySelectorAll('.boot-device-item');
+    items.forEach((item, index) => {
+        const priorityBadge = item.querySelector('.boot-priority-badge .badge');
+        const priorityText = item.querySelector('small');
+        
+        if (priorityBadge) {
+            priorityBadge.textContent = index + 1;
+        }
+        if (priorityText) {
+            priorityText.textContent = `Priority: ${index + 1}`;
+        }
+    });
+}
+
+function toggleBootDevice(deviceId, enabled) {
+    const item = document.querySelector(`[data-device-id="${deviceId}"]`);
+    if (!item) return;
+    
+    if (enabled) {
+        item.classList.remove('text-muted');
+    } else {
+        item.classList.add('text-muted');
+    }
+    
+    saveBootOrder();
+}
+
+function saveBootOrder() {
+    const container = document.getElementById('bootOrderList');
+    if (!container) return;
+    
+    const items = container.querySelectorAll('.boot-device-item');
+    const bootDevices = [];
+    
+    items.forEach(item => {
+        const checkbox = item.querySelector('input[type="checkbox"]');
+        if (checkbox && checkbox.checked) {
+            bootDevices.push(item.dataset.deviceId);
+        }
+    });
+    
+    // Send to API
+    fetch(`/api/vm/${node}/${vmid}/boot-order`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            boot_devices: bootDevices
+        })
+    })
+    .then(response => response.json())
+    .then(result => {
+        if (result.success) {
+            showNotification('Boot order updated successfully', 'success');
+        } else {
+            showNotification(result.error || 'Failed to update boot order', 'error');
+            loadBootOrder(); // Reload on error
+        }
+    })
+    .catch(error => {
+        console.error('Error saving boot order:', error);
+        showNotification('Network error while updating boot order', 'error');
+        loadBootOrder(); // Reload on error
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     // Load current configuration
     loadVMConfiguration();
     loadNetworkInterfaces();
     loadDiskInterfaces();
+    loadBootOrder();
+    
+    // Only load ISO interfaces for QEMU VMs
+    if (vmType === 'qemu') {
+        loadIsoInterfaces();
+    }
+    
     loadAvailableBridges();
     
     // Form event listeners
     document.getElementById('vmConfigForm').addEventListener('submit', handleFormSubmit);
     document.getElementById('addNetworkBtn').addEventListener('click', showAddNetworkModal);
+    
+    // Only add ISO button listener for QEMU VMs
+    if (vmType === 'qemu') {
+        document.getElementById('attachIsoBtn').addEventListener('click', showAttachIsoModal);
+    }
     
     function loadVMConfiguration() {
         fetch(`/api/vm/${node}/${vmid}/config`)

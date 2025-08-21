@@ -413,6 +413,532 @@ class TestAPIEndpoints(unittest.TestCase):
         self.assertEqual(data[0]["type"], "qmstart")
         self.assertIn("start_time_formatted", data[0])
 
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_iso_attach_success(self, mock_get_connection):
+        """Test successful ISO attachment to QEMU VM"""
+        mock_connection = Mock()
+
+        # Mock VM configuration (QEMU)
+        mock_config = {"cores": 2, "memory": 2048, "net0": "virtio,bridge=vmbr0"}
+        mock_connection.nodes.return_value.qemu.return_value.config.get.return_value = (
+            mock_config
+        )
+        mock_get_connection.return_value = mock_connection
+
+        attach_data = {"iso_image": "local:iso/ubuntu-20.04.iso", "interface": "ide2"}
+
+        response = self.client.post(
+            "/api/vm/test-node/100/iso/attach",
+            data=json.dumps(attach_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        data = json.loads(response.data)
+        self.assertTrue(data["success"])
+        self.assertIn("message", data)
+        self.assertEqual(data["interface"], "ide2")
+
+        # Verify the API was called with correct parameters
+        mock_connection.nodes.return_value.qemu.return_value.config.put.assert_called_once_with(
+            ide2="local:iso/ubuntu-20.04.iso,media=cdrom"
+        )
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_iso_attach_interface_in_use(self, mock_get_connection):
+        """Test ISO attachment when interface is already in use"""
+        mock_connection = Mock()
+
+        # Mock VM configuration with ide2 already in use
+        mock_config = {
+            "cores": 2,
+            "memory": 2048,
+            "ide2": "local:iso/existing.iso,media=cdrom",
+        }
+        mock_connection.nodes.return_value.qemu.return_value.config.get.return_value = (
+            mock_config
+        )
+        mock_get_connection.return_value = mock_connection
+
+        attach_data = {"iso_image": "local:iso/ubuntu-20.04.iso", "interface": "ide2"}
+
+        response = self.client.post(
+            "/api/vm/test-node/100/iso/attach",
+            data=json.dumps(attach_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+        data = json.loads(response.data)
+        self.assertIn("error", data)
+        self.assertIn("already in use", data["error"])
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_iso_attach_lxc_container(self, mock_get_connection):
+        """Test ISO attachment to LXC container (should fail)"""
+        mock_connection = Mock()
+
+        # Mock QEMU failure, LXC success (simulating LXC container)
+        mock_connection.nodes.return_value.qemu.return_value.config.get.side_effect = (
+            Exception("Not a QEMU VM")
+        )
+        mock_connection.nodes.return_value.lxc.return_value.config.get.return_value = {
+            "hostname": "test-container",
+            "memory": 512,
+        }
+        mock_get_connection.return_value = mock_connection
+
+        attach_data = {"iso_image": "local:iso/ubuntu-20.04.iso", "interface": "ide2"}
+
+        response = self.client.post(
+            "/api/vm/test-node/101/iso/attach",
+            data=json.dumps(attach_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+        data = json.loads(response.data)
+        self.assertIn("error", data)
+        self.assertIn("LXC containers do not support ISO attachment", data["error"])
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_iso_attach_missing_parameters(self, mock_get_connection):
+        """Test ISO attachment with missing parameters"""
+        mock_connection = Mock()
+        mock_get_connection.return_value = mock_connection
+
+        # Test missing iso_image
+        response = self.client.post(
+            "/api/vm/test-node/100/iso/attach",
+            data=json.dumps({"interface": "ide2"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+        data = json.loads(response.data)
+        self.assertIn("error", data)
+        self.assertIn("Missing iso_image parameter", data["error"])
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_iso_attach_no_connection(self, mock_get_connection):
+        """Test ISO attachment when node connection is not found"""
+        mock_get_connection.return_value = None
+
+        attach_data = {"iso_image": "local:iso/ubuntu-20.04.iso", "interface": "ide2"}
+
+        response = self.client.post(
+            "/api/vm/test-node/100/iso/attach",
+            data=json.dumps(attach_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+        data = json.loads(response.data)
+        self.assertIn("error", data)
+        self.assertEqual(data["error"], "Node not found")
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_iso_detach_success(self, mock_get_connection):
+        """Test successful ISO detachment from QEMU VM"""
+        mock_connection = Mock()
+
+        # Mock VM configuration with ISO attached
+        mock_config = {
+            "cores": 2,
+            "memory": 2048,
+            "ide2": "local:iso/ubuntu-20.04.iso,media=cdrom",
+        }
+        mock_connection.nodes.return_value.qemu.return_value.config.get.return_value = (
+            mock_config
+        )
+        mock_get_connection.return_value = mock_connection
+
+        detach_data = {"interface": "ide2"}
+
+        response = self.client.post(
+            "/api/vm/test-node/100/iso/detach",
+            data=json.dumps(detach_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        data = json.loads(response.data)
+        self.assertTrue(data["success"])
+        self.assertIn("message", data)
+        self.assertEqual(data["interface"], "ide2")
+
+        # Verify the API was called with correct parameters
+        mock_connection.nodes.return_value.qemu.return_value.config.put.assert_called_once_with(
+            delete="ide2"
+        )
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_iso_detach_interface_not_found(self, mock_get_connection):
+        """Test ISO detachment when interface doesn't exist"""
+        mock_connection = Mock()
+
+        # Mock VM configuration without ide2
+        mock_config = {"cores": 2, "memory": 2048}
+        mock_connection.nodes.return_value.qemu.return_value.config.get.return_value = (
+            mock_config
+        )
+        mock_get_connection.return_value = mock_connection
+
+        detach_data = {"interface": "ide2"}
+
+        response = self.client.post(
+            "/api/vm/test-node/100/iso/detach",
+            data=json.dumps(detach_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+        data = json.loads(response.data)
+        self.assertIn("error", data)
+        self.assertIn("not found", data["error"])
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_iso_detach_lxc_container(self, mock_get_connection):
+        """Test ISO detachment from LXC container (should fail)"""
+        mock_connection = Mock()
+
+        # Mock QEMU failure, LXC success (simulating LXC container)
+        mock_connection.nodes.return_value.qemu.return_value.config.get.side_effect = (
+            Exception("Not a QEMU VM")
+        )
+        mock_connection.nodes.return_value.lxc.return_value.config.get.return_value = {
+            "hostname": "test-container",
+            "memory": 512,
+        }
+        mock_get_connection.return_value = mock_connection
+
+        detach_data = {"interface": "ide2"}
+
+        response = self.client.post(
+            "/api/vm/test-node/101/iso/detach",
+            data=json.dumps(detach_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+        data = json.loads(response.data)
+        self.assertIn("error", data)
+        self.assertIn("LXC containers do not support ISO attachment", data["error"])
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_iso_detach_missing_parameters(self, mock_get_connection):
+        """Test ISO detachment with missing parameters"""
+        mock_connection = Mock()
+        mock_get_connection.return_value = mock_connection
+
+        # Test missing interface
+        response = self.client.post(
+            "/api/vm/test-node/100/iso/detach",
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+        data = json.loads(response.data)
+        self.assertIn("error", data)
+        self.assertIn("Missing interface parameter", data["error"])
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_iso_attach_default_interface(self, mock_get_connection):
+        """Test ISO attachment with default interface (ide2)"""
+        mock_connection = Mock()
+
+        # Mock VM configuration
+        mock_config = {"cores": 2, "memory": 2048}
+        mock_connection.nodes.return_value.qemu.return_value.config.get.return_value = (
+            mock_config
+        )
+        mock_get_connection.return_value = mock_connection
+
+        # Don't specify interface (should default to ide2)
+        attach_data = {"iso_image": "local:iso/ubuntu-20.04.iso"}
+
+        response = self.client.post(
+            "/api/vm/test-node/100/iso/attach",
+            data=json.dumps(attach_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        data = json.loads(response.data)
+        self.assertTrue(data["success"])
+        self.assertEqual(data["interface"], "ide2")  # Should default to ide2
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_iso_attach_proxmox_error(self, mock_get_connection):
+        """Test ISO attachment when Proxmox API raises an error"""
+        mock_connection = Mock()
+
+        # Mock VM configuration
+        mock_config = {"cores": 2, "memory": 2048}
+        mock_connection.nodes.return_value.qemu.return_value.config.get.return_value = (
+            mock_config
+        )
+
+        # Mock Proxmox API error
+        mock_connection.nodes.return_value.qemu.return_value.config.put.side_effect = (
+            Exception("Proxmox API error")
+        )
+        mock_get_connection.return_value = mock_connection
+
+        attach_data = {"iso_image": "local:iso/ubuntu-20.04.iso", "interface": "ide2"}
+
+        response = self.client.post(
+            "/api/vm/test-node/100/iso/attach",
+            data=json.dumps(attach_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 500)
+
+        data = json.loads(response.data)
+        self.assertIn("error", data)
+        self.assertIn("Proxmox API error", data["error"])
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_iso_detach_proxmox_error(self, mock_get_connection):
+        """Test ISO detachment when Proxmox API raises an error"""
+        mock_connection = Mock()
+
+        # Mock VM configuration with ISO attached
+        mock_config = {
+            "cores": 2,
+            "memory": 2048,
+            "ide2": "local:iso/ubuntu-20.04.iso,media=cdrom",
+        }
+        mock_connection.nodes.return_value.qemu.return_value.config.get.return_value = (
+            mock_config
+        )
+
+        # Mock Proxmox API error
+        mock_connection.nodes.return_value.qemu.return_value.config.put.side_effect = (
+            Exception("Proxmox API error")
+        )
+        mock_get_connection.return_value = mock_connection
+
+        detach_data = {"interface": "ide2"}
+
+        response = self.client.post(
+            "/api/vm/test-node/100/iso/detach",
+            data=json.dumps(detach_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 500)
+
+        data = json.loads(response.data)
+        self.assertIn("error", data)
+        self.assertIn("Proxmox API error", data["error"])
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_boot_order_success(self, mock_get_connection):
+        """Test successful boot order update for QEMU VM"""
+        mock_connection = Mock()
+
+        # Mock VM configuration (QEMU)
+        mock_config = {
+            "cores": 2,
+            "memory": 2048,
+            "scsi0": "local-lvm:vm-100-disk-0,size=32G",
+        }
+        mock_connection.nodes.return_value.qemu.return_value.config.get.return_value = (
+            mock_config
+        )
+        mock_get_connection.return_value = mock_connection
+
+        boot_data = {"boot_devices": ["scsi0", "ide2", "net"]}
+
+        response = self.client.put(
+            "/api/vm/test-node/100/boot-order",
+            data=json.dumps(boot_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        data = json.loads(response.data)
+        self.assertTrue(data["success"])
+        self.assertIn("message", data)
+        self.assertEqual(data["boot_order"], "order=scsi0;ide2;net")
+
+        # Verify the API was called with correct parameters
+        mock_connection.nodes.return_value.qemu.return_value.config.put.assert_called_once_with(
+            boot="order=scsi0;ide2;net"
+        )
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_boot_order_empty_devices(self, mock_get_connection):
+        """Test boot order update with empty device list (default boot)"""
+        mock_connection = Mock()
+
+        # Mock VM configuration (QEMU)
+        mock_config = {"cores": 2, "memory": 2048}
+        mock_connection.nodes.return_value.qemu.return_value.config.get.return_value = (
+            mock_config
+        )
+        mock_get_connection.return_value = mock_connection
+
+        boot_data = {"boot_devices": []}
+
+        response = self.client.put(
+            "/api/vm/test-node/100/boot-order",
+            data=json.dumps(boot_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        data = json.loads(response.data)
+        self.assertTrue(data["success"])
+        self.assertEqual(data["boot_order"], "c")  # Default disk boot
+
+        # Verify the API was called with default boot
+        mock_connection.nodes.return_value.qemu.return_value.config.put.assert_called_once_with(
+            boot="c"
+        )
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_boot_order_lxc_container(self, mock_get_connection):
+        """Test boot order update for LXC container (should fail)"""
+        mock_connection = Mock()
+
+        # Mock QEMU failure, LXC success (simulating LXC container)
+        mock_connection.nodes.return_value.qemu.return_value.config.get.side_effect = (
+            Exception("Not a QEMU VM")
+        )
+        mock_connection.nodes.return_value.lxc.return_value.config.get.return_value = {
+            "hostname": "test-container",
+            "memory": 512,
+        }
+        mock_get_connection.return_value = mock_connection
+
+        boot_data = {"boot_devices": ["scsi0"]}
+
+        response = self.client.put(
+            "/api/vm/test-node/101/boot-order",
+            data=json.dumps(boot_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+        data = json.loads(response.data)
+        self.assertIn("error", data)
+        self.assertIn(
+            "LXC containers do not support boot order configuration", data["error"]
+        )
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_boot_order_missing_parameters(self, mock_get_connection):
+        """Test boot order update with missing parameters"""
+        mock_connection = Mock()
+        mock_get_connection.return_value = mock_connection
+
+        # Test missing boot_devices
+        response = self.client.put(
+            "/api/vm/test-node/100/boot-order",
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+        data = json.loads(response.data)
+        self.assertIn("error", data)
+        self.assertIn("Missing boot_devices parameter", data["error"])
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_boot_order_invalid_parameter_type(self, mock_get_connection):
+        """Test boot order update with invalid parameter type"""
+        mock_connection = Mock()
+        mock_get_connection.return_value = mock_connection
+
+        # Test invalid boot_devices type (should be array)
+        boot_data = {"boot_devices": "scsi0,ide2"}  # String instead of array
+
+        response = self.client.put(
+            "/api/vm/test-node/100/boot-order",
+            data=json.dumps(boot_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+        data = json.loads(response.data)
+        self.assertIn("error", data)
+        self.assertIn("boot_devices must be an array", data["error"])
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_boot_order_no_connection(self, mock_get_connection):
+        """Test boot order update when node connection is not found"""
+        mock_get_connection.return_value = None
+
+        boot_data = {"boot_devices": ["scsi0"]}
+
+        response = self.client.put(
+            "/api/vm/test-node/100/boot-order",
+            data=json.dumps(boot_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+        data = json.loads(response.data)
+        self.assertIn("error", data)
+        self.assertEqual(data["error"], "Node not found")
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_boot_order_proxmox_error(self, mock_get_connection):
+        """Test boot order update when Proxmox API raises an error"""
+        mock_connection = Mock()
+
+        # Mock VM configuration
+        mock_config = {"cores": 2, "memory": 2048}
+        mock_connection.nodes.return_value.qemu.return_value.config.get.return_value = (
+            mock_config
+        )
+
+        # Mock Proxmox API error
+        mock_connection.nodes.return_value.qemu.return_value.config.put.side_effect = (
+            Exception("Proxmox API error")
+        )
+        mock_get_connection.return_value = mock_connection
+
+        boot_data = {"boot_devices": ["scsi0", "net"]}
+
+        response = self.client.put(
+            "/api/vm/test-node/100/boot-order",
+            data=json.dumps(boot_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 500)
+
+        data = json.loads(response.data)
+        self.assertIn("error", data)
+        self.assertIn("Proxmox API error", data["error"])
+
+    @patch("app.get_proxmox_connection")
+    def test_api_vm_boot_order_single_device(self, mock_get_connection):
+        """Test boot order update with single device"""
+        mock_connection = Mock()
+
+        # Mock VM configuration (QEMU)
+        mock_config = {"cores": 2, "memory": 2048}
+        mock_connection.nodes.return_value.qemu.return_value.config.get.return_value = (
+            mock_config
+        )
+        mock_get_connection.return_value = mock_connection
+
+        boot_data = {"boot_devices": ["net"]}
+
+        response = self.client.put(
+            "/api/vm/test-node/100/boot-order",
+            data=json.dumps(boot_data),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        data = json.loads(response.data)
+        self.assertTrue(data["success"])
+        self.assertEqual(data["boot_order"], "order=net")
+
 
 if __name__ == "__main__":
     unittest.main()
