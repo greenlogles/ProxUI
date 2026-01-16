@@ -92,6 +92,7 @@ python app.py
 The application stores configuration in `/app/data/config.toml` (or `./data/config.toml` in development). The configuration file supports multiple clusters:
 
 ```toml
+# Password authentication
 [[clusters]]
 id = "homelab"
 name = "Home Lab"
@@ -100,9 +101,33 @@ host = "192.168.1.100:8006"
 user = "root@pam"
 password = "your-password"
 verify_ssl = false
+
+# API Token authentication (recommended for production)
+[[clusters]]
+id = "production"
+name = "Production Cluster"
+[[clusters.nodes]]
+host = "pve.example.com"
+user = "root@pam"
+token_name = "proxui"
+token_value = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+verify_ssl = true
 ```
 
-Configuration file can be managed manually or by application.
+### Authentication Methods
+
+ProxUI supports two authentication methods:
+
+1. **Password Authentication**: Traditional username/password login. Simple but less secure for production.
+
+2. **API Token Authentication** (Recommended): Uses Proxmox API tokens for authentication. To create a token:
+   - Go to Datacenter → Permissions → API Tokens in Proxmox
+   - Click "Add" and select a user (e.g., `root@pam`)
+   - Enter a token ID (e.g., `proxui`)
+   - Optionally uncheck "Privilege Separation" for full user permissions
+   - Copy the token secret (shown only once!)
+
+Configuration file can be managed manually or through the web UI (Cluster Management page).
 
 ## Custom User creation
 

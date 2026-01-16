@@ -129,17 +129,53 @@
                             <div class="form-text">IP address or hostname of your Proxmox node</div>
                         </div>
 
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <label for="node_user" class="form-label">Username</label>
-                                <input type="text" class="form-control" id="node_user" name="node_user" 
-                                       value="root@pam" required>
-                                <div class="form-text">Usually root@pam</div>
+                        <div class="mb-3">
+                            <label for="node_user" class="form-label">Username</label>
+                            <input type="text" class="form-control" id="node_user" name="node_user"
+                                   value="root@pam" required>
+                            <div class="form-text">Usually root@pam (for API token, use user@realm format without token suffix)</div>
+                        </div>
+
+                        <!-- Authentication Type -->
+                        <div class="mb-3">
+                            <label class="form-label">Authentication Method</label>
+                            <div class="btn-group w-100" role="group">
+                                <input type="radio" class="btn-check" name="auth_type" id="auth_password" value="password" checked onchange="toggleAuthFields()">
+                                <label class="btn btn-outline-primary" for="auth_password">
+                                    <i class="bi bi-key"></i> Password
+                                </label>
+                                <input type="radio" class="btn-check" name="auth_type" id="auth_token" value="token" onchange="toggleAuthFields()">
+                                <label class="btn btn-outline-primary" for="auth_token">
+                                    <i class="bi bi-shield-lock"></i> API Token
+                                </label>
                             </div>
-                            <div class="col-md-6 mb-3">
-                                <label for="node_password" class="form-label">Password</label>
-                                <input type="password" class="form-control" id="node_password" name="node_password" required>
-                                <div class="form-text">Root password for Proxmox</div>
+                        </div>
+
+                        <!-- Password Fields -->
+                        <div id="password_fields" class="mb-3">
+                            <label for="node_password" class="form-label">Password</label>
+                            <input type="password" class="form-control" id="node_password" name="node_password">
+                            <div class="form-text">Root password for Proxmox</div>
+                        </div>
+
+                        <!-- API Token Fields -->
+                        <div id="token_fields" class="mb-3" style="display: none;">
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label for="token_name" class="form-label">Token Name</label>
+                                    <input type="text" class="form-control" id="token_name" name="token_name" placeholder="mytoken">
+                                    <div class="form-text">Token ID (without user prefix)</div>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label for="token_value" class="form-label">Token Secret</label>
+                                    <input type="password" class="form-control" id="token_value" name="token_value" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+                                    <div class="form-text">Token secret value (UUID format)</div>
+                                </div>
+                            </div>
+                            <div class="alert alert-info small">
+                                <i class="bi bi-info-circle"></i>
+                                <strong>API Token Format:</strong> Create tokens in Proxmox under Datacenter → Permissions → API Tokens.
+                                The token is in format <code>user@realm!tokenid</code> - enter just the token ID here.
                             </div>
                         </div>
 
@@ -180,15 +216,25 @@
                 <ul class="mb-3">
                     <li><strong>Connection refused:</strong> Check if Proxmox web interface is accessible</li>
                     <li><strong>SSL errors:</strong> Uncheck "Verify SSL Certificate" for self-signed certs</li>
-                    <li><strong>Authentication failed:</strong> Verify username/password combination</li>
+                    <li><strong>Authentication failed:</strong> Verify username/password or token credentials</li>
                     <li><strong>Network timeout:</strong> Ensure firewall allows port 8006</li>
+                    <li><strong>No data with API token:</strong> Ensure "Privilege Separation" is unchecked when creating the token, or assign PVEAuditor role to the token</li>
                 </ul>
-                
+
                 <h6>Default Settings:</h6>
-                <ul class="mb-0">
+                <ul class="mb-3">
                     <li><strong>Web Interface:</strong> https://your-ip:8006</li>
                     <li><strong>Username:</strong> root@pam</li>
                     <li><strong>Port:</strong> 8006 (HTTPS)</li>
+                </ul>
+
+                <h6>API Token Setup:</h6>
+                <ul class="mb-0">
+                    <li>Go to Datacenter → Permissions → API Tokens</li>
+                    <li>Click "Add" and select a user (e.g., root@pam)</li>
+                    <li>Enter a token ID (e.g., "proxui")</li>
+                    <li><strong>Uncheck "Privilege Separation"</strong> for full user permissions</li>
+                    <li>Copy the token secret (shown only once!)</li>
                 </ul>
             </div>
         </div>
@@ -218,11 +264,13 @@ function testConnection() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
+            let alertClass = data.warning ? 'alert-warning' : 'alert-success';
+            let warningHtml = data.warning ? `<br><br><i class="bi bi-exclamation-triangle"></i> <strong>Warning:</strong> ${data.warning}` : '';
             statusDiv.innerHTML = `
-                <div class="alert alert-success">
-                    <i class="bi bi-check-circle"></i> 
+                <div class="alert ${alertClass}">
+                    <i class="bi bi-check-circle"></i>
                     <strong>Connection successful!</strong><br>
-                    Connected to ${data.node_name} running Proxmox VE ${data.version}
+                    Connected to ${data.node_name} running Proxmox VE ${data.version}${warningHtml}
                 </div>
             `;
         } else {
@@ -285,8 +333,44 @@ function switchCluster(clusterId) {
 }
 
 function editCluster(clusterId) {
-    // TODO: Implement cluster editing
-    alert('Cluster editing is not yet implemented. You can manually edit the ./data/config.toml file.');
+    // Fetch cluster configuration
+    fetch(`/api/cluster/${clusterId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const cluster = data.cluster;
+                const node = cluster.nodes[0] || {};
+
+                // Populate edit modal
+                document.getElementById('edit_cluster_id').value = cluster.id;
+                document.getElementById('edit_cluster_name').value = cluster.name;
+                document.getElementById('edit_node_host').value = node.host || '';
+                document.getElementById('edit_node_user').value = node.user || '';
+                document.getElementById('edit_verify_ssl').checked = node.verify_ssl !== false;
+
+                // Set auth type
+                if (node.auth_type === 'token') {
+                    document.getElementById('edit_auth_token').checked = true;
+                    document.getElementById('edit_token_name').value = node.token_name || '';
+                } else {
+                    document.getElementById('edit_auth_password').checked = true;
+                }
+                toggleEditAuthFields();
+
+                // Clear password/token value fields (they need to be re-entered for security)
+                document.getElementById('edit_node_password').value = '';
+                document.getElementById('edit_token_value').value = '';
+
+                // Show modal
+                const modal = new bootstrap.Modal(document.getElementById('editClusterModal'));
+                modal.show();
+            } else {
+                alert('Failed to load cluster: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(error => {
+            alert('Network error: ' + error.message);
+        });
 }
 
 function deleteCluster(clusterId, clusterName) {
@@ -321,9 +405,9 @@ document.addEventListener('DOMContentLoaded', function() {
 function checkClusterStatus(clusterId) {
     const statusElement = document.getElementById(`status-${clusterId}`);
     if (!statusElement) return;
-    
+
     statusElement.innerHTML = '<small class="text-muted"><i class="bi bi-arrow-clockwise spin"></i> Checking...</small>';
-    
+
     fetch(`/api/cluster-status/${clusterId}`)
         .then(response => response.json())
         .then(data => {
@@ -337,5 +421,176 @@ function checkClusterStatus(clusterId) {
             statusElement.innerHTML = `<small class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> Error</small>`;
         });
 }
+
+// Toggle auth fields for add form
+function toggleAuthFields() {
+    const isToken = document.getElementById('auth_token').checked;
+    document.getElementById('password_fields').style.display = isToken ? 'none' : 'block';
+    document.getElementById('token_fields').style.display = isToken ? 'block' : 'none';
+
+    // Update required attributes
+    document.getElementById('node_password').required = !isToken;
+    document.getElementById('token_name').required = isToken;
+    document.getElementById('token_value').required = isToken;
+}
+
+// Toggle auth fields for edit form
+function toggleEditAuthFields() {
+    const isToken = document.getElementById('edit_auth_token').checked;
+    document.getElementById('edit_password_fields').style.display = isToken ? 'none' : 'block';
+    document.getElementById('edit_token_fields').style.display = isToken ? 'block' : 'none';
+}
+
+// Save edited cluster
+function saveClusterEdit() {
+    const clusterId = document.getElementById('edit_cluster_id').value;
+    const authType = document.getElementById('edit_auth_token').checked ? 'token' : 'password';
+
+    const data = {
+        name: document.getElementById('edit_cluster_name').value,
+        nodes: [{
+            host: document.getElementById('edit_node_host').value,
+            user: document.getElementById('edit_node_user').value,
+            verify_ssl: document.getElementById('edit_verify_ssl').checked,
+            auth_type: authType,
+        }]
+    };
+
+    // Add auth credentials based on type
+    if (authType === 'token') {
+        const tokenName = document.getElementById('edit_token_name').value;
+        const tokenValue = document.getElementById('edit_token_value').value;
+        if (tokenName) data.nodes[0].token_name = tokenName;
+        if (tokenValue) data.nodes[0].token_value = tokenValue;
+    } else {
+        const password = document.getElementById('edit_node_password').value;
+        if (password) data.nodes[0].password = password;
+    }
+
+    const saveBtn = document.querySelector('#editClusterModal .btn-primary');
+    const originalText = saveBtn.innerHTML;
+    saveBtn.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Saving...';
+    saveBtn.disabled = true;
+
+    fetch(`/api/cluster/${clusterId}`, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            bootstrap.Modal.getInstance(document.getElementById('editClusterModal')).hide();
+            window.location.reload();
+        } else {
+            alert('Failed to save cluster: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        alert('Network error: ' + error.message);
+    })
+    .finally(() => {
+        saveBtn.innerHTML = originalText;
+        saveBtn.disabled = false;
+    });
+}
 </script>
+
+<!-- Edit Cluster Modal -->
+<div class="modal fade" id="editClusterModal" tabindex="-1" aria-labelledby="editClusterModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editClusterModalLabel">
+                    <i class="bi bi-pencil text-primary"></i> Edit Cluster
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="edit_cluster_id">
+
+                <!-- Cluster Information -->
+                <div class="mb-4">
+                    <h6 class="text-primary mb-3">
+                        <i class="bi bi-diagram-2"></i> Cluster Information
+                    </h6>
+                    <div class="mb-3">
+                        <label for="edit_cluster_name" class="form-label">Cluster Name</label>
+                        <input type="text" class="form-control" id="edit_cluster_name" required>
+                    </div>
+                </div>
+
+                <!-- Node Connection -->
+                <div class="mb-4">
+                    <h6 class="text-primary mb-3">
+                        <i class="bi bi-hdd-network"></i> Node Connection
+                    </h6>
+
+                    <div class="mb-3">
+                        <label for="edit_node_host" class="form-label">Proxmox Host</label>
+                        <input type="text" class="form-control" id="edit_node_host" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="edit_node_user" class="form-label">Username</label>
+                        <input type="text" class="form-control" id="edit_node_user" required>
+                    </div>
+
+                    <!-- Authentication Type -->
+                    <div class="mb-3">
+                        <label class="form-label">Authentication Method</label>
+                        <div class="btn-group w-100" role="group">
+                            <input type="radio" class="btn-check" name="edit_auth_type" id="edit_auth_password" value="password" checked onchange="toggleEditAuthFields()">
+                            <label class="btn btn-outline-primary" for="edit_auth_password">
+                                <i class="bi bi-key"></i> Password
+                            </label>
+                            <input type="radio" class="btn-check" name="edit_auth_type" id="edit_auth_token" value="token" onchange="toggleEditAuthFields()">
+                            <label class="btn btn-outline-primary" for="edit_auth_token">
+                                <i class="bi bi-shield-lock"></i> API Token
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Password Fields -->
+                    <div id="edit_password_fields" class="mb-3">
+                        <label for="edit_node_password" class="form-label">Password</label>
+                        <input type="password" class="form-control" id="edit_node_password" placeholder="Leave empty to keep existing">
+                        <div class="form-text">Leave empty to keep existing password</div>
+                    </div>
+
+                    <!-- API Token Fields -->
+                    <div id="edit_token_fields" class="mb-3" style="display: none;">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="edit_token_name" class="form-label">Token Name</label>
+                                <input type="text" class="form-control" id="edit_token_name" placeholder="mytoken">
+                                <div class="form-text">Token ID (without user prefix)</div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="edit_token_value" class="form-label">Token Secret</label>
+                                <input type="password" class="form-control" id="edit_token_value" placeholder="Leave empty to keep existing">
+                                <div class="form-text">Leave empty to keep existing token</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="edit_verify_ssl">
+                        <label class="form-check-label" for="edit_verify_ssl">
+                            Verify SSL Certificate
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveClusterEdit()">
+                    <i class="bi bi-check-lg"></i> Save Changes
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}

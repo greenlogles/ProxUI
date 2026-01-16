@@ -79,6 +79,31 @@ cluster_nodes = []  # Store all nodes from current cluster
 connection_metadata = {}  # Store connection metadata for renewal
 
 
+def create_proxmox_connection(node_config):
+    """Create a ProxmoxAPI connection from node config, supporting both password and API token auth"""
+    host = node_config["host"]
+    user = node_config["user"]
+    verify_ssl = node_config.get("verify_ssl", True)
+
+    # Check if using API token authentication
+    if node_config.get("token_name") and node_config.get("token_value"):
+        return ProxmoxAPI(
+            host,
+            user=user,
+            token_name=node_config["token_name"],
+            token_value=node_config["token_value"],
+            verify_ssl=verify_ssl,
+        )
+    else:
+        # Password-based authentication
+        return ProxmoxAPI(
+            host,
+            user=user,
+            password=node_config["password"],
+            verify_ssl=verify_ssl,
+        )
+
+
 def init_all_clusters():
     """Initialize all cluster configurations"""
     global all_clusters, current_cluster_id
@@ -124,25 +149,26 @@ def init_proxmox_connections(cluster_id=None):
     # Connect to configured nodes for this cluster
     for node_config in cluster_config.get("nodes", []):
         try:
-            proxmox = ProxmoxAPI(
-                node_config["host"],
-                user=node_config["user"],
-                password=node_config["password"],
-                verify_ssl=node_config.get("verify_ssl", True),
-            )
+            proxmox = create_proxmox_connection(node_config)
 
             # Test connection
             version = proxmox.version.get()
             print(f"Connected to {node_config['host']} - PVE {version['version']}")
 
             # Store connection metadata for renewal
-            connection_metadata[node_config["host"]] = {
+            metadata = {
                 "host": node_config["host"],
                 "user": node_config["user"],
-                "password": node_config["password"],
                 "verify_ssl": node_config.get("verify_ssl", True),
                 "last_authenticated": datetime.now(),
             }
+            # Store auth credentials (token or password)
+            if node_config.get("token_name") and node_config.get("token_value"):
+                metadata["token_name"] = node_config["token_name"]
+                metadata["token_value"] = node_config["token_value"]
+            else:
+                metadata["password"] = node_config["password"]
+            connection_metadata[node_config["host"]] = metadata
 
             # Get all nodes in the cluster through this connection
             try:
@@ -211,13 +237,8 @@ def renew_proxmox_connection(node_name):
     try:
         print(f"Renewing connection for node {node_name}...")
 
-        # Create new connection
-        new_proxmox = ProxmoxAPI(
-            metadata["host"],
-            user=metadata["user"],
-            password=metadata["password"],
-            verify_ssl=metadata["verify_ssl"],
-        )
+        # Create new connection using stored metadata
+        new_proxmox = create_proxmox_connection(metadata)
 
         # Test the new connection
         version = new_proxmox.version.get()
@@ -742,7 +763,10 @@ def connect():
         cluster_id = request.form.get("cluster_id")
         node_host = request.form.get("node_host")
         node_user = request.form.get("node_user")
+        auth_type = request.form.get("auth_type", "password")
         node_password = request.form.get("node_password")
+        token_name = request.form.get("token_name")
+        token_value = request.form.get("token_value")
         verify_ssl = "verify_ssl" in request.form
 
         # Check if cluster ID already exists
@@ -763,18 +787,33 @@ def connect():
                 ],
             )
 
+        # Create node config based on auth type
+        node_config = {
+            "host": node_host,
+            "user": node_user,
+            "verify_ssl": verify_ssl,
+        }
+
+        if auth_type == "token":
+            if not token_name or not token_value:
+                flash(
+                    "Token name and token value are required for API token authentication.",
+                    "error",
+                )
+                return render_template("connect.html")
+            node_config["token_name"] = token_name
+            node_config["token_value"] = token_value
+        else:
+            if not node_password:
+                flash("Password is required for password authentication.", "error")
+                return render_template("connect.html")
+            node_config["password"] = node_password
+
         # Create new cluster config
         new_cluster = {
             "id": cluster_id,
             "name": cluster_name,
-            "nodes": [
-                {
-                    "host": node_host,
-                    "user": node_user,
-                    "password": node_password,
-                    "verify_ssl": verify_ssl,
-                }
-            ],
+            "nodes": [node_config],
         }
 
         # Add to existing config or create new
@@ -786,9 +825,7 @@ def connect():
 
         # Test connection first
         try:
-            test_proxmox = ProxmoxAPI(
-                node_host, user=node_user, password=node_password, verify_ssl=verify_ssl
-            )
+            test_proxmox = create_proxmox_connection(node_config)
             version = test_proxmox.version.get()
             print(f"Test connection successful - PVE {version['version']}")
         except Exception as e:
@@ -823,25 +860,54 @@ def api_test_connection():
     try:
         node_host = request.form.get("node_host")
         node_user = request.form.get("node_user")
+        auth_type = request.form.get("auth_type", "password")
         node_password = request.form.get("node_password")
+        token_name = request.form.get("token_name")
+        token_value = request.form.get("token_value")
         verify_ssl = "verify_ssl" in request.form
 
+        # Build node config for connection helper
+        node_config = {
+            "host": node_host,
+            "user": node_user,
+            "verify_ssl": verify_ssl,
+        }
+
+        if auth_type == "token":
+            node_config["token_name"] = token_name
+            node_config["token_value"] = token_value
+        else:
+            node_config["password"] = node_password
+
         # Test connection
-        test_proxmox = ProxmoxAPI(
-            node_host, user=node_user, password=node_password, verify_ssl=verify_ssl
-        )
+        test_proxmox = create_proxmox_connection(node_config)
 
         version = test_proxmox.version.get()
         nodes = test_proxmox.nodes.get()
 
-        return jsonify(
-            {
-                "success": True,
-                "version": version["version"],
-                "node_name": nodes[0]["node"] if nodes else "Unknown",
-                "nodes_count": len(nodes),
-            }
-        )
+        # Also test permissions to read cluster resources
+        permission_warning = None
+        try:
+            test_proxmox.cluster.resources.get(type="vm")
+        except Exception as perm_error:
+            error_str = str(perm_error).lower()
+            if "permission" in error_str or "403" in error_str:
+                permission_warning = (
+                    "Connection successful but token may lack permissions to read resources. "
+                    "If using API tokens, ensure 'Privilege Separation' is unchecked or "
+                    "assign appropriate permissions (e.g., PVEAuditor role) to the token."
+                )
+
+        response = {
+            "success": True,
+            "version": version["version"],
+            "node_name": nodes[0]["node"] if nodes else "Unknown",
+            "nodes_count": len(nodes),
+        }
+        if permission_warning:
+            response["warning"] = permission_warning
+
+        return jsonify(response)
 
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
@@ -886,6 +952,181 @@ def api_delete_cluster(cluster_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/cluster/<cluster_id>", methods=["GET"])
+def api_get_cluster(cluster_id):
+    """Get cluster configuration (credentials masked)"""
+    try:
+        if cluster_id not in all_clusters:
+            return jsonify({"error": "Cluster not found"}), 404
+
+        cluster_config = all_clusters[cluster_id]
+
+        # Build response with masked credentials
+        nodes = []
+        for node in cluster_config.get("nodes", []):
+            node_info = {
+                "host": node.get("host", ""),
+                "user": node.get("user", ""),
+                "verify_ssl": node.get("verify_ssl", True),
+            }
+            # Indicate auth type without exposing credentials
+            if node.get("token_name"):
+                node_info["auth_type"] = "token"
+                node_info["token_name"] = node.get("token_name", "")
+                node_info["has_token_value"] = bool(node.get("token_value"))
+            else:
+                node_info["auth_type"] = "password"
+                node_info["has_password"] = bool(node.get("password"))
+            nodes.append(node_info)
+
+        return jsonify(
+            {
+                "success": True,
+                "cluster": {
+                    "id": cluster_id,
+                    "name": cluster_config.get("name", cluster_id),
+                    "nodes": nodes,
+                },
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/cluster/<cluster_id>", methods=["PUT"])
+def api_update_cluster(cluster_id):
+    """Update cluster configuration"""
+    global config
+
+    try:
+        if cluster_id not in all_clusters:
+            return jsonify({"error": "Cluster not found"}), 404
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        # Find and update cluster in config
+        for i, cluster in enumerate(config["clusters"]):
+            if cluster.get("id") == cluster_id:
+                # Update cluster name if provided
+                if "name" in data:
+                    config["clusters"][i]["name"] = data["name"]
+
+                # Update nodes if provided
+                if "nodes" in data and len(data["nodes"]) > 0:
+                    node_data = data["nodes"][0]  # Currently support single node
+                    existing_node = (
+                        config["clusters"][i]["nodes"][0]
+                        if config["clusters"][i].get("nodes")
+                        else {}
+                    )
+
+                    updated_node = {
+                        "host": node_data.get("host", existing_node.get("host", "")),
+                        "user": node_data.get("user", existing_node.get("user", "")),
+                        "verify_ssl": node_data.get(
+                            "verify_ssl", existing_node.get("verify_ssl", True)
+                        ),
+                    }
+
+                    # Handle auth type - ensure we don't mix password and token auth
+                    auth_type = node_data.get("auth_type", "password")
+                    if auth_type == "token":
+                        # Token auth - do NOT include password field
+                        token_name = node_data.get("token_name")
+                        token_value = node_data.get("token_value")
+
+                        if token_name:
+                            updated_node["token_name"] = token_name
+                        elif existing_node.get("token_name"):
+                            updated_node["token_name"] = existing_node["token_name"]
+
+                        if token_value:
+                            updated_node["token_value"] = token_value
+                        elif existing_node.get("token_value"):
+                            updated_node["token_value"] = existing_node["token_value"]
+
+                        # Validate that we have both token fields
+                        if not updated_node.get("token_name") or not updated_node.get(
+                            "token_value"
+                        ):
+                            return (
+                                jsonify(
+                                    {
+                                        "error": "Both token name and token value are required for API token authentication"
+                                    }
+                                ),
+                                400,
+                            )
+                    else:
+                        # Password auth - do NOT include token fields
+                        password = node_data.get("password")
+                        if password:
+                            updated_node["password"] = password
+                        elif existing_node.get("password"):
+                            updated_node["password"] = existing_node["password"]
+
+                        # Validate that we have password
+                        if not updated_node.get("password"):
+                            return (
+                                jsonify(
+                                    {
+                                        "error": "Password is required for password authentication"
+                                    }
+                                ),
+                                400,
+                            )
+
+                    config["clusters"][i]["nodes"] = [updated_node]
+
+                break
+
+        # Test connection before saving
+        if "nodes" in data and data.get("test_connection", True):
+            try:
+                test_node = config["clusters"][i]["nodes"][0]
+                test_proxmox = create_proxmox_connection(test_node)
+                # Basic connectivity test
+                test_proxmox.version.get()
+                # Also test that we can read cluster resources (catches permission issues)
+                try:
+                    test_proxmox.cluster.resources.get(type="vm")
+                except Exception as perm_error:
+                    error_str = str(perm_error).lower()
+                    if "permission" in error_str or "403" in error_str:
+                        return (
+                            jsonify(
+                                {
+                                    "error": "Connection successful but token lacks permissions to read resources. "
+                                    "If using API tokens, ensure 'Privilege Separation' is unchecked or "
+                                    "assign appropriate permissions (e.g., PVEAuditor role) to the token."
+                                }
+                            ),
+                            400,
+                        )
+                    raise
+            except Exception as e:
+                return jsonify({"error": f"Connection test failed: {str(e)}"}), 400
+
+        # Save config file
+        with open(CONFIG_FILE_PATH, "w") as f:
+            toml.dump(config, f)
+
+        # Reinitialize clusters
+        init_all_clusters()
+
+        # Reinitialize connections if this is the current cluster
+        if current_cluster_id == cluster_id:
+            init_proxmox_connections(cluster_id)
+
+        return jsonify({"success": True})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/cluster-status/<cluster_id>")
 def api_cluster_status(cluster_id):
     """Check if cluster is reachable"""
@@ -901,12 +1142,7 @@ def api_cluster_status(cluster_id):
 
         # Test connection to first node
         node = nodes[0]
-        test_proxmox = ProxmoxAPI(
-            node["host"],
-            user=node["user"],
-            password=node["password"],
-            verify_ssl=node.get("verify_ssl", True),
-        )
+        test_proxmox = create_proxmox_connection(node)
 
         # Simple version check to test connectivity
         version = test_proxmox.version.get()

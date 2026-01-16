@@ -1,3 +1,7 @@
+# Proxmox cluster configuration
+# You can configure multiple clusters and switch between them in the UI
+
+# Example cluster with password authentication
 [[clusters]]
 id = "main"
 name = "My Proxmox Cluster 1"
@@ -8,13 +12,33 @@ name = "My Proxmox Cluster 1"
     password = "admin"
     verify_ssl = false
 
- 
-# Example second cluster (uncomment and configure as needed)
+
+# Example cluster with API token authentication (recommended for production)
+# To create an API token in Proxmox:
+# 1. Go to Datacenter → Permissions → API Tokens
+# 2. Click "Add" and select a user
+# 3. Enter a token ID (e.g., "proxui")
+# 4. Optionally uncheck "Privilege Separation" for full user permissions
+# 5. Copy the token secret (shown only once!)
+#
+#[[clusters]]
+#id = "production"
+#name = "Production Cluster"
+#
+#    [[clusters.nodes]]
+#    host = "pve.example.com"
+#    user = "root@pam"
+#    token_name = "proxui"
+#    token_value = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+#    verify_ssl = true
+
+
+# Example second cluster with password auth (uncomment and configure as needed)
 #[[clusters]]
 #id = "secondary"
 #name = "My Proxmox Cluster 2"
 #
-#   [[clusters.nodes]]
+#    [[clusters.nodes]]
 #    host = "x.y.z.2"
 #    user = "root@pam"
 #    password = "admin"
