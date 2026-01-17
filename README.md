@@ -9,9 +9,11 @@ ProxUI isn't a replacement for Proxmox web interface, but a light-weight additio
 ### Virtual Machine Management
 - Represents VM and container status and performance metrics in more readable way
 - Creation VMs and containers from templates
+- **Cloud VM Templates**: Create VM templates from popular cloud images (Ubuntu, Debian, Rocky, Alma, Fedora) with cloud-init support
 - Built-in configuration editor
 - QEMU Guest Agent integration for disk usage monitoring
 - Consolidated configuration single-page view incluing cloud-init params (like ssh keys)
+- Background job queue for long-running operations with real-time progress tracking
 
 ### Storage Management
 - Unified storage view across all cluster nodes
@@ -129,6 +131,37 @@ ProxUI supports two authentication methods:
 
 Configuration file can be managed manually or through the web UI (Cluster Management page).
 
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CONFIG_FILE_PATH` | Path to the main configuration file | `./data/config.toml` |
+| `CLOUD_IMAGES_PATH` | Path to custom cloud images JSON file | `./cloud_images.json` |
+
+### Custom Cloud Images
+
+ProxUI includes a default list of popular cloud images (Ubuntu, Debian, Rocky Linux, AlmaLinux, Fedora). You can customize this list by:
+
+1. Create your own `cloud_images.json` file:
+```json
+{
+    "my-custom-image": {
+        "name": "My Custom Linux",
+        "url": "https://example.com/my-image.qcow2",
+        "os_type": "l26",
+        "description": "My custom cloud image"
+    }
+}
+```
+
+2. Mount it and set the environment variable:
+```bash
+docker run -d \
+  -e CLOUD_IMAGES_PATH=/config/my-images.json \
+  -v ./my-images.json:/config/my-images.json \
+  ghcr.io/greenlogles/proxui:latest
+```
+
 ## Custom User creation
 
 If you are willing to use ProxUI with read-only user, create new one by running next command on one of the ProxMox servers:
@@ -163,8 +196,12 @@ services:
       - "8080:8080"
     volumes:
       - ./data:/app/data
+      # Optional: mount custom cloud images config
+      # - ./my-cloud-images.json:/config/cloud-images.json
     environment:
       - CONFIG_FILE_PATH=/app/data/config.toml
+      # Optional: use custom cloud images
+      # - CLOUD_IMAGES_PATH=/config/cloud-images.json
     restart: unless-stopped
 ```
 
