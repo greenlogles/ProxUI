@@ -1,0 +1,94 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for generating changelog
+
+      - name: Get previous tag
+        id: prev_tag
+        run: |
+          # Get the previous tag (the one before the current)
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+          echo "Previous tag: $PREV_TAG"
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          CURRENT_TAG=${GITHUB_REF#refs/tags/}
+          PREV_TAG="${{ steps.prev_tag.outputs.prev_tag }}"
+
+          echo "Generating release notes for $CURRENT_TAG"
+
+          # Start building release notes
+          NOTES="## What's Changed\n\n"
+
+          if [ -n "$PREV_TAG" ]; then
+            echo "Comparing $PREV_TAG to $CURRENT_TAG"
+
+            # Get commits between tags, grouped by type
+            FEATURES=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --grep="^Add\|^feat\|^Feature" --regexp-ignore-case 2>/dev/null || true)
+            FIXES=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --grep="^Fix\|^fix\|^Bug" --regexp-ignore-case 2>/dev/null || true)
+            IMPROVEMENTS=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --grep="^Update\|^Improve\|^Refactor\|^Enhance" --regexp-ignore-case 2>/dev/null || true)
+            DOCS=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --grep="^Doc\|^README" --regexp-ignore-case 2>/dev/null || true)
+
+            # Get all commits if categorized ones are empty
+            ALL_COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s" 2>/dev/null || true)
+
+            if [ -n "$FEATURES" ]; then
+              NOTES="${NOTES}### New Features\n${FEATURES}\n\n"
+            fi
+
+            if [ -n "$FIXES" ]; then
+              NOTES="${NOTES}### Bug Fixes\n${FIXES}\n\n"
+            fi
+
+            if [ -n "$IMPROVEMENTS" ]; then
+              NOTES="${NOTES}### Improvements\n${IMPROVEMENTS}\n\n"
+            fi
+
+            if [ -n "$DOCS" ]; then
+              NOTES="${NOTES}### Documentation\n${DOCS}\n\n"
+            fi
+
+            # If no categorized commits, show all
+            if [ -z "$FEATURES" ] && [ -z "$FIXES" ] && [ -z "$IMPROVEMENTS" ] && [ -z "$DOCS" ]; then
+              if [ -n "$ALL_COMMITS" ]; then
+                NOTES="${NOTES}### Changes\n${ALL_COMMITS}\n\n"
+              fi
+            fi
+
+            NOTES="${NOTES}**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${CURRENT_TAG}"
+          else
+            echo "No previous tag found, this is the first release"
+            ALL_COMMITS=$(git log --pretty=format:"- %s" -20 2>/dev/null || true)
+            NOTES="${NOTES}### Changes\n${ALL_COMMITS}\n\n"
+            NOTES="${NOTES}*This is the first release*"
+          fi
+
+          # Write notes to file (handles multiline)
+          echo -e "$NOTES" > release_notes.md
+          cat release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref, '-alpha') || contains(github.ref, '-beta') || contains(github.ref, '-rc') }}
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
