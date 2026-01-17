@@ -26,8 +26,16 @@ RETRY_BASE_DELAY = 2  # seconds
 RETRY_MAX_DELAY = 30  # seconds
 
 
-def retry_on_timeout(func, *args, max_attempts=RETRY_MAX_ATTEMPTS, base_delay=RETRY_BASE_DELAY,
-                     job_id=None, job_queue_ref=None, operation_name="operation", **kwargs):
+def retry_on_timeout(
+    func,
+    *args,
+    max_attempts=RETRY_MAX_ATTEMPTS,
+    base_delay=RETRY_BASE_DELAY,
+    job_id=None,
+    job_queue_ref=None,
+    operation_name="operation",
+    **kwargs,
+):
     """
     Retry a function on timeout errors with exponential backoff.
 
@@ -55,10 +63,16 @@ def retry_on_timeout(func, *args, max_attempts=RETRY_MAX_ATTEMPTS, base_delay=RE
         except Exception as e:
             error_str = str(e).lower()
             # Check if it's a timeout-related error
-            is_timeout = any(x in error_str for x in [
-                'timed out', 'timeout', 'read timeout',
-                'connection timeout', 'connecttimeout'
-            ])
+            is_timeout = any(
+                x in error_str
+                for x in [
+                    "timed out",
+                    "timeout",
+                    "read timeout",
+                    "connection timeout",
+                    "connecttimeout",
+                ]
+            )
 
             if not is_timeout:
                 # Not a timeout error, re-raise immediately
@@ -94,6 +108,7 @@ app.secret_key = "your-secret-key-here"
 # =============================================================================
 # Background Job Queue System
 # =============================================================================
+
 
 class JobQueue:
     """Simple in-memory job queue for background tasks"""
@@ -162,7 +177,7 @@ class JobQueue:
             progress=100,
             result=result,
             completed_at=datetime.now().isoformat(),
-            current_step="Completed"
+            current_step="Completed",
         )
 
     def set_failed(self, job_id, error):
@@ -172,7 +187,7 @@ class JobQueue:
             status="failed",
             error=str(error),
             completed_at=datetime.now().isoformat(),
-            current_step=f"Failed: {error}"
+            current_step=f"Failed: {error}",
         )
 
     def delete_job(self, job_id):
@@ -257,7 +272,10 @@ except Exception as e:
 
 # Cloud image definitions for VM templates
 # Load cloud images from external JSON file
-CLOUD_IMAGES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cloud_images.json")
+CLOUD_IMAGES_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "cloud_images.json"
+)
+
 
 def load_cloud_images():
     """Load cloud images configuration from JSON file"""
@@ -270,6 +288,7 @@ def load_cloud_images():
     except json.JSONDecodeError as e:
         print(f"Warning: Invalid JSON in cloud images file: {e}")
         return {}
+
 
 CLOUD_IMAGES = load_cloud_images()
 
@@ -3076,18 +3095,21 @@ def api_cloud_images():
     """API endpoint to get available cloud images for template creation"""
     images = []
     for image_id, image_info in CLOUD_IMAGES.items():
-        images.append({
-            "id": image_id,
-            "name": image_info["name"],
-            "description": image_info["description"],
-            "url": image_info["url"],
-        })
+        images.append(
+            {
+                "id": image_id,
+                "name": image_info["name"],
+                "description": image_info["description"],
+                "url": image_info["url"],
+            }
+        )
     return jsonify(images)
 
 
 # =============================================================================
 # Job Queue API Endpoints
 # =============================================================================
+
 
 @app.route("/api/jobs")
 def api_get_jobs():
@@ -3120,6 +3142,7 @@ def api_delete_job(job_id):
 # =============================================================================
 # Cloud Template Creation with Background Jobs
 # =============================================================================
+
 
 def wait_for_task(proxmox, node, task_upid, job_id, timeout=600, poll_interval=3):
     """Wait for a Proxmox task to complete, updating job progress"""
@@ -3162,11 +3185,13 @@ def run_cloud_template_job(job_id, node, params):
         # Normalize filename extension for Proxmox import
         # Cloud images with .img extension are typically qcow2 format
         # Proxmox download-url API requires proper extension for 'import' content type
-        if image_filename_original.endswith('.img'):
-            image_filename = image_filename_original[:-4] + '.qcow2'
-        elif not any(image_filename_original.endswith(ext) for ext in ['.qcow2', '.raw', '.vmdk']):
+        if image_filename_original.endswith(".img"):
+            image_filename = image_filename_original[:-4] + ".qcow2"
+        elif not any(
+            image_filename_original.endswith(ext) for ext in [".qcow2", ".raw", ".vmdk"]
+        ):
             # Add .qcow2 extension if no recognized extension
-            image_filename = image_filename_original + '.qcow2'
+            image_filename = image_filename_original + ".qcow2"
         else:
             image_filename = image_filename_original
 
@@ -3224,34 +3249,55 @@ def run_cloud_template_job(job_id, node, params):
                     break
 
         if not download_storage:
-            job_queue.set_failed(job_id, "No storage with 'import' or 'images' content type found. Proxmox 8.1+ required for cloud template import.")
+            job_queue.set_failed(
+                job_id,
+                "No storage with 'import' or 'images' content type found. Proxmox 8.1+ required for cloud template import.",
+            )
             return
 
-        job_queue.add_step(job_id, f"Using storage '{download_storage}' for download (content type: {download_content_type})")
+        job_queue.add_step(
+            job_id,
+            f"Using storage '{download_storage}' for download (content type: {download_content_type})",
+        )
 
         # Step 2: Download cloud image to the storage
         job_queue.add_step(job_id, f"Downloading cloud image: {image_filename}...")
         job_queue.update_job(job_id, progress=10)
 
         try:
-            print(f"node '{node}', storage '{storage}', url '{image_url}', fiilename '{image_filename}', content type '{download_content_type}'")
+            print(
+                f"node '{node}', storage '{storage}', url '{image_url}', fiilename '{image_filename}', content type '{download_content_type}'"
+            )
             download_task = (
                 proxmox.nodes(node)
                 .storage(download_storage)("download-url")
-                .post(content=download_content_type, filename=image_filename, url=image_url, node=node)
+                .post(
+                    content=download_content_type,
+                    filename=image_filename,
+                    url=image_url,
+                    node=node,
+                )
             )
             job_queue.add_step(job_id, f"Download task started: {download_task}")
         except Exception as e:
             error_str = str(e).lower()
             if "import" in error_str or "content" in error_str:
-                job_queue.set_failed(job_id, f"Storage does not support 'import' content type. Proxmox 8.1+ required. Error: {e}")
+                job_queue.set_failed(
+                    job_id,
+                    f"Storage does not support 'import' content type. Proxmox 8.1+ required. Error: {e}",
+                )
             else:
                 job_queue.set_failed(job_id, f"Failed to start download: {e}")
             return
 
         # Wait for download to complete
-        job_queue.add_step(job_id, "Waiting for download to complete (this may take several minutes)...")
-        result = wait_for_task(proxmox, node, download_task, job_id, timeout=900)  # 15 min timeout
+        job_queue.add_step(
+            job_id,
+            "Waiting for download to complete (this may take several minutes)...",
+        )
+        result = wait_for_task(
+            proxmox, node, download_task, job_id, timeout=900
+        )  # 15 min timeout
         if not result["success"]:
             job_queue.set_failed(job_id, result["error"])
             return
@@ -3305,7 +3351,7 @@ def run_cloud_template_job(job_id, node, params):
                 base_delay=5,
                 job_id=job_id,
                 job_queue_ref=job_queue,
-                operation_name="disk import"
+                operation_name="disk import",
             )
             job_queue.add_step(job_id, "Disk imported successfully")
         except Exception as e:
@@ -3317,17 +3363,17 @@ def run_cloud_template_job(job_id, node, params):
         # Step 5: Configure boot disk
         job_queue.add_step(job_id, "Configuring boot settings...")
         try:
+
             def do_boot_config():
                 proxmox.nodes(node).qemu(vmid).config.put(
-                    boot="order=scsi0",
-                    bootdisk="scsi0"
+                    boot="order=scsi0", bootdisk="scsi0"
                 )
 
             retry_on_timeout(
                 do_boot_config,
                 job_id=job_id,
                 job_queue_ref=job_queue,
-                operation_name="boot config"
+                operation_name="boot config",
             )
         except Exception as e:
             job_queue.add_step(job_id, f"Boot config warning: {e}")
@@ -3337,16 +3383,15 @@ def run_cloud_template_job(job_id, node, params):
         # Step 6: Add cloud-init drive
         job_queue.add_step(job_id, "Adding cloud-init drive...")
         try:
+
             def do_cloudinit_drive():
-                proxmox.nodes(node).qemu(vmid).config.put(
-                    ide2=f"{storage}:cloudinit"
-                )
+                proxmox.nodes(node).qemu(vmid).config.put(ide2=f"{storage}:cloudinit")
 
             retry_on_timeout(
                 do_cloudinit_drive,
                 job_id=job_id,
                 job_queue_ref=job_queue,
-                operation_name="cloud-init drive"
+                operation_name="cloud-init drive",
             )
         except Exception as e:
             job_queue.add_step(job_id, f"Cloud-init drive warning: {e}")
@@ -3363,9 +3408,11 @@ def run_cloud_template_job(job_id, node, params):
         if ci_sshkeys:
             # SSH keys need to be URL-encoded
             import urllib.parse
-            ci_config["sshkeys"] = urllib.parse.quote(ci_sshkeys, safe='')
+
+            ci_config["sshkeys"] = urllib.parse.quote(ci_sshkeys, safe="")
 
         try:
+
             def do_cloudinit_config():
                 proxmox.nodes(node).qemu(vmid).config.put(**ci_config)
 
@@ -3373,7 +3420,7 @@ def run_cloud_template_job(job_id, node, params):
                 do_cloudinit_config,
                 job_id=job_id,
                 job_queue_ref=job_queue,
-                operation_name="cloud-init config"
+                operation_name="cloud-init config",
             )
         except Exception as e:
             job_queue.add_step(job_id, f"Cloud-init config warning: {e}")
@@ -3383,6 +3430,7 @@ def run_cloud_template_job(job_id, node, params):
         # Step 8: Resize disk
         job_queue.add_step(job_id, f"Resizing disk to {disk_size}...")
         try:
+
             def do_disk_resize():
                 proxmox.nodes(node).qemu(vmid).resize.put(disk="scsi0", size=disk_size)
 
@@ -3392,7 +3440,7 @@ def run_cloud_template_job(job_id, node, params):
                 base_delay=3,
                 job_id=job_id,
                 job_queue_ref=job_queue,
-                operation_name="disk resize"
+                operation_name="disk resize",
             )
             job_queue.add_step(job_id, "Disk resized successfully")
         except Exception as e:
@@ -3403,6 +3451,7 @@ def run_cloud_template_job(job_id, node, params):
         # Step 9: Convert to template
         job_queue.add_step(job_id, "Converting VM to template...")
         try:
+
             def do_template_convert():
                 proxmox.nodes(node).qemu(vmid).template.post()
 
@@ -3412,7 +3461,7 @@ def run_cloud_template_job(job_id, node, params):
                 base_delay=3,
                 job_id=job_id,
                 job_queue_ref=job_queue,
-                operation_name="template conversion"
+                operation_name="template conversion",
             )
             job_queue.add_step(job_id, "VM converted to template")
         except Exception as e:
@@ -3427,24 +3476,32 @@ def run_cloud_template_job(job_id, node, params):
             content_id = f"{download_storage}:{download_content_type}/{image_filename}"
 
             def do_cleanup():
-                proxmox.nodes(node).storage(download_storage).content(content_id).delete()
+                proxmox.nodes(node).storage(download_storage).content(
+                    content_id
+                ).delete()
 
             retry_on_timeout(
                 do_cleanup,
                 job_id=job_id,
                 job_queue_ref=job_queue,
-                operation_name="cleanup"
+                operation_name="cleanup",
             )
             job_queue.add_step(job_id, "Temporary image deleted")
         except Exception as e:
-            job_queue.add_step(job_id, f"Cleanup warning: {e} (you may want to manually delete {image_filename} from {download_storage})")
+            job_queue.add_step(
+                job_id,
+                f"Cleanup warning: {e} (you may want to manually delete {image_filename} from {download_storage})",
+            )
 
         # Done!
-        job_queue.set_completed(job_id, {
-            "vmid": vmid,
-            "name": name,
-            "node": node,
-        })
+        job_queue.set_completed(
+            job_id,
+            {
+                "vmid": vmid,
+                "name": name,
+                "node": node,
+            },
+        )
 
     except Exception as e:
         job_queue.set_failed(job_id, str(e))
@@ -3467,7 +3524,10 @@ def api_create_cloud_template(node):
         storage = data.get("storage")
 
         if not image_id or not storage:
-            return jsonify({"error": "Missing required parameters: image_id, storage"}), 400
+            return (
+                jsonify({"error": "Missing required parameters: image_id, storage"}),
+                400,
+            )
 
         if image_id not in CLOUD_IMAGES:
             return jsonify({"error": f"Unknown cloud image: {image_id}"}), 400
@@ -3502,23 +3562,23 @@ def api_create_cloud_template(node):
         job_id = job_queue.create_job(
             job_type="create_cloud_template",
             description=f"Create template '{params['name']}' on {node}",
-            params=params
+            params=params,
         )
 
         # Start background thread
         thread = threading.Thread(
-            target=run_cloud_template_job,
-            args=(job_id, node, params),
-            daemon=True
+            target=run_cloud_template_job, args=(job_id, node, params), daemon=True
         )
         thread.start()
 
-        return jsonify({
-            "success": True,
-            "message": "Template creation job started",
-            "job_id": job_id,
-            "vmid": vmid,
-        })
+        return jsonify(
+            {
+                "success": True,
+                "message": "Template creation job started",
+                "job_id": job_id,
+                "vmid": vmid,
+            }
+        )
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
