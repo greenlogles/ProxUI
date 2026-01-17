@@ -272,16 +272,24 @@ except Exception as e:
 
 # Cloud image definitions for VM templates
 # Load cloud images from external JSON file
-CLOUD_IMAGES_FILE = os.path.join(
+# Can be overridden via CLOUD_IMAGES_PATH environment variable
+CLOUD_IMAGES_DEFAULT_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "cloud_images.json"
 )
+CLOUD_IMAGES_FILE = os.environ.get("CLOUD_IMAGES_PATH", CLOUD_IMAGES_DEFAULT_PATH)
 
 
 def load_cloud_images():
-    """Load cloud images configuration from JSON file"""
+    """Load cloud images configuration from JSON file
+
+    The file path can be overridden by setting the CLOUD_IMAGES_PATH environment variable.
+    This is useful for container deployments where a custom images list can be mounted.
+    """
     try:
         with open(CLOUD_IMAGES_FILE, "r") as f:
-            return json.load(f)
+            images = json.load(f)
+            print(f"Loaded {len(images)} cloud images from {CLOUD_IMAGES_FILE}")
+            return images
     except FileNotFoundError:
         print(f"Warning: Cloud images file not found: {CLOUD_IMAGES_FILE}")
         return {}
