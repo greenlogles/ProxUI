@@ -17,6 +17,76 @@ from proxmoxer import ProxmoxAPI
 # Disable SSL warnings if needed
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Default timeout for Proxmox API operations (in seconds)
+PROXMOX_TIMEOUT = 30
+
+# Retry configuration for slow operations
+RETRY_MAX_ATTEMPTS = 3
+RETRY_BASE_DELAY = 2  # seconds
+RETRY_MAX_DELAY = 30  # seconds
+
+
+def retry_on_timeout(func, *args, max_attempts=RETRY_MAX_ATTEMPTS, base_delay=RETRY_BASE_DELAY,
+                     job_id=None, job_queue_ref=None, operation_name="operation", **kwargs):
+    """
+    Retry a function on timeout errors with exponential backoff.
+
+    Args:
+        func: The function to call
+        *args: Positional arguments for the function
+        max_attempts: Maximum number of retry attempts
+        base_delay: Initial delay between retries (doubles each attempt)
+        job_id: Optional job ID for logging to job queue
+        job_queue_ref: Optional reference to job queue for logging
+        operation_name: Name of the operation for logging
+        **kwargs: Keyword arguments for the function
+
+    Returns:
+        The result of the function call
+
+    Raises:
+        The last exception if all retries fail
+    """
+    last_exception = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            error_str = str(e).lower()
+            # Check if it's a timeout-related error
+            is_timeout = any(x in error_str for x in [
+                'timed out', 'timeout', 'read timeout',
+                'connection timeout', 'connecttimeout'
+            ])
+
+            if not is_timeout:
+                # Not a timeout error, re-raise immediately
+                raise
+
+            last_exception = e
+
+            if attempt < max_attempts:
+                # Calculate delay with exponential backoff
+                delay = min(base_delay * (2 ** (attempt - 1)), RETRY_MAX_DELAY)
+
+                log_msg = f"Timeout on {operation_name} (attempt {attempt}/{max_attempts}). Retrying in {delay}s..."
+                print(log_msg)
+
+                if job_id and job_queue_ref:
+                    job_queue_ref.add_step(job_id, log_msg)
+
+                time.sleep(delay)
+            else:
+                log_msg = f"Timeout on {operation_name} after {max_attempts} attempts. Giving up."
+                print(log_msg)
+                if job_id and job_queue_ref:
+                    job_queue_ref.add_step(job_id, log_msg)
+
+    # All retries exhausted
+    raise last_exception
+
+
 app = Flask(__name__)
 app.secret_key = "your-secret-key-here"
 
@@ -211,11 +281,20 @@ cluster_nodes = []  # Store all nodes from current cluster
 connection_metadata = {}  # Store connection metadata for renewal
 
 
-def create_proxmox_connection(node_config):
-    """Create a ProxmoxAPI connection from node config, supporting both password and API token auth"""
+def create_proxmox_connection(node_config, timeout=None):
+    """Create a ProxmoxAPI connection from node config, supporting both password and API token auth
+
+    Args:
+        node_config: Dictionary with connection settings (host, user, password/token, etc.)
+        timeout: Request timeout in seconds (default: PROXMOX_TIMEOUT)
+
+    Returns:
+        ProxmoxAPI instance
+    """
     host = node_config["host"]
     user = node_config["user"]
     verify_ssl = node_config.get("verify_ssl", True)
+    req_timeout = timeout if timeout is not None else PROXMOX_TIMEOUT
 
     # Check if using API token authentication
     if node_config.get("token_name") and node_config.get("token_value"):
@@ -225,6 +304,7 @@ def create_proxmox_connection(node_config):
             token_name=node_config["token_name"],
             token_value=node_config["token_value"],
             verify_ssl=verify_ssl,
+            timeout=req_timeout,
         )
     else:
         # Password-based authentication
@@ -233,6 +313,7 @@ def create_proxmox_connection(node_config):
             user=user,
             password=node_config["password"],
             verify_ssl=verify_ssl,
+            timeout=req_timeout,
         )
 
 
@@ -3212,8 +3293,19 @@ def run_cloud_template_job(job_id, node, params):
 
         try:
             # Use the config endpoint with import-from to import the disk
-            proxmox.nodes(node).qemu(vmid).config.put(
-                scsi0=f"{storage}:0,import-from={import_path}"
+            # This operation can be slow, so use retry with exponential backoff
+            def do_disk_import():
+                proxmox.nodes(node).qemu(vmid).config.put(
+                    scsi0=f"{storage}:0,import-from={import_path}"
+                )
+
+            retry_on_timeout(
+                do_disk_import,
+                max_attempts=5,  # More retries for this slow operation
+                base_delay=5,
+                job_id=job_id,
+                job_queue_ref=job_queue,
+                operation_name="disk import"
             )
             job_queue.add_step(job_id, "Disk imported successfully")
         except Exception as e:
@@ -3225,9 +3317,17 @@ def run_cloud_template_job(job_id, node, params):
         # Step 5: Configure boot disk
         job_queue.add_step(job_id, "Configuring boot settings...")
         try:
-            proxmox.nodes(node).qemu(vmid).config.put(
-                boot="order=scsi0",
-                bootdisk="scsi0"
+            def do_boot_config():
+                proxmox.nodes(node).qemu(vmid).config.put(
+                    boot="order=scsi0",
+                    bootdisk="scsi0"
+                )
+
+            retry_on_timeout(
+                do_boot_config,
+                job_id=job_id,
+                job_queue_ref=job_queue,
+                operation_name="boot config"
             )
         except Exception as e:
             job_queue.add_step(job_id, f"Boot config warning: {e}")
@@ -3237,8 +3337,16 @@ def run_cloud_template_job(job_id, node, params):
         # Step 6: Add cloud-init drive
         job_queue.add_step(job_id, "Adding cloud-init drive...")
         try:
-            proxmox.nodes(node).qemu(vmid).config.put(
-                ide2=f"{storage}:cloudinit"
+            def do_cloudinit_drive():
+                proxmox.nodes(node).qemu(vmid).config.put(
+                    ide2=f"{storage}:cloudinit"
+                )
+
+            retry_on_timeout(
+                do_cloudinit_drive,
+                job_id=job_id,
+                job_queue_ref=job_queue,
+                operation_name="cloud-init drive"
             )
         except Exception as e:
             job_queue.add_step(job_id, f"Cloud-init drive warning: {e}")
@@ -3258,7 +3366,15 @@ def run_cloud_template_job(job_id, node, params):
             ci_config["sshkeys"] = urllib.parse.quote(ci_sshkeys, safe='')
 
         try:
-            proxmox.nodes(node).qemu(vmid).config.put(**ci_config)
+            def do_cloudinit_config():
+                proxmox.nodes(node).qemu(vmid).config.put(**ci_config)
+
+            retry_on_timeout(
+                do_cloudinit_config,
+                job_id=job_id,
+                job_queue_ref=job_queue,
+                operation_name="cloud-init config"
+            )
         except Exception as e:
             job_queue.add_step(job_id, f"Cloud-init config warning: {e}")
 
@@ -3267,7 +3383,17 @@ def run_cloud_template_job(job_id, node, params):
         # Step 8: Resize disk
         job_queue.add_step(job_id, f"Resizing disk to {disk_size}...")
         try:
-            proxmox.nodes(node).qemu(vmid).resize.put(disk="scsi0", size=disk_size)
+            def do_disk_resize():
+                proxmox.nodes(node).qemu(vmid).resize.put(disk="scsi0", size=disk_size)
+
+            retry_on_timeout(
+                do_disk_resize,
+                max_attempts=5,  # More retries for disk resize
+                base_delay=3,
+                job_id=job_id,
+                job_queue_ref=job_queue,
+                operation_name="disk resize"
+            )
             job_queue.add_step(job_id, "Disk resized successfully")
         except Exception as e:
             job_queue.add_step(job_id, f"Disk resize warning: {e}")
@@ -3277,7 +3403,17 @@ def run_cloud_template_job(job_id, node, params):
         # Step 9: Convert to template
         job_queue.add_step(job_id, "Converting VM to template...")
         try:
-            proxmox.nodes(node).qemu(vmid).template.post()
+            def do_template_convert():
+                proxmox.nodes(node).qemu(vmid).template.post()
+
+            retry_on_timeout(
+                do_template_convert,
+                max_attempts=5,  # More retries for template conversion
+                base_delay=3,
+                job_id=job_id,
+                job_queue_ref=job_queue,
+                operation_name="template conversion"
+            )
             job_queue.add_step(job_id, "VM converted to template")
         except Exception as e:
             job_queue.add_step(job_id, f"Template conversion warning: {e}")
@@ -3289,7 +3425,16 @@ def run_cloud_template_job(job_id, node, params):
         try:
             # Delete the downloaded image file
             content_id = f"{download_storage}:{download_content_type}/{image_filename}"
-            proxmox.nodes(node).storage(download_storage).content(content_id).delete()
+
+            def do_cleanup():
+                proxmox.nodes(node).storage(download_storage).content(content_id).delete()
+
+            retry_on_timeout(
+                do_cleanup,
+                job_id=job_id,
+                job_queue_ref=job_queue,
+                operation_name="cleanup"
+            )
             job_queue.add_step(job_id, "Temporary image deleted")
         except Exception as e:
             job_queue.add_step(job_id, f"Cleanup warning: {e} (you may want to manually delete {image_filename} from {download_storage})")
