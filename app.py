@@ -278,6 +278,11 @@ CLOUD_IMAGES_DEFAULT_PATH = os.path.join(
 )
 CLOUD_IMAGES_FILE = os.environ.get("CLOUD_IMAGES_PATH", CLOUD_IMAGES_DEFAULT_PATH)
 
+# Control behavior when cloud image already exists on storage
+# REUSE (default): Skip download if image exists, use existing file
+# OVERWRITE: Delete existing file and download fresh copy
+CLOUD_IMAGE_CACHE_MODE = os.environ.get("CLOUD_IMAGE_CACHE", "REUSE").upper()
+
 
 def load_cloud_images():
     """Load cloud images configuration from JSON file
@@ -3268,47 +3273,94 @@ def run_cloud_template_job(job_id, node, params):
             f"Using storage '{download_storage}' for download (content type: {download_content_type})",
         )
 
-        # Step 2: Download cloud image to the storage
-        job_queue.add_step(job_id, f"Downloading cloud image: {image_filename}...")
+        # Step 2: Check if image already exists and handle according to cache mode
+        job_queue.add_step(job_id, f"Checking for existing image: {image_filename}...")
         job_queue.update_job(job_id, progress=10)
 
-        try:
-            print(
-                f"node '{node}', storage '{storage}', url '{image_url}', fiilename '{image_filename}', content type '{download_content_type}'"
-            )
-            download_task = (
-                proxmox.nodes(node)
-                .storage(download_storage)("download-url")
-                .post(
-                    content=download_content_type,
-                    filename=image_filename,
-                    url=image_url,
-                    node=node,
-                )
-            )
-            job_queue.add_step(job_id, f"Download task started: {download_task}")
-        except Exception as e:
-            error_str = str(e).lower()
-            if "import" in error_str or "content" in error_str:
-                job_queue.set_failed(
-                    job_id,
-                    f"Storage does not support 'import' content type. Proxmox 8.1+ required. Error: {e}",
-                )
-            else:
-                job_queue.set_failed(job_id, f"Failed to start download: {e}")
-            return
+        image_volid = f"{download_storage}:{download_content_type}/{image_filename}"
+        image_exists = False
+        skip_download = False
 
-        # Wait for download to complete
-        job_queue.add_step(
-            job_id,
-            "Waiting for download to complete (this may take several minutes)...",
-        )
-        result = wait_for_task(
-            proxmox, node, download_task, job_id, timeout=900
-        )  # 15 min timeout
-        if not result["success"]:
-            job_queue.set_failed(job_id, result["error"])
-            return
+        try:
+            # Check if image already exists in storage
+            storage_content = (
+                proxmox.nodes(node).storage(download_storage).content.get()
+            )
+            for item in storage_content:
+                if item.get("volid") == image_volid:
+                    image_exists = True
+                    break
+        except Exception as e:
+            job_queue.add_step(
+                job_id, f"Warning: Could not check existing content: {e}"
+            )
+
+        if image_exists:
+            if CLOUD_IMAGE_CACHE_MODE == "REUSE":
+                job_queue.add_step(
+                    job_id,
+                    f"Image already exists, reusing cached file (CLOUD_IMAGE_CACHE=REUSE)",
+                )
+                skip_download = True
+            else:
+                # OVERWRITE mode - delete existing file first
+                job_queue.add_step(
+                    job_id,
+                    f"Image exists, deleting for fresh download (CLOUD_IMAGE_CACHE=OVERWRITE)",
+                )
+                try:
+                    proxmox.nodes(node).storage(download_storage).content(
+                        image_volid
+                    ).delete()
+                    job_queue.add_step(job_id, "Existing image deleted")
+                except Exception as e:
+                    job_queue.set_failed(
+                        job_id,
+                        f"Failed to delete existing image: {e}. Try setting CLOUD_IMAGE_CACHE=REUSE",
+                    )
+                    return
+
+        if not skip_download:
+            # Download cloud image to the storage
+            job_queue.add_step(job_id, f"Downloading cloud image: {image_filename}...")
+
+            try:
+                print(
+                    f"node '{node}', storage '{storage}', url '{image_url}', fiilename '{image_filename}', content type '{download_content_type}'"
+                )
+                download_task = (
+                    proxmox.nodes(node)
+                    .storage(download_storage)("download-url")
+                    .post(
+                        content=download_content_type,
+                        filename=image_filename,
+                        url=image_url,
+                        node=node,
+                    )
+                )
+                job_queue.add_step(job_id, f"Download task started: {download_task}")
+            except Exception as e:
+                error_str = str(e).lower()
+                if "import" in error_str or "content" in error_str:
+                    job_queue.set_failed(
+                        job_id,
+                        f"Storage does not support 'import' content type. Proxmox 8.1+ required. Error: {e}",
+                    )
+                else:
+                    job_queue.set_failed(job_id, f"Failed to start download: {e}")
+                return
+
+            # Wait for download to complete
+            job_queue.add_step(
+                job_id,
+                "Waiting for download to complete (this may take several minutes)...",
+            )
+            result = wait_for_task(
+                proxmox, node, download_task, job_id, timeout=900
+            )  # 15 min timeout
+            if not result["success"]:
+                job_queue.set_failed(job_id, result["error"])
+                return
 
         job_queue.add_step(job_id, "Download completed successfully")
         job_queue.update_job(job_id, progress=40)
@@ -3477,29 +3529,37 @@ def run_cloud_template_job(job_id, node, params):
 
         job_queue.update_job(job_id, progress=95)
 
-        # Step 10: Cleanup - delete the downloaded image
-        job_queue.add_step(job_id, "Cleaning up temporary files...")
-        try:
-            # Delete the downloaded image file
-            content_id = f"{download_storage}:{download_content_type}/{image_filename}"
-
-            def do_cleanup():
-                proxmox.nodes(node).storage(download_storage).content(
-                    content_id
-                ).delete()
-
-            retry_on_timeout(
-                do_cleanup,
-                job_id=job_id,
-                job_queue_ref=job_queue,
-                operation_name="cleanup",
-            )
-            job_queue.add_step(job_id, "Temporary image deleted")
-        except Exception as e:
+        # Step 10: Cleanup - delete the downloaded image (unless using cached image in REUSE mode)
+        if skip_download and CLOUD_IMAGE_CACHE_MODE == "REUSE":
             job_queue.add_step(
                 job_id,
-                f"Cleanup warning: {e} (you may want to manually delete {image_filename} from {download_storage})",
+                f"Keeping cached image for future use (CLOUD_IMAGE_CACHE=REUSE)",
             )
+        else:
+            job_queue.add_step(job_id, "Cleaning up temporary files...")
+            try:
+                # Delete the downloaded image file
+                content_id = (
+                    f"{download_storage}:{download_content_type}/{image_filename}"
+                )
+
+                def do_cleanup():
+                    proxmox.nodes(node).storage(download_storage).content(
+                        content_id
+                    ).delete()
+
+                retry_on_timeout(
+                    do_cleanup,
+                    job_id=job_id,
+                    job_queue_ref=job_queue,
+                    operation_name="cleanup",
+                )
+                job_queue.add_step(job_id, "Temporary image deleted")
+            except Exception as e:
+                job_queue.add_step(
+                    job_id,
+                    f"Cleanup warning: {e} (you may want to manually delete {image_filename} from {download_storage})",
+                )
 
         # Done!
         job_queue.set_completed(
