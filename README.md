@@ -137,6 +137,7 @@ Configuration file can be managed manually or through the web UI (Cluster Manage
 |----------|-------------|---------|
 | `CONFIG_FILE_PATH` | Path to the main configuration file | `./data/config.toml` |
 | `CLOUD_IMAGES_PATH` | Path to custom cloud images JSON file | `./cloud_images.json` |
+| `CLOUD_IMAGE_CACHE` | How to handle existing cloud images: `REUSE` (skip download if exists) or `OVERWRITE` (delete and re-download) | `REUSE` |
 
 ### Custom Cloud Images
 
