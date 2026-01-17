@@ -62,9 +62,34 @@
                     </li>
                 </ul>
                 
-                <!-- Cluster Selector -->
+                <!-- Jobs & Cluster Selector -->
+                <div class="navbar-nav ms-auto d-flex align-items-center">
+                    <!-- Background Jobs Dropdown -->
+                    <div class="nav-item dropdown me-3">
+                        <a class="nav-link position-relative" href="#" id="jobsDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false" title="Background Jobs">
+                            <i class="bi bi-list-task fs-5"></i>
+                            <span id="jobsBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display: none; font-size: 0.6rem;">
+                                0
+                            </span>
+                        </a>
+                        <div class="dropdown-menu dropdown-menu-end shadow" aria-labelledby="jobsDropdown" style="min-width: 400px; max-height: 500px; overflow-y: auto;">
+                            <div class="dropdown-header d-flex justify-content-between align-items-center">
+                                <span><i class="bi bi-list-task"></i> Background Jobs</span>
+                                <button class="btn btn-sm btn-link p-0" onclick="refreshGlobalJobs()" title="Refresh">
+                                    <i class="bi bi-arrow-clockwise"></i>
+                                </button>
+                            </div>
+                            <div class="dropdown-divider"></div>
+                            <div id="globalJobsList" class="px-2">
+                                <div class="text-center text-muted py-3">
+                                    <i class="bi bi-check-circle"></i> No active jobs
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                 {% if all_clusters|length >= 1 %}
-                <div class="navbar-nav ms-auto">
+                    <!-- Cluster Selector -->
                     <div class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" id="clusterDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
                             <i class="bi bi-diagram-2 me-2"></i>
@@ -96,8 +121,8 @@
                             </li>
                         </ul>
                     </div>
-                </div>
                 {% endif %}
+                </div>
             </div>
         </div>
     </nav>
@@ -252,6 +277,223 @@
     });
     </script>
     
+    <!-- Global Jobs JavaScript -->
+    <script>
+    let globalJobsInterval = null;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        // Start polling for jobs
+        loadGlobalJobs();
+        globalJobsInterval = setInterval(loadGlobalJobs, 3000);
+    });
+
+    async function loadGlobalJobs() {
+        try {
+            const response = await fetch('/api/jobs');
+            const jobs = await response.json();
+
+            const jobsList = document.getElementById('globalJobsList');
+            const jobsBadge = document.getElementById('jobsBadge');
+            const jobsDropdown = document.getElementById('jobsDropdown');
+
+            // Filter active jobs (queued or running)
+            const activeJobs = jobs.filter(job => job.status === 'queued' || job.status === 'running');
+
+            // Filter recent jobs (completed/failed within last hour)
+            const recentJobs = jobs.filter(job => {
+                if (job.status === 'queued' || job.status === 'running') return true;
+                const completedAt = job.completed_at ? new Date(job.completed_at) : null;
+                if (completedAt) {
+                    const hourAgo = new Date(Date.now() - 3600000);
+                    return completedAt > hourAgo;
+                }
+                return false;
+            });
+
+            // Update badge
+            if (activeJobs.length > 0) {
+                jobsBadge.textContent = activeJobs.length;
+                jobsBadge.style.display = 'block';
+                jobsDropdown.classList.add('jobs-active');
+            } else {
+                jobsBadge.style.display = 'none';
+                jobsDropdown.classList.remove('jobs-active');
+            }
+
+            // Update dropdown content
+            if (recentJobs.length === 0) {
+                jobsList.innerHTML = `
+                    <div class="text-center text-muted py-3">
+                        <i class="bi bi-check-circle"></i> No active jobs
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '';
+            for (const job of recentJobs) {
+                const statusInfo = getJobStatusInfo(job.status);
+                const progressBar = job.status === 'running' ? `
+                    <div class="progress mt-1" style="height: 4px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: ${job.progress}%"></div>
+                    </div>
+                ` : '';
+
+                html += `
+                    <div class="card mb-2 border-${statusInfo.color}">
+                        <div class="card-body py-2 px-3">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div class="flex-grow-1">
+                                    <div class="d-flex align-items-center gap-2 mb-1">
+                                        <span class="badge bg-${statusInfo.color}">${statusInfo.icon} ${statusInfo.label}</span>
+                                        <small class="text-truncate" style="max-width: 200px;" title="${escapeHtmlGlobal(job.description)}">${escapeHtmlGlobal(job.description)}</small>
+                                    </div>
+                                    <small class="text-muted d-block text-truncate">${job.current_step || 'Waiting...'}</small>
+                                    ${progressBar}
+                                    ${job.error ? `<small class="text-danger d-block mt-1"><i class="bi bi-exclamation-triangle"></i> ${escapeHtmlGlobal(job.error).substring(0, 50)}...</small>` : ''}
+                                </div>
+                                <button class="btn btn-sm btn-link text-secondary p-0 ms-2" onclick="showGlobalJobDetails('${job.id}')" title="Details">
+                                    <i class="bi bi-info-circle"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            jobsList.innerHTML = html;
+
+        } catch (error) {
+            console.error('Error loading jobs:', error);
+        }
+    }
+
+    function refreshGlobalJobs() {
+        loadGlobalJobs();
+    }
+
+    function getJobStatusInfo(status) {
+        switch (status) {
+            case 'queued':
+                return { color: 'secondary', icon: '<i class="bi bi-clock"></i>', label: 'Queued' };
+            case 'running':
+                return { color: 'primary', icon: '<i class="bi bi-hourglass-split"></i>', label: 'Running' };
+            case 'completed':
+                return { color: 'success', icon: '<i class="bi bi-check-circle"></i>', label: 'Done' };
+            case 'failed':
+                return { color: 'danger', icon: '<i class="bi bi-x-circle"></i>', label: 'Failed' };
+            default:
+                return { color: 'secondary', icon: '', label: status };
+        }
+    }
+
+    function escapeHtmlGlobal(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    async function showGlobalJobDetails(jobId) {
+        try {
+            const response = await fetch(`/api/jobs/${jobId}`);
+            const job = await response.json();
+
+            if (job.error && !job.steps) {
+                alert('Job not found');
+                return;
+            }
+
+            const statusInfo = getJobStatusInfo(job.status);
+            let stepsHtml = job.steps && job.steps.length > 0
+                ? job.steps.map(s => `<div class="small font-monospace">${escapeHtmlGlobal(s)}</div>`).join('')
+                : '<div class="text-muted">No steps recorded</div>';
+
+            const modalHtml = `
+                <div class="modal fade" id="globalJobDetailsModal" tabindex="-1">
+                    <div class="modal-dialog modal-lg">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title"><i class="bi bi-info-circle"></i> Job Details</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="mb-3">
+                                    <strong>Job ID:</strong> ${job.id}<br>
+                                    <strong>Type:</strong> ${job.type}<br>
+                                    <strong>Status:</strong> <span class="badge bg-${statusInfo.color}">${statusInfo.label}</span><br>
+                                    <strong>Progress:</strong> ${job.progress}%<br>
+                                    <strong>Created:</strong> ${job.created_at}<br>
+                                    ${job.started_at ? `<strong>Started:</strong> ${job.started_at}<br>` : ''}
+                                    ${job.completed_at ? `<strong>Completed:</strong> ${job.completed_at}<br>` : ''}
+                                </div>
+                                <div class="mb-3">
+                                    <strong>Steps:</strong>
+                                    <div class="bg-dark text-light p-2 rounded mt-1" style="max-height: 300px; overflow-y: auto;">
+                                        ${stepsHtml}
+                                    </div>
+                                </div>
+                                ${job.error ? `<div class="alert alert-danger"><strong>Error:</strong> ${escapeHtmlGlobal(job.error)}</div>` : ''}
+                                ${job.result ? `<div class="alert alert-success"><strong>Result:</strong> Template created with VMID ${job.result.vmid}</div>` : ''}
+                            </div>
+                            <div class="modal-footer">
+                                ${job.status !== 'running' ? `<button type="button" class="btn btn-danger" onclick="deleteGlobalJob('${job.id}')"><i class="bi bi-trash"></i> Delete</button>` : ''}
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Remove existing modal if any
+            const existingModal = document.getElementById('globalJobDetailsModal');
+            if (existingModal) existingModal.remove();
+
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            const modal = new bootstrap.Modal(document.getElementById('globalJobDetailsModal'));
+            modal.show();
+
+        } catch (error) {
+            alert('Error loading job details: ' + error.message);
+        }
+    }
+
+    async function deleteGlobalJob(jobId) {
+        if (!confirm('Delete this job from the list?')) return;
+
+        try {
+            const response = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+            const result = await response.json();
+
+            if (result.success) {
+                const modal = bootstrap.Modal.getInstance(document.getElementById('globalJobDetailsModal'));
+                if (modal) modal.hide();
+                loadGlobalJobs();
+            } else {
+                alert(result.error || 'Failed to delete job');
+            }
+        } catch (error) {
+            alert('Error deleting job: ' + error.message);
+        }
+    }
+    </script>
+
+    <style>
+    /* Pulsing animation for active jobs indicator */
+    .jobs-active {
+        animation: pulse-jobs 2s infinite;
+    }
+
+    @keyframes pulse-jobs {
+        0% { opacity: 1; }
+        50% { opacity: 0.6; }
+        100% { opacity: 1; }
+    }
+
+    .jobs-active .bi-list-task {
+        color: #ffc107 !important;
+    }
+    </style>
+
     {% block scripts %}{% endblock %}
 </body>
 </html>

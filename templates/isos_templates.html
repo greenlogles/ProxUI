@@ -10,23 +10,6 @@
     </div>
 </div>
 
-<!-- Active Jobs Section -->
-<div id="jobsSection" class="row mb-4" style="display: none;">
-    <div class="col-12">
-        <div class="card border-primary">
-            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="bi bi-hourglass-split"></i> Background Jobs</h5>
-                <button class="btn btn-sm btn-light" onclick="refreshJobs()">
-                    <i class="bi bi-arrow-clockwise"></i> Refresh
-                </button>
-            </div>
-            <div class="card-body p-0">
-                <div id="jobsList"></div>
-            </div>
-        </div>
-    </div>
-</div>
-
 <!-- Node Tabs -->
 <ul class="nav nav-tabs mb-4" id="nodeTab" role="tablist">
     <!-- Node tabs will be populated here -->
@@ -207,13 +190,9 @@
 <script>
 let allNodes = [];
 let currentData = {};
-let jobRefreshInterval = null;
 
 document.addEventListener('DOMContentLoaded', function() {
     loadNodes();
-    loadJobs();  // Load jobs on page load
-    // Auto-refresh jobs every 3 seconds
-    jobRefreshInterval = setInterval(loadJobs, 3000);
 });
 
 function showLoading() {
@@ -926,15 +905,15 @@ async function createCloudTemplate() {
                     </p>
                     <hr>
                     <small class="text-muted">
-                        Track progress in the "Background Jobs" section above.
+                        Track progress via the <i class="bi bi-list-task"></i> Jobs icon in the top navbar.
                         The template will appear in the list once completed.
                     </small>
                 </div>
             `;
-            showNotification('Template creation job started. Check the Jobs section for progress.', 'success');
+            showNotification('Template creation job started. Check the Jobs dropdown for progress.', 'success');
 
-            // Refresh jobs to show the new job
-            loadJobs();
+            // Refresh global jobs dropdown to show the new job
+            loadGlobalJobs();
 
             // Close modal after a short delay
             setTimeout(() => {
@@ -977,197 +956,6 @@ function escapeHtml(text) {
 
 function escapeForJs(text) {
     return text.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$');
-}
-
-// =============================================================================
-// Job Management
-// =============================================================================
-
-async function loadJobs() {
-    try {
-        const response = await fetch('/api/jobs');
-        const jobs = await response.json();
-
-        const jobsSection = document.getElementById('jobsSection');
-        const jobsList = document.getElementById('jobsList');
-
-        // Filter to show only recent jobs (last 24 hours) or active jobs
-        const recentJobs = jobs.filter(job => {
-            if (job.status === 'queued' || job.status === 'running') return true;
-            // Show completed/failed jobs for 1 hour
-            const completedAt = job.completed_at ? new Date(job.completed_at) : null;
-            if (completedAt) {
-                const hourAgo = new Date(Date.now() - 3600000);
-                return completedAt > hourAgo;
-            }
-            return false;
-        });
-
-        if (recentJobs.length === 0) {
-            jobsSection.style.display = 'none';
-            return;
-        }
-
-        jobsSection.style.display = 'block';
-
-        let html = '<div class="list-group list-group-flush">';
-        for (const job of recentJobs) {
-            const statusBadge = getJobStatusBadge(job.status);
-            const progressBar = job.status === 'running' ? `
-                <div class="progress mt-2" style="height: 6px;">
-                    <div class="progress-bar progress-bar-striped progress-bar-animated"
-                         style="width: ${job.progress}%"></div>
-                </div>
-            ` : '';
-
-            html += `
-                <div class="list-group-item">
-                    <div class="d-flex justify-content-between align-items-start">
-                        <div class="flex-grow-1">
-                            <div class="d-flex align-items-center gap-2">
-                                ${statusBadge}
-                                <strong>${escapeHtml(job.description)}</strong>
-                            </div>
-                            <small class="text-muted">${job.current_step || 'Waiting...'}</small>
-                            ${progressBar}
-                            ${job.error ? `<div class="text-danger small mt-1"><i class="bi bi-exclamation-triangle"></i> ${escapeHtml(job.error)}</div>` : ''}
-                            ${job.result ? `<div class="text-success small mt-1"><i class="bi bi-check-circle"></i> Template created: VMID ${job.result.vmid}</div>` : ''}
-                        </div>
-                        <div class="d-flex gap-2 align-items-center">
-                            <button class="btn btn-sm btn-outline-secondary" onclick="showJobDetails('${job.id}')" title="View Details">
-                                <i class="bi bi-info-circle"></i>
-                            </button>
-                            ${job.status !== 'running' ? `
-                                <button class="btn btn-sm btn-outline-danger" onclick="deleteJob('${job.id}')" title="Delete">
-                                    <i class="bi bi-trash"></i>
-                                </button>
-                            ` : ''}
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-        html += '</div>';
-
-        jobsList.innerHTML = html;
-
-        // Refresh templates list if a job just completed
-        for (const job of recentJobs) {
-            if (job.status === 'completed' && job.result && job.result.node) {
-                // Check if this job recently completed (within last refresh interval)
-                const completedAt = new Date(job.completed_at);
-                const fiveSecsAgo = new Date(Date.now() - 5000);
-                if (completedAt > fiveSecsAgo) {
-                    loadTemplates(job.result.node);
-                }
-            }
-        }
-
-    } catch (error) {
-        console.error('Error loading jobs:', error);
-    }
-}
-
-function refreshJobs() {
-    loadJobs();
-}
-
-function getJobStatusBadge(status) {
-    switch (status) {
-        case 'queued':
-            return '<span class="badge bg-secondary"><i class="bi bi-clock"></i> Queued</span>';
-        case 'running':
-            return '<span class="badge bg-primary"><i class="bi bi-hourglass-split"></i> Running</span>';
-        case 'completed':
-            return '<span class="badge bg-success"><i class="bi bi-check-circle"></i> Completed</span>';
-        case 'failed':
-            return '<span class="badge bg-danger"><i class="bi bi-x-circle"></i> Failed</span>';
-        default:
-            return '<span class="badge bg-secondary">Unknown</span>';
-    }
-}
-
-async function showJobDetails(jobId) {
-    try {
-        const response = await fetch(`/api/jobs/${jobId}`);
-        const job = await response.json();
-
-        if (job.error && !job.steps) {
-            showNotification('Job not found', 'error');
-            return;
-        }
-
-        let stepsHtml = job.steps && job.steps.length > 0
-            ? job.steps.map(s => `<div class="small font-monospace">${escapeHtml(s)}</div>`).join('')
-            : '<div class="text-muted">No steps recorded</div>';
-
-        const content = `
-            <div class="mb-3">
-                <strong>Job ID:</strong> ${job.id}<br>
-                <strong>Type:</strong> ${job.type}<br>
-                <strong>Status:</strong> ${getJobStatusBadge(job.status)}<br>
-                <strong>Progress:</strong> ${job.progress}%<br>
-                <strong>Created:</strong> ${job.created_at}<br>
-                ${job.started_at ? `<strong>Started:</strong> ${job.started_at}<br>` : ''}
-                ${job.completed_at ? `<strong>Completed:</strong> ${job.completed_at}<br>` : ''}
-            </div>
-            <div class="mb-3">
-                <strong>Steps:</strong>
-                <div class="bg-dark text-light p-2 rounded mt-1" style="max-height: 300px; overflow-y: auto;">
-                    ${stepsHtml}
-                </div>
-            </div>
-            ${job.error ? `<div class="alert alert-danger"><strong>Error:</strong> ${escapeHtml(job.error)}</div>` : ''}
-            ${job.result ? `<div class="alert alert-success"><strong>Result:</strong> Template created with VMID ${job.result.vmid}</div>` : ''}
-        `;
-
-        // Show in a modal or alert
-        const modalHtml = `
-            <div class="modal fade" id="jobDetailsModal" tabindex="-1">
-                <div class="modal-dialog modal-lg">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h5 class="modal-title"><i class="bi bi-info-circle"></i> Job Details</h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                        </div>
-                        <div class="modal-body">${content}</div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
-
-        // Remove existing modal if any
-        const existingModal = document.getElementById('jobDetailsModal');
-        if (existingModal) existingModal.remove();
-
-        // Add new modal
-        document.body.insertAdjacentHTML('beforeend', modalHtml);
-        const modal = new bootstrap.Modal(document.getElementById('jobDetailsModal'));
-        modal.show();
-
-    } catch (error) {
-        showNotification('Error loading job details: ' + error.message, 'error');
-    }
-}
-
-async function deleteJob(jobId) {
-    if (!confirm('Delete this job from the list?')) return;
-
-    try {
-        const response = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
-        const result = await response.json();
-
-        if (result.success) {
-            loadJobs();
-        } else {
-            showNotification(result.error || 'Failed to delete job', 'error');
-        }
-    } catch (error) {
-        showNotification('Error deleting job: ' + error.message, 'error');
-    }
 }
 </script>
 {% endblock %}
