@@ -66,8 +66,118 @@
     </div>
 </div>
 
+<!-- Create Cloud Template Modal -->
+<div class="modal fade" id="cloudTemplateModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-cloud-download"></i> Create Cloud VM Template</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="cloudTemplateForm">
+                    <!-- Cloud Image Selection -->
+                    <div class="mb-4">
+                        <h6 class="text-primary"><i class="bi bi-image"></i> Cloud Image</h6>
+                        <div class="mb-3">
+                            <label for="cloudImage" class="form-label">Select Image <span class="text-danger">*</span></label>
+                            <select class="form-select" id="cloudImage" required>
+                                <option value="">Loading images...</option>
+                            </select>
+                            <div class="form-text" id="cloudImageDesc"></div>
+                        </div>
+                    </div>
+
+                    <!-- VM Configuration -->
+                    <div class="mb-4">
+                        <h6 class="text-primary"><i class="bi bi-gear"></i> VM Configuration</h6>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="templateName" class="form-label">Template Name</label>
+                                <input type="text" class="form-control" id="templateName" placeholder="Auto-generated from image">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="templateVmid" class="form-label">VM ID</label>
+                                <input type="number" class="form-control" id="templateVmid" placeholder="Auto (next available)">
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <label for="templateCores" class="form-label">CPU Cores</label>
+                                <input type="number" class="form-control" id="templateCores" value="2" min="1" max="128">
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="templateMemory" class="form-label">Memory (MB)</label>
+                                <input type="number" class="form-control" id="templateMemory" value="2048" min="512" step="512">
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="templateDiskSize" class="form-label">Disk Size</label>
+                                <input type="text" class="form-control" id="templateDiskSize" value="10G" placeholder="10G">
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="templateStorage" class="form-label">Storage <span class="text-danger">*</span></label>
+                                <select class="form-select" id="templateStorage" required>
+                                    <option value="">Loading storages...</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="templateBridge" class="form-label">Network Bridge</label>
+                                <select class="form-select" id="templateBridge">
+                                    <option value="">Loading bridges...</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Cloud-Init Configuration -->
+                    <div class="mb-4">
+                        <h6 class="text-primary"><i class="bi bi-cloud"></i> Cloud-Init Configuration</h6>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="ciUser" class="form-label">Default User</label>
+                                <input type="text" class="form-control" id="ciUser" placeholder="e.g., ubuntu, debian">
+                                <div class="form-text">Leave empty to use image default</div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="ciPassword" class="form-label">Password</label>
+                                <input type="password" class="form-control" id="ciPassword" placeholder="Optional">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="ciSshKeys" class="form-label">SSH Public Keys</label>
+                            <textarea class="form-control" id="ciSshKeys" rows="3" placeholder="ssh-rsa AAAA... or ssh-ed25519 AAAA..."></textarea>
+                            <div class="form-text">One key per line. Recommended over password authentication.</div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="ciIpConfig" class="form-label">IP Configuration</label>
+                            <input type="text" class="form-control" id="ciIpConfig" value="ip=dhcp,ip6=auto">
+                            <div class="form-text">Use ip=dhcp for DHCP or ip=x.x.x.x/24,gw=x.x.x.x for static</div>
+                        </div>
+                    </div>
+
+                    <!-- Progress/Result -->
+                    <div id="templateProgress" class="d-none">
+                        <div class="alert alert-info" id="templateProgressMsg">
+                            <i class="bi bi-hourglass-split"></i> Creating template...
+                        </div>
+                    </div>
+                    <div id="templateResult" class="d-none"></div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="createTemplateBtn" onclick="createCloudTemplate()">
+                    <i class="bi bi-plus-circle"></i> Create Template
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Loading overlay -->
-<div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center" 
+<div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center"
      style="background-color: rgba(0,0,0,0.5); z-index: 9999;">
     <div class="bg-white rounded p-4 text-center">
         <div class="spinner-border text-primary mb-2" role="status"></div>
@@ -209,8 +319,11 @@ function createNodeTabs() {
                 <!-- VM Templates -->
                 <div class="col-12 mb-4">
                     <div class="card">
-                        <div class="card-header">
+                        <div class="card-header d-flex justify-content-between align-items-center">
                             <h5 class="mb-0"><i class="bi bi-pc-display"></i> VM Templates</h5>
+                            <button class="btn btn-success btn-sm" onclick="showCloudTemplateModal('${node.name}')">
+                                <i class="bi bi-cloud-download"></i> Create Cloud Template
+                            </button>
                         </div>
                         <div class="card-body">
                             <div id="vm-templates-${node.name}">
@@ -561,6 +674,288 @@ function copyToClipboard(text) {
         }
         document.body.removeChild(textArea);
     });
+}
+
+// Cloud Template Creation
+let currentTemplateNode = '';
+let cloudImagesCache = null;
+
+async function showCloudTemplateModal(nodeName) {
+    currentTemplateNode = nodeName;
+
+    // Reset form
+    document.getElementById('cloudTemplateForm').reset();
+    document.getElementById('templateProgress').classList.add('d-none');
+    document.getElementById('templateResult').classList.add('d-none');
+    document.getElementById('createTemplateBtn').disabled = false;
+    document.getElementById('ciIpConfig').value = 'ip=dhcp,ip6=auto';
+    document.getElementById('templateCores').value = '2';
+    document.getElementById('templateMemory').value = '2048';
+    document.getElementById('templateDiskSize').value = '10G';
+
+    // Load cloud images
+    await loadCloudImages();
+
+    // Load storages and bridges in parallel
+    await Promise.all([
+        loadTemplateStorages(nodeName),
+        loadTemplateBridges(nodeName)
+    ]);
+
+    // Show modal
+    const modal = new bootstrap.Modal(document.getElementById('cloudTemplateModal'));
+    modal.show();
+}
+
+async function loadCloudImages() {
+    const select = document.getElementById('cloudImage');
+
+    if (cloudImagesCache) {
+        populateCloudImageSelect(cloudImagesCache);
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/cloud-images');
+        const images = await response.json();
+        cloudImagesCache = images;
+        populateCloudImageSelect(images);
+    } catch (error) {
+        select.innerHTML = '<option value="">Error loading images</option>';
+        showNotification('Error loading cloud images: ' + error.message, 'error');
+    }
+}
+
+function populateCloudImageSelect(images) {
+    const select = document.getElementById('cloudImage');
+    select.innerHTML = '<option value="">Select a cloud image...</option>';
+
+    // Group by distribution
+    const groups = {
+        'Ubuntu': [],
+        'Debian': [],
+        'RHEL-based': [],
+        'Other': []
+    };
+
+    images.forEach(img => {
+        if (img.id.startsWith('ubuntu')) {
+            groups['Ubuntu'].push(img);
+        } else if (img.id.startsWith('debian')) {
+            groups['Debian'].push(img);
+        } else if (img.id.startsWith('rocky') || img.id.startsWith('alma') || img.id.startsWith('centos')) {
+            groups['RHEL-based'].push(img);
+        } else {
+            groups['Other'].push(img);
+        }
+    });
+
+    for (const [groupName, groupImages] of Object.entries(groups)) {
+        if (groupImages.length > 0) {
+            const optgroup = document.createElement('optgroup');
+            optgroup.label = groupName;
+            groupImages.forEach(img => {
+                const option = document.createElement('option');
+                option.value = img.id;
+                option.textContent = img.name;
+                option.dataset.description = img.description;
+                option.dataset.url = img.url;
+                optgroup.appendChild(option);
+            });
+            select.appendChild(optgroup);
+        }
+    }
+
+    // Update description on change
+    select.addEventListener('change', function() {
+        const selected = this.options[this.selectedIndex];
+        const descDiv = document.getElementById('cloudImageDesc');
+        if (selected && selected.dataset.description) {
+            descDiv.innerHTML = `<small>${selected.dataset.description}</small><br><code class="small">${selected.dataset.url || ''}</code>`;
+        } else {
+            descDiv.textContent = '';
+        }
+
+        // Auto-fill template name
+        if (this.value && !document.getElementById('templateName').value) {
+            document.getElementById('templateName').value = this.value + '-template';
+        }
+    });
+}
+
+async function loadTemplateStorages(nodeName) {
+    const select = document.getElementById('templateStorage');
+    select.innerHTML = '<option value="">Loading...</option>';
+
+    try {
+        const response = await fetch(`/api/node/${nodeName}/storages?vm_type=qemu`);
+        const storages = await response.json();
+
+        if (storages.error) {
+            select.innerHTML = '<option value="">Error loading storages</option>';
+            return;
+        }
+
+        select.innerHTML = '<option value="">Select storage...</option>';
+        storages.forEach(storage => {
+            const option = document.createElement('option');
+            option.value = storage.storage;
+            option.textContent = `${storage.storage} (${storage.type}) - ${storage.available_gb || 0} GB free`;
+            select.appendChild(option);
+        });
+
+    } catch (error) {
+        select.innerHTML = '<option value="">Error loading storages</option>';
+    }
+}
+
+async function loadTemplateBridges(nodeName) {
+    const select = document.getElementById('templateBridge');
+    select.innerHTML = '<option value="">Loading...</option>';
+
+    try {
+        const response = await fetch(`/api/node/${nodeName}/networks`);
+        const networks = await response.json();
+
+        if (networks.error) {
+            select.innerHTML = '<option value="vmbr0">vmbr0 (default)</option>';
+            return;
+        }
+
+        select.innerHTML = '';
+        // Add default option first
+        const defaultOption = document.createElement('option');
+        defaultOption.value = 'vmbr0';
+        defaultOption.textContent = 'vmbr0 (default)';
+        select.appendChild(defaultOption);
+
+        networks.forEach(net => {
+            if (net.iface && net.iface !== 'vmbr0') {
+                const option = document.createElement('option');
+                option.value = net.iface;
+                option.textContent = `${net.iface}${net.comments ? ' - ' + net.comments : ''}`;
+                select.appendChild(option);
+            }
+        });
+
+    } catch (error) {
+        select.innerHTML = '<option value="vmbr0">vmbr0 (default)</option>';
+    }
+}
+
+async function createCloudTemplate() {
+    const imageId = document.getElementById('cloudImage').value;
+    const storage = document.getElementById('templateStorage').value;
+
+    if (!imageId) {
+        showNotification('Please select a cloud image', 'warning');
+        return;
+    }
+
+    if (!storage) {
+        showNotification('Please select a storage', 'warning');
+        return;
+    }
+
+    // Gather form data
+    const data = {
+        image_id: imageId,
+        storage: storage,
+        name: document.getElementById('templateName').value || undefined,
+        vmid: document.getElementById('templateVmid').value || undefined,
+        cores: parseInt(document.getElementById('templateCores').value) || 2,
+        memory: parseInt(document.getElementById('templateMemory').value) || 2048,
+        disk_size: document.getElementById('templateDiskSize').value || '10G',
+        bridge: document.getElementById('templateBridge').value || 'vmbr0',
+        ci_user: document.getElementById('ciUser').value || undefined,
+        ci_password: document.getElementById('ciPassword').value || undefined,
+        ci_sshkeys: document.getElementById('ciSshKeys').value || undefined,
+        ip_config: document.getElementById('ciIpConfig').value || 'ip=dhcp,ip6=auto',
+    };
+
+    // Show progress
+    const btn = document.getElementById('createTemplateBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Starting...';
+
+    document.getElementById('templateProgress').classList.remove('d-none');
+    document.getElementById('templateResult').classList.add('d-none');
+    document.getElementById('templateProgressMsg').innerHTML = '<i class="bi bi-hourglass-split"></i> Starting background job...';
+
+    try {
+        const response = await fetch(`/api/node/${currentTemplateNode}/create-cloud-template`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+
+        if (result.success && result.job_id) {
+            // Job started successfully
+            document.getElementById('templateResult').classList.remove('d-none');
+            document.getElementById('templateProgress').classList.add('d-none');
+            document.getElementById('templateResult').innerHTML = `
+                <div class="alert alert-info">
+                    <i class="bi bi-check-circle"></i> <strong>Job started successfully!</strong><br>
+                    <p class="mb-2">Template creation is running in the background. You can close this dialog.</p>
+                    <p class="mb-0">
+                        <strong>Job ID:</strong> ${result.job_id}<br>
+                        <strong>VMID:</strong> ${result.vmid}
+                    </p>
+                    <hr>
+                    <small class="text-muted">
+                        Track progress via the <i class="bi bi-list-task"></i> Jobs icon in the top navbar.
+                        The template will appear in the list once completed.
+                    </small>
+                </div>
+            `;
+            showNotification('Template creation job started. Check the Jobs dropdown for progress.', 'success');
+
+            // Refresh global jobs dropdown to show the new job
+            loadGlobalJobs();
+
+            // Close modal after a short delay
+            setTimeout(() => {
+                const modal = bootstrap.Modal.getInstance(document.getElementById('cloudTemplateModal'));
+                if (modal) modal.hide();
+            }, 3000);
+
+        } else {
+            // Error starting job
+            document.getElementById('templateProgress').classList.add('d-none');
+            document.getElementById('templateResult').classList.remove('d-none');
+            document.getElementById('templateResult').innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle"></i> <strong>Error:</strong> ${result.error || 'Unknown error'}
+                </div>
+            `;
+            showNotification('Failed to start template creation: ' + (result.error || 'Unknown error'), 'error');
+        }
+
+    } catch (error) {
+        document.getElementById('templateProgress').classList.add('d-none');
+        document.getElementById('templateResult').classList.remove('d-none');
+        document.getElementById('templateResult').innerHTML = `
+            <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle"></i> Network error: ${error.message}
+            </div>
+        `;
+        showNotification('Network error: ' + error.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-plus-circle"></i> Create Template';
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function escapeForJs(text) {
+    return text.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$');
 }
 </script>
 {% endblock %}

@@ -1,0 +1,56 @@
+{
+    "ubuntu-24.04": {
+        "name": "Ubuntu 24.04 LTS (Noble)",
+        "url": "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img",
+        "os_type": "l26",
+        "description": "Ubuntu 24.04 LTS cloud image with cloud-init support"
+    },
+    "ubuntu-24.04-daily": {
+        "name": "Ubuntu 24.04 LTS Daily",
+        "url": "https://cloud-images.ubuntu.com/daily/server/noble/current/noble-server-cloudimg-amd64.img",
+        "os_type": "l26",
+        "description": "Ubuntu 24.04 LTS daily build"
+    },
+    "ubuntu-22.04": {
+        "name": "Ubuntu 22.04 LTS (Jammy)",
+        "url": "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img",
+        "os_type": "l26",
+        "description": "Ubuntu 22.04 LTS cloud image with cloud-init support"
+    },
+    "debian-12": {
+        "name": "Debian 12 (Bookworm)",
+        "url": "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2",
+        "os_type": "l26",
+        "description": "Debian 12 cloud image with cloud-init support"
+    },
+    "debian-12-daily": {
+        "name": "Debian 12 Daily",
+        "url": "https://cloud.debian.org/images/cloud/bookworm/daily/latest/debian-12-genericcloud-amd64-daily.qcow2",
+        "os_type": "l26",
+        "description": "Debian 12 daily build"
+    },
+    "debian-11": {
+        "name": "Debian 11 (Bullseye)",
+        "url": "https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-genericcloud-amd64.qcow2",
+        "os_type": "l26",
+        "description": "Debian 11 cloud image with cloud-init support"
+    },
+    "rocky-9": {
+        "name": "Rocky Linux 9",
+        "url": "https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2",
+        "os_type": "l26",
+        "description": "Rocky Linux 9 cloud image"
+    },
+    "alma-9": {
+        "name": "AlmaLinux 9",
+        "url": "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2",
+        "os_type": "l26",
+        "description": "AlmaLinux 9 cloud image"
+    },
+    "fedora-40": {
+        "name": "Fedora 40 Cloud",
+        "url": "https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2",
+        "os_type": "l26",
+        "description": "Fedora 40 cloud image"
+    }
+}

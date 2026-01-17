@@ -1,4 +1,9 @@
+import json
+import os
 import pprint
+import threading
+import time
+import uuid
 from collections import defaultdict
 from datetime import datetime
 from functools import wraps
@@ -12,8 +17,202 @@ from proxmoxer import ProxmoxAPI
 # Disable SSL warnings if needed
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Default timeout for Proxmox API operations (in seconds)
+PROXMOX_TIMEOUT = 30
+
+# Retry configuration for slow operations
+RETRY_MAX_ATTEMPTS = 3
+RETRY_BASE_DELAY = 2  # seconds
+RETRY_MAX_DELAY = 30  # seconds
+
+
+def retry_on_timeout(
+    func,
+    *args,
+    max_attempts=RETRY_MAX_ATTEMPTS,
+    base_delay=RETRY_BASE_DELAY,
+    job_id=None,
+    job_queue_ref=None,
+    operation_name="operation",
+    **kwargs,
+):
+    """
+    Retry a function on timeout errors with exponential backoff.
+
+    Args:
+        func: The function to call
+        *args: Positional arguments for the function
+        max_attempts: Maximum number of retry attempts
+        base_delay: Initial delay between retries (doubles each attempt)
+        job_id: Optional job ID for logging to job queue
+        job_queue_ref: Optional reference to job queue for logging
+        operation_name: Name of the operation for logging
+        **kwargs: Keyword arguments for the function
+
+    Returns:
+        The result of the function call
+
+    Raises:
+        The last exception if all retries fail
+    """
+    last_exception = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            error_str = str(e).lower()
+            # Check if it's a timeout-related error
+            is_timeout = any(
+                x in error_str
+                for x in [
+                    "timed out",
+                    "timeout",
+                    "read timeout",
+                    "connection timeout",
+                    "connecttimeout",
+                ]
+            )
+
+            if not is_timeout:
+                # Not a timeout error, re-raise immediately
+                raise
+
+            last_exception = e
+
+            if attempt < max_attempts:
+                # Calculate delay with exponential backoff
+                delay = min(base_delay * (2 ** (attempt - 1)), RETRY_MAX_DELAY)
+
+                log_msg = f"Timeout on {operation_name} (attempt {attempt}/{max_attempts}). Retrying in {delay}s..."
+                print(log_msg)
+
+                if job_id and job_queue_ref:
+                    job_queue_ref.add_step(job_id, log_msg)
+
+                time.sleep(delay)
+            else:
+                log_msg = f"Timeout on {operation_name} after {max_attempts} attempts. Giving up."
+                print(log_msg)
+                if job_id and job_queue_ref:
+                    job_queue_ref.add_step(job_id, log_msg)
+
+    # All retries exhausted
+    raise last_exception
+
+
 app = Flask(__name__)
 app.secret_key = "your-secret-key-here"
+
+
+# =============================================================================
+# Background Job Queue System
+# =============================================================================
+
+
+class JobQueue:
+    """Simple in-memory job queue for background tasks"""
+
+    def __init__(self):
+        self.jobs = {}  # job_id -> job_info
+        self.lock = threading.Lock()
+
+    def create_job(self, job_type, description, params):
+        """Create a new job and return its ID"""
+        job_id = str(uuid.uuid4())[:8]
+        job = {
+            "id": job_id,
+            "type": job_type,
+            "description": description,
+            "params": params,
+            "status": "queued",  # queued, running, completed, failed
+            "progress": 0,
+            "current_step": "",
+            "steps": [],
+            "result": None,
+            "error": None,
+            "created_at": datetime.now().isoformat(),
+            "started_at": None,
+            "completed_at": None,
+        }
+        with self.lock:
+            self.jobs[job_id] = job
+        return job_id
+
+    def get_job(self, job_id):
+        """Get job info by ID"""
+        with self.lock:
+            return self.jobs.get(job_id)
+
+    def get_all_jobs(self, limit=50):
+        """Get all jobs, most recent first"""
+        with self.lock:
+            jobs = list(self.jobs.values())
+        jobs.sort(key=lambda x: x["created_at"], reverse=True)
+        return jobs[:limit]
+
+    def update_job(self, job_id, **kwargs):
+        """Update job fields"""
+        with self.lock:
+            if job_id in self.jobs:
+                self.jobs[job_id].update(kwargs)
+
+    def add_step(self, job_id, step_msg):
+        """Add a step message to the job log"""
+        with self.lock:
+            if job_id in self.jobs:
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                self.jobs[job_id]["steps"].append(f"[{timestamp}] {step_msg}")
+                self.jobs[job_id]["current_step"] = step_msg
+
+    def set_running(self, job_id):
+        """Mark job as running"""
+        self.update_job(job_id, status="running", started_at=datetime.now().isoformat())
+
+    def set_completed(self, job_id, result=None):
+        """Mark job as completed"""
+        self.update_job(
+            job_id,
+            status="completed",
+            progress=100,
+            result=result,
+            completed_at=datetime.now().isoformat(),
+            current_step="Completed",
+        )
+
+    def set_failed(self, job_id, error):
+        """Mark job as failed"""
+        self.update_job(
+            job_id,
+            status="failed",
+            error=str(error),
+            completed_at=datetime.now().isoformat(),
+            current_step=f"Failed: {error}",
+        )
+
+    def delete_job(self, job_id):
+        """Delete a job"""
+        with self.lock:
+            if job_id in self.jobs:
+                del self.jobs[job_id]
+                return True
+        return False
+
+    def cleanup_old_jobs(self, max_age_hours=24):
+        """Remove jobs older than max_age_hours"""
+        cutoff = datetime.now().timestamp() - (max_age_hours * 3600)
+        with self.lock:
+            to_delete = []
+            for job_id, job in self.jobs.items():
+                created = datetime.fromisoformat(job["created_at"]).timestamp()
+                if created < cutoff and job["status"] in ["completed", "failed"]:
+                    to_delete.append(job_id)
+            for job_id in to_delete:
+                del self.jobs[job_id]
+
+
+# Global job queue instance
+job_queue = JobQueue()
 
 
 # Custom Jinja filters
@@ -71,6 +270,28 @@ except Exception as e:
     config_file_exists = False
     config = {"clusters": []}
 
+# Cloud image definitions for VM templates
+# Load cloud images from external JSON file
+CLOUD_IMAGES_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "cloud_images.json"
+)
+
+
+def load_cloud_images():
+    """Load cloud images configuration from JSON file"""
+    try:
+        with open(CLOUD_IMAGES_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"Warning: Cloud images file not found: {CLOUD_IMAGES_FILE}")
+        return {}
+    except json.JSONDecodeError as e:
+        print(f"Warning: Invalid JSON in cloud images file: {e}")
+        return {}
+
+
+CLOUD_IMAGES = load_cloud_images()
+
 # Store Proxmox connections for multiple clusters
 all_clusters = {}  # cluster_id -> cluster config
 current_cluster_id = None
@@ -79,11 +300,20 @@ cluster_nodes = []  # Store all nodes from current cluster
 connection_metadata = {}  # Store connection metadata for renewal
 
 
-def create_proxmox_connection(node_config):
-    """Create a ProxmoxAPI connection from node config, supporting both password and API token auth"""
+def create_proxmox_connection(node_config, timeout=None):
+    """Create a ProxmoxAPI connection from node config, supporting both password and API token auth
+
+    Args:
+        node_config: Dictionary with connection settings (host, user, password/token, etc.)
+        timeout: Request timeout in seconds (default: PROXMOX_TIMEOUT)
+
+    Returns:
+        ProxmoxAPI instance
+    """
     host = node_config["host"]
     user = node_config["user"]
     verify_ssl = node_config.get("verify_ssl", True)
+    req_timeout = timeout if timeout is not None else PROXMOX_TIMEOUT
 
     # Check if using API token authentication
     if node_config.get("token_name") and node_config.get("token_value"):
@@ -93,6 +323,7 @@ def create_proxmox_connection(node_config):
             token_name=node_config["token_name"],
             token_value=node_config["token_value"],
             verify_ssl=verify_ssl,
+            timeout=req_timeout,
         )
     else:
         # Password-based authentication
@@ -101,6 +332,7 @@ def create_proxmox_connection(node_config):
             user=user,
             password=node_config["password"],
             verify_ssl=verify_ssl,
+            timeout=req_timeout,
         )
 
 
@@ -2856,6 +3088,500 @@ def api_vm_delete(node, vmid):
             return jsonify({"error": "VM must be stopped before deletion"}), 400
         else:
             return jsonify({"error": f"Failed to delete VM: {error_msg}"}), 500
+
+
+@app.route("/api/cloud-images")
+def api_cloud_images():
+    """API endpoint to get available cloud images for template creation"""
+    images = []
+    for image_id, image_info in CLOUD_IMAGES.items():
+        images.append(
+            {
+                "id": image_id,
+                "name": image_info["name"],
+                "description": image_info["description"],
+                "url": image_info["url"],
+            }
+        )
+    return jsonify(images)
+
+
+# =============================================================================
+# Job Queue API Endpoints
+# =============================================================================
+
+
+@app.route("/api/jobs")
+def api_get_jobs():
+    """Get all jobs"""
+    jobs = job_queue.get_all_jobs()
+    return jsonify(jobs)
+
+
+@app.route("/api/jobs/<job_id>")
+def api_get_job(job_id):
+    """Get a specific job"""
+    job = job_queue.get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify(job)
+
+
+@app.route("/api/jobs/<job_id>", methods=["DELETE"])
+def api_delete_job(job_id):
+    """Delete a job"""
+    job = job_queue.get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    if job["status"] == "running":
+        return jsonify({"error": "Cannot delete a running job"}), 400
+    job_queue.delete_job(job_id)
+    return jsonify({"success": True})
+
+
+# =============================================================================
+# Cloud Template Creation with Background Jobs
+# =============================================================================
+
+
+def wait_for_task(proxmox, node, task_upid, job_id, timeout=600, poll_interval=3):
+    """Wait for a Proxmox task to complete, updating job progress"""
+    waited = 0
+    while waited < timeout:
+        try:
+            task_status = proxmox.nodes(node).tasks(task_upid).status.get()
+            status = task_status.get("status")
+            if status == "stopped":
+                exitstatus = task_status.get("exitstatus", "")
+                if exitstatus == "OK":
+                    return {"success": True}
+                else:
+                    return {"success": False, "error": f"Task failed: {exitstatus}"}
+        except Exception as e:
+            job_queue.add_step(job_id, f"Error checking task status: {e}")
+
+        time.sleep(poll_interval)
+        waited += poll_interval
+
+    return {"success": False, "error": "Task timed out"}
+
+
+def run_cloud_template_job(job_id, node, params):
+    """Background job to create a cloud template via Proxmox API"""
+    job_queue.set_running(job_id)
+
+    try:
+        # Get connection
+        proxmox = get_proxmox_connection(node, auto_renew=True)
+        if not proxmox:
+            job_queue.set_failed(job_id, "Failed to connect to node")
+            return
+
+        image_id = params["image_id"]
+        image_info = CLOUD_IMAGES[image_id]
+        image_url = image_info["url"]
+        image_filename_original = image_url.split("/")[-1]
+
+        # Normalize filename extension for Proxmox import
+        # Cloud images with .img extension are typically qcow2 format
+        # Proxmox download-url API requires proper extension for 'import' content type
+        if image_filename_original.endswith(".img"):
+            image_filename = image_filename_original[:-4] + ".qcow2"
+        elif not any(
+            image_filename_original.endswith(ext) for ext in [".qcow2", ".raw", ".vmdk"]
+        ):
+            # Add .qcow2 extension if no recognized extension
+            image_filename = image_filename_original + ".qcow2"
+        else:
+            image_filename = image_filename_original
+
+        storage = params["storage"]
+        vmid = params["vmid"]
+        name = params["name"]
+        cores = params["cores"]
+        memory = params["memory"]
+        disk_size = params["disk_size"]
+        bridge = params["bridge"]
+        ci_user = params.get("ci_user", "")
+        ci_password = params.get("ci_password", "")
+        ci_sshkeys = params.get("ci_sshkeys", "")
+        ip_config = params.get("ip_config", "ip=dhcp,ip6=auto")
+
+        # Step 1: Find storage for downloading (needs 'import' or 'images' content type)
+        job_queue.add_step(job_id, "Finding storage for image download...")
+        job_queue.update_job(job_id, progress=5)
+
+        storages = proxmox.nodes(node).storage.get()
+        download_storage = None
+        download_content_type = None
+
+        # Priority: 1) storage with 'import' content, 2) target storage if it supports images
+        for s in storages:
+            if s.get("active", 0) != 1:
+                continue
+            content = s.get("content", "").split(",")
+
+            # Check for 'import' content type (Proxmox 8.1+)
+            if "import" in content:
+                download_storage = s.get("storage")
+                download_content_type = "import"
+                break
+
+        # If no 'import' storage, check if target storage supports images
+        if not download_storage:
+            for s in storages:
+                if s.get("storage") == storage and s.get("active", 0) == 1:
+                    content = s.get("content", "").split(",")
+                    if "images" in content:
+                        download_storage = storage
+                        download_content_type = "import"  # Try import content type
+                        break
+
+        # Fallback: any storage with images content
+        if not download_storage:
+            for s in storages:
+                if s.get("active", 0) != 1:
+                    continue
+                content = s.get("content", "").split(",")
+                if "images" in content:
+                    download_storage = s.get("storage")
+                    download_content_type = "import"
+                    break
+
+        if not download_storage:
+            job_queue.set_failed(
+                job_id,
+                "No storage with 'import' or 'images' content type found. Proxmox 8.1+ required for cloud template import.",
+            )
+            return
+
+        job_queue.add_step(
+            job_id,
+            f"Using storage '{download_storage}' for download (content type: {download_content_type})",
+        )
+
+        # Step 2: Download cloud image to the storage
+        job_queue.add_step(job_id, f"Downloading cloud image: {image_filename}...")
+        job_queue.update_job(job_id, progress=10)
+
+        try:
+            print(
+                f"node '{node}', storage '{storage}', url '{image_url}', fiilename '{image_filename}', content type '{download_content_type}'"
+            )
+            download_task = (
+                proxmox.nodes(node)
+                .storage(download_storage)("download-url")
+                .post(
+                    content=download_content_type,
+                    filename=image_filename,
+                    url=image_url,
+                    node=node,
+                )
+            )
+            job_queue.add_step(job_id, f"Download task started: {download_task}")
+        except Exception as e:
+            error_str = str(e).lower()
+            if "import" in error_str or "content" in error_str:
+                job_queue.set_failed(
+                    job_id,
+                    f"Storage does not support 'import' content type. Proxmox 8.1+ required. Error: {e}",
+                )
+            else:
+                job_queue.set_failed(job_id, f"Failed to start download: {e}")
+            return
+
+        # Wait for download to complete
+        job_queue.add_step(
+            job_id,
+            "Waiting for download to complete (this may take several minutes)...",
+        )
+        result = wait_for_task(
+            proxmox, node, download_task, job_id, timeout=900
+        )  # 15 min timeout
+        if not result["success"]:
+            job_queue.set_failed(job_id, result["error"])
+            return
+
+        job_queue.add_step(job_id, "Download completed successfully")
+        job_queue.update_job(job_id, progress=40)
+
+        # Step 3: Create VM
+        job_queue.add_step(job_id, f"Creating VM {vmid}...")
+
+        vm_config = {
+            "vmid": vmid,
+            "name": name,
+            "memory": memory,
+            "cores": cores,
+            "ostype": image_info.get("os_type", "l26"),
+            "scsihw": "virtio-scsi-pci",
+            "net0": f"virtio,bridge={bridge}",
+            "serial0": "socket",
+            "vga": "serial0",
+            "agent": "enabled=1",
+        }
+
+        try:
+            proxmox.nodes(node).qemu.create(**vm_config)
+            job_queue.add_step(job_id, f"VM {vmid} created")
+        except Exception as e:
+            job_queue.set_failed(job_id, f"Failed to create VM: {e}")
+            return
+
+        job_queue.update_job(job_id, progress=50)
+
+        # Step 4: Import disk using import-from parameter
+        job_queue.add_step(job_id, "Importing disk from cloud image...")
+
+        # The downloaded image is at: {storage}:import/{filename}
+        import_path = f"{download_storage}:{download_content_type}/{image_filename}"
+        job_queue.add_step(job_id, f"Import path: {import_path}")
+
+        try:
+            # Use the config endpoint with import-from to import the disk
+            # This operation can be slow, so use retry with exponential backoff
+            def do_disk_import():
+                proxmox.nodes(node).qemu(vmid).config.put(
+                    scsi0=f"{storage}:0,import-from={import_path}"
+                )
+
+            retry_on_timeout(
+                do_disk_import,
+                max_attempts=5,  # More retries for this slow operation
+                base_delay=5,
+                job_id=job_id,
+                job_queue_ref=job_queue,
+                operation_name="disk import",
+            )
+            job_queue.add_step(job_id, "Disk imported successfully")
+        except Exception as e:
+            job_queue.set_failed(job_id, f"Failed to import disk: {e}")
+            return
+
+        job_queue.update_job(job_id, progress=65)
+
+        # Step 5: Configure boot disk
+        job_queue.add_step(job_id, "Configuring boot settings...")
+        try:
+
+            def do_boot_config():
+                proxmox.nodes(node).qemu(vmid).config.put(
+                    boot="order=scsi0", bootdisk="scsi0"
+                )
+
+            retry_on_timeout(
+                do_boot_config,
+                job_id=job_id,
+                job_queue_ref=job_queue,
+                operation_name="boot config",
+            )
+        except Exception as e:
+            job_queue.add_step(job_id, f"Boot config warning: {e}")
+
+        job_queue.update_job(job_id, progress=70)
+
+        # Step 6: Add cloud-init drive
+        job_queue.add_step(job_id, "Adding cloud-init drive...")
+        try:
+
+            def do_cloudinit_drive():
+                proxmox.nodes(node).qemu(vmid).config.put(ide2=f"{storage}:cloudinit")
+
+            retry_on_timeout(
+                do_cloudinit_drive,
+                job_id=job_id,
+                job_queue_ref=job_queue,
+                operation_name="cloud-init drive",
+            )
+        except Exception as e:
+            job_queue.add_step(job_id, f"Cloud-init drive warning: {e}")
+
+        job_queue.update_job(job_id, progress=75)
+
+        # Step 7: Configure cloud-init settings
+        job_queue.add_step(job_id, "Configuring cloud-init...")
+        ci_config = {"ipconfig0": ip_config}
+        if ci_user:
+            ci_config["ciuser"] = ci_user
+        if ci_password:
+            ci_config["cipassword"] = ci_password
+        if ci_sshkeys:
+            # SSH keys need to be URL-encoded
+            import urllib.parse
+
+            ci_config["sshkeys"] = urllib.parse.quote(ci_sshkeys, safe="")
+
+        try:
+
+            def do_cloudinit_config():
+                proxmox.nodes(node).qemu(vmid).config.put(**ci_config)
+
+            retry_on_timeout(
+                do_cloudinit_config,
+                job_id=job_id,
+                job_queue_ref=job_queue,
+                operation_name="cloud-init config",
+            )
+        except Exception as e:
+            job_queue.add_step(job_id, f"Cloud-init config warning: {e}")
+
+        job_queue.update_job(job_id, progress=80)
+
+        # Step 8: Resize disk
+        job_queue.add_step(job_id, f"Resizing disk to {disk_size}...")
+        try:
+
+            def do_disk_resize():
+                proxmox.nodes(node).qemu(vmid).resize.put(disk="scsi0", size=disk_size)
+
+            retry_on_timeout(
+                do_disk_resize,
+                max_attempts=5,  # More retries for disk resize
+                base_delay=3,
+                job_id=job_id,
+                job_queue_ref=job_queue,
+                operation_name="disk resize",
+            )
+            job_queue.add_step(job_id, "Disk resized successfully")
+        except Exception as e:
+            job_queue.add_step(job_id, f"Disk resize warning: {e}")
+
+        job_queue.update_job(job_id, progress=90)
+
+        # Step 9: Convert to template
+        job_queue.add_step(job_id, "Converting VM to template...")
+        try:
+
+            def do_template_convert():
+                proxmox.nodes(node).qemu(vmid).template.post()
+
+            retry_on_timeout(
+                do_template_convert,
+                max_attempts=5,  # More retries for template conversion
+                base_delay=3,
+                job_id=job_id,
+                job_queue_ref=job_queue,
+                operation_name="template conversion",
+            )
+            job_queue.add_step(job_id, "VM converted to template")
+        except Exception as e:
+            job_queue.add_step(job_id, f"Template conversion warning: {e}")
+
+        job_queue.update_job(job_id, progress=95)
+
+        # Step 10: Cleanup - delete the downloaded image
+        job_queue.add_step(job_id, "Cleaning up temporary files...")
+        try:
+            # Delete the downloaded image file
+            content_id = f"{download_storage}:{download_content_type}/{image_filename}"
+
+            def do_cleanup():
+                proxmox.nodes(node).storage(download_storage).content(
+                    content_id
+                ).delete()
+
+            retry_on_timeout(
+                do_cleanup,
+                job_id=job_id,
+                job_queue_ref=job_queue,
+                operation_name="cleanup",
+            )
+            job_queue.add_step(job_id, "Temporary image deleted")
+        except Exception as e:
+            job_queue.add_step(
+                job_id,
+                f"Cleanup warning: {e} (you may want to manually delete {image_filename} from {download_storage})",
+            )
+
+        # Done!
+        job_queue.set_completed(
+            job_id,
+            {
+                "vmid": vmid,
+                "name": name,
+                "node": node,
+            },
+        )
+
+    except Exception as e:
+        job_queue.set_failed(job_id, str(e))
+
+
+@app.route("/api/node/<node>/create-cloud-template", methods=["POST"])
+def api_create_cloud_template(node):
+    """API endpoint to create a VM template from a cloud image (background job)"""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        # Required parameters
+        image_id = data.get("image_id")
+        storage = data.get("storage")
+
+        if not image_id or not storage:
+            return (
+                jsonify({"error": "Missing required parameters: image_id, storage"}),
+                400,
+            )
+
+        if image_id not in CLOUD_IMAGES:
+            return jsonify({"error": f"Unknown cloud image: {image_id}"}), 400
+
+        # Get next VMID if not provided
+        vmid = data.get("vmid")
+        if not vmid:
+            try:
+                vmid = proxmox.cluster.nextid.get()
+            except Exception:
+                return jsonify({"error": "Failed to get next available VMID"}), 500
+
+        vmid = int(vmid)
+
+        # Prepare job parameters
+        params = {
+            "image_id": image_id,
+            "storage": storage,
+            "vmid": vmid,
+            "name": data.get("name", f"{image_id}-template"),
+            "cores": int(data.get("cores", 2)),
+            "memory": int(data.get("memory", 2048)),
+            "disk_size": data.get("disk_size", "10G"),
+            "bridge": data.get("bridge", "vmbr0"),
+            "ci_user": data.get("ci_user", ""),
+            "ci_password": data.get("ci_password", ""),
+            "ci_sshkeys": data.get("ci_sshkeys", ""),
+            "ip_config": data.get("ip_config", "ip=dhcp,ip6=auto"),
+        }
+
+        # Create job
+        job_id = job_queue.create_job(
+            job_type="create_cloud_template",
+            description=f"Create template '{params['name']}' on {node}",
+            params=params,
+        )
+
+        # Start background thread
+        thread = threading.Thread(
+            target=run_cloud_template_job, args=(job_id, node, params), daemon=True
+        )
+        thread.start()
+
+        return jsonify(
+            {
+                "success": True,
+                "message": "Template creation job started",
+                "job_id": job_id,
+                "vmid": vmid,
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.errorhandler(404)
