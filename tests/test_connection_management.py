@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, Mock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import (
+    PROXMOX_TIMEOUT,
     all_clusters,
     cluster_nodes,
     connection_metadata,
@@ -119,7 +120,11 @@ class TestConnectionManagement(unittest.TestCase):
         self.assertEqual(result, mock_connection)
         self.assertEqual(app.proxmox_nodes[node_name], mock_connection)
         mock_proxmox_api.assert_called_once_with(
-            "192.168.1.100", user="root@pam", password="testpass", verify_ssl=False
+            "192.168.1.100",
+            user="root@pam",
+            password="testpass",
+            verify_ssl=False,
+            timeout=PROXMOX_TIMEOUT,
         )
 
     def test_renew_proxmox_connection_no_metadata(self):
