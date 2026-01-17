@@ -19,6 +19,7 @@ LABEL org.opencontainers.image.source="https://github.com/greenlogles/proxui"
 COPY ./static/ /app/static/
 COPY ./templates/ /app/templates/
 COPY ./app.py /app/
+COPY ./cloud_images.json /app/
 
 # Create non-root user for security
 RUN useradd -r -u 1000 -m -d /app -s /bin/bash proxui && \
