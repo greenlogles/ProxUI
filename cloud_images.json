@@ -52,5 +52,23 @@
         "url": "https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2",
         "os_type": "l26",
         "description": "Fedora 40 cloud image"
+    },
+    "freebsd-14.2": {
+        "name": "FreeBSD 14.2",
+        "url": "https://cdn.gyptazy.com/freebsd/images/freebsd-14.2-cloud-image-amd64.qcow2",
+        "os_type": "freebsd",
+        "description": "FreeBSD 14.2 cloud image with cloud-init support"
+    },
+    "openbsd-7.7": {
+        "name": "OpenBSD 7.7",
+        "url": "https://cdn.gyptazy.com/openbsd/images/openbsd-7.7-cloud-image-amd64.qcow2",
+        "os_type": "other",
+        "description": "OpenBSD 7.7 cloud image with cloud-init support"
+    },
+    "netbsd-10.1": {
+        "name": "NetBSD 10.1",
+        "url": "https://cdn.gyptazy.com/netbsd/images/netbsd-10.1-cloud-image-amd64.qcow2",
+        "os_type": "other",
+        "description": "NetBSD 10.1 cloud image with cloud-init support"
     }
 }

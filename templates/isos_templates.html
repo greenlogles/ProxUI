@@ -735,6 +735,7 @@ function populateCloudImageSelect(images) {
         'Ubuntu': [],
         'Debian': [],
         'RHEL-based': [],
+        'BSD': [],
         'Other': []
     };
 
@@ -745,6 +746,8 @@ function populateCloudImageSelect(images) {
             groups['Debian'].push(img);
         } else if (img.id.startsWith('rocky') || img.id.startsWith('alma') || img.id.startsWith('centos')) {
             groups['RHEL-based'].push(img);
+        } else if (img.id.startsWith('freebsd') || img.id.startsWith('openbsd') || img.id.startsWith('netbsd')) {
+            groups['BSD'].push(img);
         } else {
             groups['Other'].push(img);
         }
