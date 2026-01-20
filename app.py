@@ -3395,8 +3395,10 @@ def run_cloud_template_job(job_id, node, params):
 
         try:
             # Use POST (async) instead of PUT (sync) for disk import - this is a slow operation
-            import_task = proxmox.nodes(node).qemu(vmid).config.post(
-                scsi0=f"{storage}:0,import-from={import_path}"
+            import_task = (
+                proxmox.nodes(node)
+                .qemu(vmid)
+                .config.post(scsi0=f"{storage}:0,import-from={import_path}")
             )
             job_queue.add_step(job_id, f"Disk import task started: {import_task}")
 
@@ -3426,13 +3428,15 @@ def run_cloud_template_job(job_id, node, params):
         # Step 6: Add cloud-init drive (uses storage allocation, use async POST)
         job_queue.add_step(job_id, "Adding cloud-init drive...")
         try:
-            cloudinit_task = proxmox.nodes(node).qemu(vmid).config.post(
-                ide2=f"{storage}:cloudinit"
+            cloudinit_task = (
+                proxmox.nodes(node).qemu(vmid).config.post(ide2=f"{storage}:cloudinit")
             )
             job_queue.add_step(job_id, f"Cloud-init drive task: {cloudinit_task}")
             result = wait_for_task(proxmox, node, cloudinit_task, job_id, timeout=120)
             if not result["success"]:
-                job_queue.add_step(job_id, f"Cloud-init drive warning: {result['error']}")
+                job_queue.add_step(
+                    job_id, f"Cloud-init drive warning: {result['error']}"
+                )
         except Exception as e:
             job_queue.add_step(job_id, f"Cloud-init drive warning: {e}")
 
@@ -3464,8 +3468,10 @@ def run_cloud_template_job(job_id, node, params):
         try:
 
             def do_disk_resize():
-                return proxmox.nodes(node).qemu(vmid).resize.put(
-                    disk="scsi0", size=disk_size
+                return (
+                    proxmox.nodes(node)
+                    .qemu(vmid)
+                    .resize.put(disk="scsi0", size=disk_size)
                 )
 
             retry_on_timeout(
@@ -3488,9 +3494,13 @@ def run_cloud_template_job(job_id, node, params):
             template_task = proxmox.nodes(node).qemu(vmid).template.post()
             if template_task:
                 job_queue.add_step(job_id, f"Template conversion task: {template_task}")
-                result = wait_for_task(proxmox, node, template_task, job_id, timeout=120)
+                result = wait_for_task(
+                    proxmox, node, template_task, job_id, timeout=120
+                )
                 if not result["success"]:
-                    job_queue.add_step(job_id, f"Template conversion warning: {result['error']}")
+                    job_queue.add_step(
+                        job_id, f"Template conversion warning: {result['error']}"
+                    )
                 else:
                     job_queue.add_step(job_id, "VM converted to template")
             else:
