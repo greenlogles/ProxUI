@@ -3394,21 +3394,17 @@ def run_cloud_template_job(job_id, node, params):
         job_queue.add_step(job_id, f"Import path: {import_path}")
 
         try:
-            # Use the config endpoint with import-from to import the disk
-            # This operation can be slow, so use retry with exponential backoff
-            def do_disk_import():
-                proxmox.nodes(node).qemu(vmid).config.put(
-                    scsi0=f"{storage}:0,import-from={import_path}"
-                )
-
-            retry_on_timeout(
-                do_disk_import,
-                max_attempts=5,  # More retries for this slow operation
-                base_delay=5,
-                job_id=job_id,
-                job_queue_ref=job_queue,
-                operation_name="disk import",
+            # Use POST (async) instead of PUT (sync) for disk import - this is a slow operation
+            import_task = proxmox.nodes(node).qemu(vmid).config.post(
+                scsi0=f"{storage}:0,import-from={import_path}"
             )
+            job_queue.add_step(job_id, f"Disk import task started: {import_task}")
+
+            # Wait for import task to complete (can take several minutes for large images)
+            result = wait_for_task(proxmox, node, import_task, job_id, timeout=600)
+            if not result["success"]:
+                job_queue.set_failed(job_id, f"Disk import failed: {result['error']}")
+                return
             job_queue.add_step(job_id, "Disk imported successfully")
         except Exception as e:
             job_queue.set_failed(job_id, f"Failed to import disk: {e}")
@@ -3416,39 +3412,27 @@ def run_cloud_template_job(job_id, node, params):
 
         job_queue.update_job(job_id, progress=65)
 
-        # Step 5: Configure boot disk
+        # Step 5: Configure boot disk (simple config change, PUT is fine)
         job_queue.add_step(job_id, "Configuring boot settings...")
         try:
-
-            def do_boot_config():
-                proxmox.nodes(node).qemu(vmid).config.put(
-                    boot="order=scsi0", bootdisk="scsi0"
-                )
-
-            retry_on_timeout(
-                do_boot_config,
-                job_id=job_id,
-                job_queue_ref=job_queue,
-                operation_name="boot config",
+            proxmox.nodes(node).qemu(vmid).config.put(
+                boot="order=scsi0", bootdisk="scsi0"
             )
         except Exception as e:
             job_queue.add_step(job_id, f"Boot config warning: {e}")
 
         job_queue.update_job(job_id, progress=70)
 
-        # Step 6: Add cloud-init drive
+        # Step 6: Add cloud-init drive (uses storage allocation, use async POST)
         job_queue.add_step(job_id, "Adding cloud-init drive...")
         try:
-
-            def do_cloudinit_drive():
-                proxmox.nodes(node).qemu(vmid).config.put(ide2=f"{storage}:cloudinit")
-
-            retry_on_timeout(
-                do_cloudinit_drive,
-                job_id=job_id,
-                job_queue_ref=job_queue,
-                operation_name="cloud-init drive",
+            cloudinit_task = proxmox.nodes(node).qemu(vmid).config.post(
+                ide2=f"{storage}:cloudinit"
             )
+            job_queue.add_step(job_id, f"Cloud-init drive task: {cloudinit_task}")
+            result = wait_for_task(proxmox, node, cloudinit_task, job_id, timeout=120)
+            if not result["success"]:
+                job_queue.add_step(job_id, f"Cloud-init drive warning: {result['error']}")
         except Exception as e:
             job_queue.add_step(job_id, f"Cloud-init drive warning: {e}")
 
@@ -3468,31 +3452,25 @@ def run_cloud_template_job(job_id, node, params):
             ci_config["sshkeys"] = urllib.parse.quote(ci_sshkeys, safe="")
 
         try:
-
-            def do_cloudinit_config():
-                proxmox.nodes(node).qemu(vmid).config.put(**ci_config)
-
-            retry_on_timeout(
-                do_cloudinit_config,
-                job_id=job_id,
-                job_queue_ref=job_queue,
-                operation_name="cloud-init config",
-            )
+            proxmox.nodes(node).qemu(vmid).config.put(**ci_config)
         except Exception as e:
             job_queue.add_step(job_id, f"Cloud-init config warning: {e}")
 
         job_queue.update_job(job_id, progress=80)
 
-        # Step 8: Resize disk
+        # Step 8: Resize disk (storage operation, but resize endpoint only supports PUT)
+        # Using retry mechanism since this can be slow
         job_queue.add_step(job_id, f"Resizing disk to {disk_size}...")
         try:
 
             def do_disk_resize():
-                proxmox.nodes(node).qemu(vmid).resize.put(disk="scsi0", size=disk_size)
+                return proxmox.nodes(node).qemu(vmid).resize.put(
+                    disk="scsi0", size=disk_size
+                )
 
             retry_on_timeout(
                 do_disk_resize,
-                max_attempts=5,  # More retries for disk resize
+                max_attempts=5,
                 base_delay=3,
                 job_id=job_id,
                 job_queue_ref=job_queue,
@@ -3504,22 +3482,19 @@ def run_cloud_template_job(job_id, node, params):
 
         job_queue.update_job(job_id, progress=90)
 
-        # Step 9: Convert to template
+        # Step 9: Convert to template (already async POST)
         job_queue.add_step(job_id, "Converting VM to template...")
         try:
-
-            def do_template_convert():
-                proxmox.nodes(node).qemu(vmid).template.post()
-
-            retry_on_timeout(
-                do_template_convert,
-                max_attempts=5,  # More retries for template conversion
-                base_delay=3,
-                job_id=job_id,
-                job_queue_ref=job_queue,
-                operation_name="template conversion",
-            )
-            job_queue.add_step(job_id, "VM converted to template")
+            template_task = proxmox.nodes(node).qemu(vmid).template.post()
+            if template_task:
+                job_queue.add_step(job_id, f"Template conversion task: {template_task}")
+                result = wait_for_task(proxmox, node, template_task, job_id, timeout=120)
+                if not result["success"]:
+                    job_queue.add_step(job_id, f"Template conversion warning: {result['error']}")
+                else:
+                    job_queue.add_step(job_id, "VM converted to template")
+            else:
+                job_queue.add_step(job_id, "VM converted to template")
         except Exception as e:
             job_queue.add_step(job_id, f"Template conversion warning: {e}")
 
