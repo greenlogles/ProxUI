@@ -1,74 +1,146 @@
 {
     "ubuntu-24.04": {
-        "name": "Ubuntu 24.04 LTS (Noble)",
+        "name": "Ubuntu 24.04 LTS (Noble) (Official)",
         "url": "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img",
         "os_type": "l26",
-        "description": "Ubuntu 24.04 LTS cloud image with cloud-init support"
+        "description": "Ubuntu 24.04 LTS"
     },
-    "ubuntu-24.04-daily": {
-        "name": "Ubuntu 24.04 LTS Daily",
-        "url": "https://cloud-images.ubuntu.com/daily/server/noble/current/noble-server-cloudimg-amd64.img",
+    "ubuntu-24.04-proxui-mirror": {
+        "name": "Ubuntu 24.04 LTS (Noble) (proxui mirror)",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/ubuntu-noble-amd64.qcow2",
         "os_type": "l26",
-        "description": "Ubuntu 24.04 LTS daily build"
+        "description": "Ubuntu 24.04 LTS proxui mirror"
     },
     "ubuntu-22.04": {
-        "name": "Ubuntu 22.04 LTS (Jammy)",
+        "name": "Ubuntu 22.04 LTS (Jammy) (Official)",
         "url": "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img",
         "os_type": "l26",
-        "description": "Ubuntu 22.04 LTS cloud image with cloud-init support"
+        "description": "Ubuntu 22.04 LTS"
+    },
+    "ubuntu-22.04-proxui-mirror": {
+        "name": "Ubuntu 22.04 LTS (Jammy) (proxui mirror)",
+        "url": "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img",
+        "os_type": "l26",
+        "description": "Ubuntu 22.04 LTS proxui mirror"
+    },
+    "debian-13": {
+        "name": "Debian 13 (Trixie) (Official)",
+        "url": "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2",
+        "os_type": "l26",
+        "description": "Debian 13 Trixie"
+    },
+    "debian-13-proxui-mirror": {
+        "name": "Debian 13 (Trixie) (proxui mirror)",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/debian-13-trixie-amd64.qcow2",
+        "os_type": "l26",
+        "description": "Debian 13 Trixie (proxui mirror)"
     },
     "debian-12": {
-        "name": "Debian 12 (Bookworm)",
+        "name": "Debian 12 (Bookworm) (Official)",
         "url": "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2",
         "os_type": "l26",
-        "description": "Debian 12 cloud image with cloud-init support"
+        "description": "Debian 12"
     },
-    "debian-12-daily": {
-        "name": "Debian 12 Daily",
-        "url": "https://cloud.debian.org/images/cloud/bookworm/daily/latest/debian-12-genericcloud-amd64-daily.qcow2",
+    "debian-12-proxui-mirror": {
+        "name": "Debian 12 (Bookworm) (proxui mirror)",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/debian-12-bookworm-amd64.qcow2",
         "os_type": "l26",
-        "description": "Debian 12 daily build"
+        "description": "Debian 12 Bookworm proxui mirror"
     },
     "debian-11": {
         "name": "Debian 11 (Bullseye)",
         "url": "https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-genericcloud-amd64.qcow2",
         "os_type": "l26",
-        "description": "Debian 11 cloud image with cloud-init support"
+        "description": "Debian 11"
+    },
+    "rocky-10": {
+        "name": "Rocky Linux 10 (Official)",
+        "url": "https://download.rockylinux.org/pub/rocky/10/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2",
+        "os_type": "l26",
+        "description": "Rocky Linux 10"
+    },
+    "rocky-10-proxui-mirror": {
+        "name": "Rocky Linux 10 (proxui mirror)",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/rocky-10-amd64.qcow2",
+        "os_type": "l26",
+        "description": "Rocky Linux 10 proxui mirror"
     },
     "rocky-9": {
-        "name": "Rocky Linux 9",
+        "name": "Rocky Linux 9 (Official)",
         "url": "https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2",
         "os_type": "l26",
-        "description": "Rocky Linux 9 cloud image"
+        "description": "Rocky Linux 9 "
+    },
+    "rocky-9-proxui-mirror": {
+        "name": "Rocky Linux 9 (proxui mirror)",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/rocky-9-amd64.qcow2",
+        "os_type": "l26",
+        "description": "Rocky Linux 9 proxui mirror"
+    },
+    "alma-10": {
+        "name": "AlmaLinux 10",
+        "url": "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2",
+        "os_type": "l26",
+        "description": "AlmaLinux 10"
     },
     "alma-9": {
         "name": "AlmaLinux 9",
         "url": "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2",
         "os_type": "l26",
-        "description": "AlmaLinux 9 cloud image"
+        "description": "AlmaLinux 9"
     },
-    "fedora-40": {
-        "name": "Fedora 40 Cloud",
-        "url": "https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2",
+    "fedora-43": {
+        "name": "Fedora 43 Cloud (Official)",
+        "url": "https://ftp2.osuosl.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2",
         "os_type": "l26",
-        "description": "Fedora 40 cloud image"
+        "description": "Fedora 43"
     },
-    "freebsd-14.2": {
-        "name": "FreeBSD 14.2",
+    "fedora-43-proxui-mirror": {
+        "name": "Fedora 43 Cloud (proxui mirror)",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/fedora-42-amd64.qcow2",
+        "os_type": "l26",
+        "description": "Fedora 43 proxui mirror"
+    },
+    "fedora-42": {
+        "name": "Fedora 42 Cloud (Official)",
+        "url": "https://ftp2.osuosl.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2",
+        "os_type": "l26",
+        "description": "Fedora 42"
+    },
+    "fedora-42-proxui-mirror": {
+        "name": "Fedora 42 Cloud (Official) (proxui mirror)",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/fedora-42-amd64.qcow2",
+        "os_type": "l26",
+        "description": "Fedora 42 proxui mirror"
+    },
+    "freebsd-14.2-gyptazy-mirror": {
+        "name": "FreeBSD 14.2 (gyptazy mirror)",
         "url": "https://cdn.gyptazy.com/freebsd/images/freebsd-14.2-cloud-image-amd64.qcow2",
-        "os_type": "freebsd",
-        "description": "FreeBSD 14.2 cloud image with cloud-init support"
+        "os_type": "other",
+        "description": "FreeBSD 14.2 gyptazy mirror"
     },
-    "openbsd-7.7": {
-        "name": "OpenBSD 7.7",
+    "freebsd-15-ufs-proxui-mirror": {
+        "name": "FreeBSD 15 UFS (proxui mirror)",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/freebsd-15.0-ufs-amd64.qcow2",
+        "os_type": "other",
+        "description": "FreeBSD 15 UFS proxui mirror"
+    },
+    "openbsd-7.7-gyptazy-mirror": {
+        "name": "OpenBSD 7.7 (gyptazy mirror)",
         "url": "https://cdn.gyptazy.com/openbsd/images/openbsd-7.7-cloud-image-amd64.qcow2",
         "os_type": "other",
-        "description": "OpenBSD 7.7 cloud image with cloud-init support"
+        "description": "OpenBSD 7.7 gyptazy mirror"
     },
-    "netbsd-10.1": {
-        "name": "NetBSD 10.1",
+    "openbsd-7.8-hcartiaux-mirror": {
+        "name": "OpenBSD 7.8 (hcartiaux mirror)",
+        "url": "https://github.com/hcartiaux/openbsd-cloud-image/releases/download/v7.8_2025-10-22-09-25/openbsd-min.qcow2",
+        "os_type": "other",
+        "description": "OpenBSD 7.8 github.com/hcartiaux/openbsd-cloud-image/ mirror"
+    },
+    "netbsd-10.1-gyptazy-mirror": {
+        "name": "NetBSD 10.1 (gyptazy mirror)",
         "url": "https://cdn.gyptazy.com/netbsd/images/netbsd-10.1-cloud-image-amd64.qcow2",
         "os_type": "other",
-        "description": "NetBSD 10.1 cloud image with cloud-init support"
+        "description": "NetBSD 10.1 gyptazy mirror"
     }
 }

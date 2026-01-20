@@ -3325,9 +3325,6 @@ def run_cloud_template_job(job_id, node, params):
             job_queue.add_step(job_id, f"Downloading cloud image: {image_filename}...")
 
             try:
-                print(
-                    f"node '{node}', storage '{storage}', url '{image_url}', fiilename '{image_filename}', content type '{download_content_type}'"
-                )
                 download_task = (
                     proxmox.nodes(node)
                     .storage(download_storage)("download-url")
@@ -3335,7 +3332,6 @@ def run_cloud_template_job(job_id, node, params):
                         content=download_content_type,
                         filename=image_filename,
                         url=image_url,
-                        node=node,
                     )
                 )
                 job_queue.add_step(job_id, f"Download task started: {download_task}")
