@@ -94,9 +94,7 @@ def setup_test_environment(mock_cluster_config, mock_proxmox_connection):
 @pytest.fixture
 def temp_config_file():
     """Create a temporary config file"""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-        f.write(
-            """
+    config_content = """
 [[clusters]]
 id = "test-cluster"
 name = "Test Cluster"
@@ -107,7 +105,8 @@ user = "root@pam"
 password = "testpass"
 verify_ssl = false
 """
-        )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
+        f.write(config_content)
         temp_path = f.name
 
     yield temp_path
