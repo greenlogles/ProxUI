@@ -3372,8 +3372,8 @@ def run_cloud_template_job(job_id, node, params):
             "ostype": image_info.get("os_type", "l26"),
             "scsihw": "virtio-scsi-pci",
             "net0": f"virtio,bridge={bridge}",
-            "serial0": "socket",
-            "vga": "serial0",
+            "serial0": "socket",  # Keep serial console for troubleshooting
+            "vga": "qxl",  # SPICE display
             "agent": "enabled=1",
         }
 
