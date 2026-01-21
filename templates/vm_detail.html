@@ -378,18 +378,54 @@
                 </div>
                 {% endif %}
 
-                <!-- Storage Configuration -->
-                {% if parsed_config.storage %}
+                <!-- Hard Disks -->
+                {% if parsed_config.disks %}
                 <div class="mb-4">
-                    <h6 class="text-primary mb-2"><i class="bi bi-hdd"></i> Storage</h6>
-                    {% for storage in parsed_config.storage %}
+                    <h6 class="text-primary mb-2"><i class="bi bi-hdd"></i> Hard Disks</h6>
+                    {% for disk in parsed_config.disks %}
                     <div class="border rounded p-2 mb-2">
                         <div class="d-flex justify-content-between align-items-center mb-1">
-                            <strong>{{ storage.device }}</strong>
+                            <strong>{{ disk.device }}</strong>
+                            {% if disk.size %}
+                            <span class="badge bg-secondary">{{ disk.size }}</span>
+                            {% endif %}
                         </div>
-                        <small class="text-muted">{{ storage.details or storage.config }}</small>
+                        <small class="text-muted">{{ disk.details or disk.config }}</small>
                     </div>
                     {% endfor %}
+                </div>
+                {% endif %}
+
+                <!-- CD/DVD Drives -->
+                {% if parsed_config.cdrom %}
+                <div class="mb-4">
+                    <h6 class="text-primary mb-2"><i class="bi bi-disc"></i> CD/DVD</h6>
+                    {% for cdrom in parsed_config.cdrom %}
+                    <div class="border rounded p-2 mb-2">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <strong>{{ cdrom.device }}</strong>
+                            <span class="badge bg-info">ISO</span>
+                        </div>
+                        {% if cdrom.iso_name %}
+                        <div><small class="text-info">{{ cdrom.iso_name }}</small></div>
+                        {% endif %}
+                        <small class="text-muted">{{ cdrom.details or cdrom.config }}</small>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <!-- Cloud-init Drive -->
+                {% if parsed_config.cloudinit_drive %}
+                <div class="mb-4">
+                    <h6 class="text-primary mb-2"><i class="bi bi-cloud-arrow-up"></i> Cloud-init Drive</h6>
+                    <div class="border rounded p-2 mb-2 border-info">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <strong>{{ parsed_config.cloudinit_drive.device }}</strong>
+                            <span class="badge bg-info">Cloud-init</span>
+                        </div>
+                        <small class="text-muted">{{ parsed_config.cloudinit_drive.details or parsed_config.cloudinit_drive.config }}</small>
+                    </div>
                 </div>
                 {% endif %}
 

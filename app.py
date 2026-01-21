@@ -792,6 +792,9 @@ def parse_vm_configuration(config, vm_type="qemu"):
         "memory": {},
         "network": [],
         "storage": [],
+        "disks": [],
+        "cdrom": [],
+        "cloudinit_drive": None,
         "devices": [],
         "cloud_init": {},
         "general": {},
@@ -828,9 +831,37 @@ def parse_vm_configuration(config, vm_type="qemu"):
         # Storage Configuration
         elif key.startswith(("scsi", "ide", "sata", "virtio", "rootfs", "mp")):
             storage_info = {"device": key, "config": value}
-            if "=" in str(value) or ":" in str(value):
+            value_str = str(value)
+            if "=" in value_str or ":" in value_str:
                 # Parse storage config like "local-lvm:vm-100-disk-0,size=32G"
-                storage_info["details"] = str(value)
+                storage_info["details"] = value_str
+
+            # Categorize storage by type
+            if "cloudinit" in value_str.lower():
+                # Cloud-init drive
+                parsed_config["cloudinit_drive"] = storage_info
+            elif ".iso" in value_str.lower() or "media=cdrom" in value_str.lower():
+                # CD/DVD/ISO image
+                # Extract ISO filename if present
+                if ".iso" in value_str.lower():
+                    parts = value_str.split("/")
+                    for part in parts:
+                        if ".iso" in part.lower():
+                            iso_name = part.split(",")[0]
+                            storage_info["iso_name"] = iso_name
+                            break
+                parsed_config["cdrom"].append(storage_info)
+            else:
+                # Regular disk
+                # Extract size if present
+                if "size=" in value_str:
+                    for part in value_str.split(","):
+                        if part.startswith("size="):
+                            storage_info["size"] = part.replace("size=", "")
+                            break
+                parsed_config["disks"].append(storage_info)
+
+            # Also add to general storage for backwards compatibility
             parsed_config["storage"].append(storage_info)
 
         # Hardware Devices
