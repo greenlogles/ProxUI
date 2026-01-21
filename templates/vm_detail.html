@@ -121,6 +121,19 @@
                 </div>
                 <span class="small" style="min-width: 100px;">{{ (status.mem / 1024 / 1024 / 1024)|round(1) }}/{{ (status.maxmem / 1024 / 1024 / 1024)|round(1) }}GB</span>
             </div>
+            {% if guest_disk_info %}
+                {% for disk in guest_disk_info %}
+                    {% if disk.mountpoint == '/' %}
+            <div class="d-flex align-items-center gap-2 flex-grow-1" style="min-width: 180px; max-width: 280px;">
+                <span class="text-muted small">Disk:</span>
+                <div class="progress flex-grow-1" style="height: 12px;">
+                    <div class="progress-bar bg-{{ 'danger' if disk.used_percent > 80 else 'warning' if disk.used_percent > 60 else 'info' }}" style="width: {{ disk.used_percent }}%"></div>
+                </div>
+                <span class="small" style="min-width: 90px;">{{ "%.0f"|format(disk.used_gb) }}/{{ "%.0f"|format(disk.total_gb) }}GB</span>
+            </div>
+                    {% endif %}
+                {% endfor %}
+            {% endif %}
         </div>
     </div>
 </div>
