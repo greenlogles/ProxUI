@@ -251,9 +251,17 @@
                                 <i class="bi bi-plus-circle"></i> Attach ISO
                             </button>
                         </div>
-                        
+
                         <div id="isoInterfaces">
                             <!-- ISO interfaces will be loaded here -->
+                        </div>
+                    </div>
+
+                    <!-- Cloud-init Drive -->
+                    <div class="mb-4" id="cloudinitSection" style="display: none;">
+                        <h6 class="text-primary mb-3"><i class="bi bi-cloud-arrow-up"></i> Cloud-init Drive</h6>
+                        <div id="cloudinitDrive">
+                            <!-- Cloud-init drive will be loaded here -->
                         </div>
                     </div>
                     {% endif %}
@@ -949,6 +957,82 @@ function createIsoInterfaceCard(iso) {
     return div;
 }
 
+function loadCloudinitDrive() {
+    fetch(`/api/vm/${node}/${vmid}/config`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error loading cloud-init drive:', data.error);
+                return;
+            }
+
+            const section = document.getElementById('cloudinitSection');
+            const container = document.getElementById('cloudinitDrive');
+            if (!section || !container) return;
+
+            // Find cloud-init drive
+            let cloudinitDrive = null;
+            for (const [key, value] of Object.entries(data)) {
+                if ((key.startsWith('scsi') || key.startsWith('ide') || key.startsWith('sata') || key.startsWith('virtio')) &&
+                    key.match(/^(scsi|ide|sata|virtio)\d+$/) &&
+                    value.toLowerCase().includes('cloudinit')) {
+                    cloudinitDrive = { key: key, config: value };
+                    break;
+                }
+            }
+
+            if (cloudinitDrive) {
+                section.style.display = 'block';
+                container.innerHTML = '';
+                container.appendChild(createCloudinitCard(cloudinitDrive));
+            } else {
+                section.style.display = 'none';
+            }
+        })
+        .catch(error => {
+            console.error('Error loading cloud-init drive:', error);
+        });
+}
+
+function createCloudinitCard(cloudinit) {
+    const div = document.createElement('div');
+    div.className = 'card mb-2 border-info';
+
+    // Parse config (e.g., "local-lvm:vm-100-cloudinit,media=cdrom")
+    const parts = cloudinit.config.split(',');
+    let storage = '';
+    if (parts[0] && parts[0].includes(':')) {
+        storage = parts[0].split(':')[0];
+    }
+
+    div.innerHTML = `
+        <div class="card-body py-2">
+            <div class="row align-items-center">
+                <div class="col-md-3">
+                    <strong>${cloudinit.key}</strong><br>
+                    <small class="text-info">Cloud-init</small>
+                </div>
+                <div class="col-md-6">
+                    <div class="d-flex align-items-center">
+                        <i class="bi bi-cloud-arrow-up me-2 text-info"></i>
+                        <div>
+                            <div><strong>Cloud-init Configuration Drive</strong></div>
+                            <small class="text-muted">Storage: ${storage}</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <small class="text-muted">
+                        <i class="bi bi-info-circle"></i> Provides cloud-init data to the VM
+                    </small>
+                </div>
+            </div>
+        </div>
+    `;
+
+    return div;
+}
+
 function showAttachIsoModal() {
     // Load available ISO images first
     fetch(`/api/node/${node}/iso-images`)
@@ -1143,11 +1227,11 @@ function parseBootOrder(config, bootConfig) {
     // Find actual devices in the config
     const availableDevices = [];
     
-    // Find disk devices
+    // Find disk devices (excluding cloud-init and ISOs)
     for (const [key, value] of Object.entries(config)) {
-        if ((key.startsWith('scsi') || key.startsWith('virtio') || key.startsWith('ide') || key.startsWith('sata')) && 
-            key.match(/^(scsi|virtio|ide|sata)\d+$/) && 
-            !value.includes('media=cdrom') && !value.includes('.iso')) {
+        if ((key.startsWith('scsi') || key.startsWith('virtio') || key.startsWith('ide') || key.startsWith('sata')) &&
+            key.match(/^(scsi|virtio|ide|sata)\d+$/) &&
+            !value.includes('media=cdrom') && !value.includes('.iso') && !value.toLowerCase().includes('cloudinit')) {
             availableDevices.push({
                 id: key,
                 type: 'disk',
@@ -1481,11 +1565,12 @@ document.addEventListener('DOMContentLoaded', function() {
     loadDiskInterfaces();
     loadBootOrder();
     
-    // Only load ISO interfaces for QEMU VMs
+    // Only load ISO interfaces and cloud-init for QEMU VMs
     if (vmType === 'qemu') {
         loadIsoInterfaces();
+        loadCloudinitDrive();
     }
-    
+
     loadAvailableBridges();
     
     // Form event listeners
