@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}VM {{ vmid }} - Proxmox Manager{% endblock %}
+{% block title %}{{ config.name or 'VM' }} ({{ vmid }}) - Proxmox Manager{% endblock %}
 
 {% block content %}
 <div class="row">
