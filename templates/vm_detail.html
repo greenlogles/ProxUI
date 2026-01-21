@@ -89,48 +89,37 @@
 </div>
 {% endif %}
 
-<div class="row">
-    <!-- Status Card -->
-    <div class="col-md-6 mb-3">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-activity"></i> Status</h5>
+<!-- Status Bar -->
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <div class="d-flex flex-wrap align-items-center gap-4">
+            <div class="d-flex align-items-center gap-2">
+                <span class="text-muted small">Status:</span>
+                {% if status.status == 'running' %}
+                    <span class="badge bg-success">Running</span>
+                {% elif status.status == 'stopped' %}
+                    <span class="badge bg-danger">Stopped</span>
+                {% else %}
+                    <span class="badge bg-warning">{{ status.status }}</span>
+                {% endif %}
             </div>
-            <div class="card-body">
-                <dl class="row mb-0">
-                    <dt class="col-sm-3">Status:</dt>
-                    <dd class="col-sm-9">
-                        {% if status.status == 'running' %}
-                            <span class="badge bg-success">Running</span>
-                        {% elif status.status == 'stopped' %}
-                            <span class="badge bg-danger">Stopped</span>
-                        {% else %}
-                            <span class="badge bg-warning">{{ status.status }}</span>
-                        {% endif %}
-                    </dd>
-
-                    <dt class="col-sm-3">Uptime:</dt>
-                    <dd class="col-sm-9">{{ status.uptime|humanize_uptime }}</dd>
-
-                    <dt class="col-sm-3">CPU:</dt>
-                    <dd class="col-sm-9">
-                        <div class="progress" style="height: 20px;">
-                            <div class="progress-bar" style="width: {{ (status.cpu * 100)|round(1) }}%">
-                                {{ (status.cpu * 100)|round(1) }}%
-                            </div>
-                        </div>
-                    </dd>
-
-                    <dt class="col-sm-3">Memory:</dt>
-                    <dd class="col-sm-9">
-                        <div class="progress" style="height: 20px;">
-                            <div class="progress-bar" style="width: {{ ((status.mem / status.maxmem) * 100)|round(1) }}%">
-                                {{ ((status.mem / status.maxmem) * 100)|round(1) }}%
-                            </div>
-                        </div>
-                        <small>{{ (status.mem / 1024 / 1024 / 1024)|round(1) }} / {{ (status.maxmem / 1024 / 1024 / 1024)|round(1) }} GB</small>
-                    </dd>
-                </dl>
+            <div class="d-flex align-items-center gap-2">
+                <span class="text-muted small">Uptime:</span>
+                <span class="small">{{ status.uptime|humanize_uptime }}</span>
+            </div>
+            <div class="d-flex align-items-center gap-2 flex-grow-1" style="min-width: 150px; max-width: 250px;">
+                <span class="text-muted small">CPU:</span>
+                <div class="progress flex-grow-1" style="height: 12px;">
+                    <div class="progress-bar" style="width: {{ (status.cpu * 100)|round(1) }}%"></div>
+                </div>
+                <span class="small" style="min-width: 45px;">{{ (status.cpu * 100)|round(1) }}%</span>
+            </div>
+            <div class="d-flex align-items-center gap-2 flex-grow-1" style="min-width: 200px; max-width: 300px;">
+                <span class="text-muted small">Memory:</span>
+                <div class="progress flex-grow-1" style="height: 12px;">
+                    <div class="progress-bar" style="width: {{ ((status.mem / status.maxmem) * 100)|round(1) }}%"></div>
+                </div>
+                <span class="small" style="min-width: 100px;">{{ (status.mem / 1024 / 1024 / 1024)|round(1) }}/{{ (status.maxmem / 1024 / 1024 / 1024)|round(1) }}GB</span>
             </div>
         </div>
     </div>
