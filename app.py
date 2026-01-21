@@ -2872,6 +2872,10 @@ def api_vm_config(node, vmid):
             if "onboot" in data:
                 params["onboot"] = int(data["onboot"])
 
+            # Display configuration
+            if "vga" in data:
+                params["vga"] = data["vga"]
+
             # Network interfaces (net0, net1, etc.)
             import re
 

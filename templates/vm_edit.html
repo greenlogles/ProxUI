@@ -191,13 +191,47 @@
                     <!-- Memory Configuration -->
                     <div class="mb-4">
                         <h6 class="text-primary mb-3"><i class="bi bi-memory"></i> Memory Configuration</h6>
-                        
+
                         <div class="mb-3">
                             <label for="memory" class="form-label">Memory (MB)</label>
-                            <input type="number" class="form-control" id="memory" name="memory" 
+                            <input type="number" class="form-control" id="memory" name="memory"
                                    min="64" max="4194304" step="64" value="{{ config.memory or 512 }}">
                         </div>
                     </div>
+
+                    <!-- Display Configuration (QEMU VMs only) -->
+                    {% if vm_type|default('qemu') == 'qemu' %}
+                    <div class="mb-4">
+                        <h6 class="text-primary mb-3"><i class="bi bi-display"></i> Display Configuration</h6>
+
+                        <div class="mb-3">
+                            <label for="vga_type" class="form-label">Display Type</label>
+                            <select class="form-select" id="vga_type" name="vga_type">
+                                <option value="std">Standard VGA (std)</option>
+                                <option value="cirrus">Cirrus Logic (cirrus)</option>
+                                <option value="vmware">VMware Compatible (vmware)</option>
+                                <option value="qxl">SPICE (qxl)</option>
+                                <option value="virtio">VirtIO-GPU (virtio)</option>
+                                <option value="virtio-gl">VirtIO-GPU with OpenGL (virtio-gl)</option>
+                                <option value="serial0">Serial Terminal (serial0)</option>
+                                <option value="none">None (headless)</option>
+                            </select>
+                            <div class="form-text">
+                                <strong>std</strong> - Standard VGA, most compatible<br>
+                                <strong>qxl</strong> - Best for SPICE remote access with multi-monitor support<br>
+                                <strong>virtio</strong> - Best performance for Linux guests with virtio drivers<br>
+                                <strong>serial0</strong> - Text-only serial console, no graphical display
+                            </div>
+                        </div>
+
+                        <div class="mb-3" id="vgaMemoryContainer">
+                            <label for="vga_memory" class="form-label">VGA Memory (MB)</label>
+                            <input type="number" class="form-control" id="vga_memory" name="vga_memory"
+                                   min="4" max="512" step="4" value="16">
+                            <div class="form-text">Video memory in MB (4-512). Default is 16MB. Higher values useful for higher resolutions.</div>
+                        </div>
+                    </div>
+                    {% endif %}
 
                     <!-- Disk Configuration -->
                     <div class="mb-4">
@@ -273,8 +307,11 @@
                         <button type="button" class="btn btn-secondary" onclick="window.history.back()">
                             <i class="bi bi-x-circle"></i> Cancel
                         </button>
-                        <button type="submit" class="btn btn-primary">
-                            <i class="bi bi-check-circle"></i> Save Configuration
+                        <button type="button" class="btn btn-primary" id="saveBtn">
+                            <i class="bi bi-check-circle"></i> Save
+                        </button>
+                        <button type="button" class="btn btn-success" id="saveCloseBtn">
+                            <i class="bi bi-check2-square"></i> Save and Close
                         </button>
                     </div>
                 </form>
@@ -1452,12 +1489,21 @@ document.addEventListener('DOMContentLoaded', function() {
     loadAvailableBridges();
     
     // Form event listeners
-    document.getElementById('vmConfigForm').addEventListener('submit', handleFormSubmit);
+    document.getElementById('saveBtn').addEventListener('click', () => saveConfiguration(false));
+    document.getElementById('saveCloseBtn').addEventListener('click', () => saveConfiguration(true));
     document.getElementById('addNetworkBtn').addEventListener('click', showAddNetworkModal);
     
     // Only add ISO button listener for QEMU VMs
     if (vmType === 'qemu') {
         document.getElementById('attachIsoBtn').addEventListener('click', showAttachIsoModal);
+
+        // VGA type change listener
+        const vgaSelect = document.getElementById('vga_type');
+        if (vgaSelect) {
+            vgaSelect.addEventListener('change', function() {
+                updateVgaMemoryVisibility(this.value);
+            });
+        }
     }
     
     function loadVMConfiguration() {
@@ -1468,29 +1514,59 @@ document.addEventListener('DOMContentLoaded', function() {
                     showNotification('Error loading VM configuration: ' + data.error, 'error');
                     return;
                 }
-                
+
                 // Populate form fields
                 if (data.cpu) {
                     document.getElementById('cpu_type').value = data.cpu;
                 }
-                
+
                 document.getElementById('autostart').checked = (data.onboot === 1);
+
+                // Load display configuration (QEMU only)
+                const vgaSelect = document.getElementById('vga_type');
+                const vgaMemoryInput = document.getElementById('vga_memory');
+                if (vgaSelect && data.vga) {
+                    // Parse vga setting - can be "type" or "type,memory=XX"
+                    const vgaParts = data.vga.split(',');
+                    const vgaType = vgaParts[0];
+                    vgaSelect.value = vgaType;
+
+                    // Extract memory if present
+                    if (vgaMemoryInput) {
+                        const memoryPart = vgaParts.find(p => p.startsWith('memory='));
+                        if (memoryPart) {
+                            vgaMemoryInput.value = memoryPart.replace('memory=', '');
+                        }
+                    }
+
+                    updateVgaMemoryVisibility(vgaType);
+                }
             })
             .catch(error => {
                 console.error('Error loading VM configuration:', error);
                 showNotification('Failed to load VM configuration', 'error');
             });
     }
+
+    function updateVgaMemoryVisibility(vgaType) {
+        const vgaMemoryContainer = document.getElementById('vgaMemoryContainer');
+        if (vgaMemoryContainer) {
+            // Hide memory option for serial and none types
+            if (vgaType === 'serial0' || vgaType === 'none') {
+                vgaMemoryContainer.style.display = 'none';
+            } else {
+                vgaMemoryContainer.style.display = 'block';
+            }
+        }
+    }
     
     
     
-    function handleFormSubmit(e) {
-        e.preventDefault();
-        
+    function saveConfiguration(redirectAfterSave = false) {
         // Show loading overlay
         document.getElementById('loadingOverlay').classList.remove('d-none');
         document.getElementById('loadingOverlay').classList.add('d-flex');
-        
+
         // Collect form data
         const formData = {
             cpu: document.getElementById('cpu_type').value,
@@ -1499,7 +1575,21 @@ document.addEventListener('DOMContentLoaded', function() {
             memory: parseInt(document.getElementById('memory').value),
             onboot: document.getElementById('autostart').checked ? 1 : 0
         };
-        
+
+        // Add VGA configuration (QEMU VMs only)
+        const vgaSelect = document.getElementById('vga_type');
+        const vgaMemoryInput = document.getElementById('vga_memory');
+        if (vgaSelect) {
+            const vgaType = vgaSelect.value;
+            if (vgaType === 'serial0' || vgaType === 'none') {
+                formData.vga = vgaType;
+            } else if (vgaMemoryInput && vgaMemoryInput.value) {
+                formData.vga = `${vgaType},memory=${vgaMemoryInput.value}`;
+            } else {
+                formData.vga = vgaType;
+            }
+        }
+
         // Send API request
         fetch(`/api/vm/${node}/${vmid}/config`, {
             method: 'PUT',
@@ -1513,14 +1603,16 @@ document.addEventListener('DOMContentLoaded', function() {
             // Hide loading overlay
             document.getElementById('loadingOverlay').classList.remove('d-flex');
             document.getElementById('loadingOverlay').classList.add('d-none');
-            
+
             if (data.success) {
                 showNotification('VM configuration updated successfully', 'success');
-                
-                // Redirect back to VM details after 2 seconds
-                setTimeout(() => {
-                    window.location.href = `/vm/${node}/${vmid}`;
-                }, 2000);
+
+                if (redirectAfterSave) {
+                    // Redirect back to VM details after brief delay
+                    setTimeout(() => {
+                        window.location.href = `/vm/${node}/${vmid}`;
+                    }, 1000);
+                }
             } else {
                 showNotification(data.error || 'Failed to update VM configuration', 'error');
             }
