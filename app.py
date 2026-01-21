@@ -2379,6 +2379,75 @@ def api_node_download_iso(node):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/node/<node>/iso/<path:volid>", methods=["DELETE"])
+def api_delete_iso(node, volid):
+    """API endpoint to delete an ISO image"""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        # volid format: storage/filename.iso
+        parts = volid.split("/")
+        if len(parts) != 2:
+            return jsonify({"error": "Invalid volume ID format"}), 400
+
+        storage = parts[0]
+        proxmox.nodes(node).storage(storage).content(volid).delete()
+
+        return jsonify({"success": True, "message": f"ISO {volid} deleted successfully"})
+
+    except Exception as e:
+        return jsonify({"error": f"Failed to delete ISO: {str(e)}"}), 500
+
+
+@app.route("/api/node/<node>/template/<vmid>", methods=["DELETE"])
+def api_delete_vm_template(node, vmid):
+    """API endpoint to delete a VM template"""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        # Verify it's a template
+        config = proxmox.nodes(node).qemu(vmid).config.get()
+        if not config.get("template"):
+            return jsonify({"error": "VM is not a template"}), 400
+
+        # Delete the template (purge=1 removes disks too)
+        proxmox.nodes(node).qemu(vmid).delete(purge=1)
+
+        return jsonify({"success": True, "message": f"Template {vmid} deleted successfully"})
+
+    except Exception as e:
+        error_msg = str(e)
+        if "does not exist" in error_msg.lower():
+            return jsonify({"error": f"Template {vmid} does not exist"}), 404
+        return jsonify({"error": f"Failed to delete template: {error_msg}"}), 500
+
+
+@app.route("/api/node/<node>/lxc-template/<path:volid>", methods=["DELETE"])
+def api_delete_lxc_template(node, volid):
+    """API endpoint to delete an LXC container template"""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        # volid format: storage/template-name.tar.xz
+        parts = volid.split("/")
+        if len(parts) != 2:
+            return jsonify({"error": "Invalid volume ID format"}), 400
+
+        storage = parts[0]
+        proxmox.nodes(node).storage(storage).content(volid).delete()
+
+        return jsonify({"success": True, "message": f"Container template deleted successfully"})
+
+    except Exception as e:
+        return jsonify({"error": f"Failed to delete template: {str(e)}"}), 500
+
+
 @app.route("/api/node/<node>/networks")
 def api_node_networks(node):
     """API endpoint to get network interfaces for a specific node"""
