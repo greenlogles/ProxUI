@@ -2395,7 +2395,9 @@ def api_delete_iso(node, volid):
         storage = parts[0]
         proxmox.nodes(node).storage(storage).content(volid).delete()
 
-        return jsonify({"success": True, "message": f"ISO {volid} deleted successfully"})
+        return jsonify(
+            {"success": True, "message": f"ISO {volid} deleted successfully"}
+        )
 
     except Exception as e:
         return jsonify({"error": f"Failed to delete ISO: {str(e)}"}), 500
@@ -2417,7 +2419,9 @@ def api_delete_vm_template(node, vmid):
         # Delete the template (purge=1 removes disks too)
         proxmox.nodes(node).qemu(vmid).delete(purge=1)
 
-        return jsonify({"success": True, "message": f"Template {vmid} deleted successfully"})
+        return jsonify(
+            {"success": True, "message": f"Template {vmid} deleted successfully"}
+        )
 
     except Exception as e:
         error_msg = str(e)
@@ -2442,7 +2446,9 @@ def api_delete_lxc_template(node, volid):
         storage = parts[0]
         proxmox.nodes(node).storage(storage).content(volid).delete()
 
-        return jsonify({"success": True, "message": f"Container template deleted successfully"})
+        return jsonify(
+            {"success": True, "message": f"Container template deleted successfully"}
+        )
 
     except Exception as e:
         return jsonify({"error": f"Failed to delete template: {str(e)}"}), 500
