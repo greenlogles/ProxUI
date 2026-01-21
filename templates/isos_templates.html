@@ -395,20 +395,25 @@ async function loadISOImages(nodeName) {
         }
         
         let html = '<div class="table-responsive"><table class="table table-sm">';
-        html += '<thead><tr><th>Name</th><th>Storage</th><th>Size</th><th>Format</th></tr></thead><tbody>';
-        
+        html += '<thead><tr><th>Name</th><th>Storage</th><th>Size</th><th>Format</th><th>Actions</th></tr></thead><tbody>';
+
         data.forEach(iso => {
             const parts = iso.volid.split('/');
             const storage = parts[0];
             const filename = parts[1];
             const sizeGB = iso.size ? (iso.size / (1024 * 1024 * 1024)).toFixed(2) : 'Unknown';
-            
+
             html += `
                 <tr>
-                    <td><strong>${filename}</strong></td>
-                    <td><span class="badge bg-secondary">${storage}</span></td>
+                    <td><strong>${escapeHtml(filename)}</strong></td>
+                    <td><span class="badge bg-secondary">${escapeHtml(storage)}</span></td>
                     <td>${sizeGB} GB</td>
                     <td>${iso.format || 'iso'}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-danger" onclick="deleteISO('${nodeName}', '${escapeForJs(iso.volid)}')" title="Delete ISO">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </td>
                 </tr>
             `;
         });
@@ -442,22 +447,27 @@ async function loadTemplates(nodeName) {
         } else {
             let html = '<div class="table-responsive"><table class="table table-sm">';
             html += '<thead><tr><th>ID</th><th>Name</th><th>Memory</th><th>CPU</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
-            
+
             data.qemu.forEach(vm => {
                 const memoryGB = vm.maxmem ? (vm.maxmem / (1024 * 1024 * 1024)).toFixed(1) : 'Unknown';
                 const cpuInfo = vm.cpus ? `${vm.cpus} cores` : 'Unknown';
-                
+
                 html += `
                     <tr>
                         <td><strong>${vm.vmid}</strong></td>
-                        <td>${vm.name || 'Unnamed'}</td>
+                        <td>${escapeHtml(vm.name || 'Unnamed')}</td>
                         <td>${memoryGB} GB</td>
                         <td>${cpuInfo}</td>
                         <td><span class="badge bg-info">Template</span></td>
                         <td>
-                            <a href="/vm/${nodeName}/${vm.vmid}/clone" class="btn btn-sm btn-outline-primary">
-                                <i class="bi bi-files"></i> Clone
-                            </a>
+                            <div class="btn-group btn-group-sm">
+                                <a href="/vm/${nodeName}/${vm.vmid}/clone" class="btn btn-outline-primary" title="Clone">
+                                    <i class="bi bi-files"></i>
+                                </a>
+                                <button class="btn btn-outline-danger" onclick="deleteVMTemplate('${nodeName}', '${vm.vmid}', '${escapeForJs(vm.name || 'Unnamed')}')" title="Delete Template">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
                         </td>
                     </tr>
                 `;
@@ -473,23 +483,28 @@ async function loadTemplates(nodeName) {
             lxcContainer.innerHTML = '<div class="text-muted">No container templates found</div>';
         } else {
             let html = '<div class="table-responsive"><table class="table table-sm">';
-            html += '<thead><tr><th>Template</th><th>Storage</th><th>Size</th><th>Description</th></tr></thead><tbody>';
-            
+            html += '<thead><tr><th>Template</th><th>Storage</th><th>Size</th><th>Description</th><th>Actions</th></tr></thead><tbody>';
+
             data.lxc.forEach(template => {
                 const parts = template.volid.split('/');
                 const storage = parts[0];
                 const filename = parts[1];
                 const sizeGB = template.size ? (template.size / (1024 * 1024 * 1024)).toFixed(2) : 'Unknown';
-                
+
                 // Extract OS info from filename
                 const osInfo = filename.replace('.tar.xz', '').replace('.tar.gz', '');
-                
+
                 html += `
                     <tr>
-                        <td><strong>${osInfo}</strong></td>
-                        <td><span class="badge bg-secondary">${storage}</span></td>
+                        <td><strong>${escapeHtml(osInfo)}</strong></td>
+                        <td><span class="badge bg-secondary">${escapeHtml(storage)}</span></td>
                         <td>${sizeGB} GB</td>
-                        <td><small class="text-muted">${filename}</small></td>
+                        <td><small class="text-muted">${escapeHtml(filename)}</small></td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteLXCTemplate('${nodeName}', '${escapeForJs(template.volid)}')" title="Delete Template">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </td>
                     </tr>
                 `;
             });
@@ -958,7 +973,87 @@ function escapeHtml(text) {
 }
 
 function escapeForJs(text) {
-    return text.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$');
+    return text.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$').replace(/'/g, "\\'");
+}
+
+// Delete ISO image
+async function deleteISO(nodeName, volid) {
+    const filename = volid.split('/').pop();
+    if (!confirm(`Are you sure you want to delete ISO "${filename}"?\n\nThis action cannot be undone.`)) {
+        return;
+    }
+
+    try {
+        showLoading();
+        const response = await fetch(`/api/node/${nodeName}/iso/${encodeURIComponent(volid)}`, {
+            method: 'DELETE'
+        });
+        const result = await response.json();
+
+        if (result.success) {
+            showNotification(`ISO "${filename}" deleted successfully`, 'success');
+            await loadISOImages(nodeName);
+        } else {
+            showNotification(result.error || 'Failed to delete ISO', 'error');
+        }
+    } catch (error) {
+        showNotification('Error deleting ISO: ' + error.message, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+// Delete VM template
+async function deleteVMTemplate(nodeName, vmid, name) {
+    if (!confirm(`Are you sure you want to delete VM template "${name}" (ID: ${vmid})?\n\nThis will permanently delete the template and all its disks. This action cannot be undone.`)) {
+        return;
+    }
+
+    try {
+        showLoading();
+        const response = await fetch(`/api/node/${nodeName}/template/${vmid}`, {
+            method: 'DELETE'
+        });
+        const result = await response.json();
+
+        if (result.success) {
+            showNotification(`Template "${name}" deleted successfully`, 'success');
+            await loadTemplates(nodeName);
+        } else {
+            showNotification(result.error || 'Failed to delete template', 'error');
+        }
+    } catch (error) {
+        showNotification('Error deleting template: ' + error.message, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+// Delete LXC container template
+async function deleteLXCTemplate(nodeName, volid) {
+    const filename = volid.split('/').pop();
+    if (!confirm(`Are you sure you want to delete container template "${filename}"?\n\nThis action cannot be undone.`)) {
+        return;
+    }
+
+    try {
+        showLoading();
+        const response = await fetch(`/api/node/${nodeName}/lxc-template/${encodeURIComponent(volid)}`, {
+            method: 'DELETE'
+        });
+        const result = await response.json();
+
+        if (result.success) {
+            showNotification(`Container template "${filename}" deleted successfully`, 'success');
+            await loadTemplates(nodeName);
+        } else {
+            showNotification(result.error || 'Failed to delete template', 'error');
+        }
+    } catch (error) {
+        showNotification('Error deleting template: ' + error.message, 'error');
+    } finally {
+        hideLoading();
+    }
 }
 </script>
 {% endblock %}

@@ -15,7 +15,11 @@
             <div class="card-header">
                 <div class="d-flex justify-content-between align-items-center">
                     <h5 class="mb-0">All VMs and Containers</h5>
-                    <div>
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="input-group input-group-sm" style="width: 250px;">
+                            <span class="input-group-text"><i class="bi bi-search"></i></span>
+                            <input type="text" class="form-control" id="vmSearch" placeholder="Search by name..." autofocus>
+                        </div>
                         <a href="{{ url_for('create_vm') }}" class="btn btn-success btn-sm">
                             <i class="bi bi-plus-circle"></i> Create New
                         </a>
@@ -158,4 +162,38 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const searchInput = document.getElementById('vmSearch');
+    const tableBody = document.querySelector('table tbody');
+    const rows = tableBody.querySelectorAll('tr');
+
+    searchInput.addEventListener('input', function() {
+        const searchTerm = this.value.toLowerCase().trim();
+
+        rows.forEach(row => {
+            const nameCell = row.querySelector('td:nth-child(2)');
+            if (nameCell) {
+                const vmName = nameCell.textContent.toLowerCase();
+                if (vmName.includes(searchTerm)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            }
+        });
+    });
+
+    // Clear search on Escape
+    searchInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            this.value = '';
+            this.dispatchEvent(new Event('input'));
+        }
+    });
+});
+</script>
 {% endblock %}
