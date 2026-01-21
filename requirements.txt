@@ -1,4 +1,7 @@
 Flask==2.3.3
+flask-sock==0.7.0
 proxmoxer==2.0.1
 requests==2.32.4
+simple-websocket==1.0.0
 toml==0.10.2
+websocket-client==1.7.0

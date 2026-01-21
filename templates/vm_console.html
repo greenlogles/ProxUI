@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Console - {{ vm_name }} | Proxmox Manager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            background-color: #1a1a1a;
+        }
+
+        #console-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        #console-toolbar {
+            background-color: #343a40;
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+            border-bottom: 1px solid #495057;
+        }
+
+        #console-toolbar .btn {
+            margin-left: 8px;
+        }
+
+        #console-status {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        #console-status .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        #console-status .status-indicator.connected {
+            background-color: #28a745;
+            box-shadow: 0 0 8px #28a745;
+        }
+
+        #console-status .status-indicator.connecting {
+            background-color: #ffc107;
+            animation: pulse 1s infinite;
+        }
+
+        #console-status .status-indicator.disconnected {
+            background-color: #dc3545;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        #vnc-screen {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            background-color: #000;
+        }
+
+        #vnc-screen canvas {
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        #connection-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background-color: rgba(0, 0, 0, 0.9);
+            color: white;
+            z-index: 100;
+        }
+
+        #connection-overlay.hidden {
+            display: none;
+        }
+
+        #connection-overlay .spinner-border {
+            width: 3rem;
+            height: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        #error-message {
+            color: #dc3545;
+            margin-top: 1rem;
+            text-align: center;
+            max-width: 400px;
+        }
+
+        .vm-info {
+            color: #adb5bd;
+            font-size: 0.9rem;
+        }
+
+        .vm-name {
+            color: #fff;
+            font-weight: 500;
+        }
+
+        /* Keyboard hints */
+        .kbd-hint {
+            font-size: 0.75rem;
+            color: #6c757d;
+        }
+
+        .kbd-hint kbd {
+            background-color: #495057;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.7rem;
+        }
+    </style>
+</head>
+<body>
+    <div id="console-container">
+        <!-- Toolbar -->
+        <div id="console-toolbar">
+            <div id="console-status">
+                <a href="{{ url_for('vm_detail', node=node, vmid=vmid) }}" class="btn btn-sm btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Back
+                </a>
+                <span class="status-indicator connecting" id="status-indicator"></span>
+                <span class="vm-info">
+                    <span class="vm-name">{{ vm_name }}</span>
+                    <span class="text-muted">({{ vmid }} on {{ node }})</span>
+                </span>
+                <span id="connection-text" class="text-muted">Connecting...</span>
+            </div>
+            <div>
+                <span class="kbd-hint me-3">
+                    <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Del</kbd> sends to VM
+                </span>
+                <button class="btn btn-sm btn-outline-secondary" onclick="sendCtrlAltDel()" title="Send Ctrl+Alt+Del">
+                    <i class="bi bi-keyboard"></i> Ctrl+Alt+Del
+                </button>
+                <div class="btn-group ms-2">
+                    <button class="btn btn-sm btn-outline-secondary" onclick="pasteToVM()" title="Paste clipboard to VM">
+                        <i class="bi bi-clipboard-plus"></i> Paste to VM
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="copyFromVM()" title="Copy VM clipboard" id="copyFromVmBtn">
+                        <i class="bi bi-clipboard-minus"></i> Copy from VM
+                    </button>
+                </div>
+                <button class="btn btn-sm btn-outline-secondary ms-2" onclick="toggleFullscreen()" title="Toggle Fullscreen">
+                    <i class="bi bi-arrows-fullscreen"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-warning" onclick="reconnect()" title="Reconnect">
+                    <i class="bi bi-arrow-clockwise"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- VNC Screen -->
+        <div id="vnc-screen">
+            <!-- noVNC renders here -->
+        </div>
+
+        <!-- Connection Overlay -->
+        <div id="connection-overlay">
+            <div class="spinner-border text-primary" role="status" id="loading-spinner">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <div id="overlay-text">Connecting to console...</div>
+            <div id="error-message" class="hidden"></div>
+            <button class="btn btn-primary mt-3 hidden" id="retry-button" onclick="reconnect()">
+                <i class="bi bi-arrow-clockwise"></i> Retry Connection
+            </button>
+        </div>
+    </div>
+
+    <!-- noVNC Library -->
+    <script type="module">
+        import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js';
+
+        const node = '{{ node }}';
+        const vmid = '{{ vmid }}';
+        const vmStatus = '{{ vm_status }}';
+
+        let rfb = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 3;
+
+        // DOM Elements
+        const vncScreen = document.getElementById('vnc-screen');
+        const overlay = document.getElementById('connection-overlay');
+        const overlayText = document.getElementById('overlay-text');
+        const errorMessage = document.getElementById('error-message');
+        const retryButton = document.getElementById('retry-button');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const statusIndicator = document.getElementById('status-indicator');
+        const connectionText = document.getElementById('connection-text');
+
+        // Make functions available globally
+        window.sendCtrlAltDel = function() {
+            if (rfb) {
+                rfb.sendCtrlAltDel();
+            }
+        };
+
+        window.toggleFullscreen = function() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                document.exitFullscreen();
+            }
+        };
+
+        window.reconnect = function() {
+            reconnectAttempts = 0;
+            connect();
+        };
+
+        // Clipboard from VM - stored when VM sends clipboard data
+        let vmClipboard = '';
+
+        window.pasteToVM = async function() {
+            if (!rfb) {
+                alert('Not connected to VM');
+                return;
+            }
+            try {
+                // Try to read from browser clipboard
+                const text = await navigator.clipboard.readText();
+                if (text) {
+                    rfb.clipboardPasteFrom(text);
+                    showToast('Clipboard sent to VM');
+                } else {
+                    // Fallback: prompt for text
+                    const input = prompt('Enter text to paste to VM:');
+                    if (input) {
+                        rfb.clipboardPasteFrom(input);
+                        showToast('Text sent to VM');
+                    }
+                }
+            } catch (err) {
+                // Clipboard API not available or permission denied
+                const input = prompt('Enter text to paste to VM:\n(Browser clipboard access denied)');
+                if (input) {
+                    rfb.clipboardPasteFrom(input);
+                    showToast('Text sent to VM');
+                }
+            }
+        };
+
+        window.copyFromVM = async function() {
+            if (!vmClipboard) {
+                alert('No clipboard data received from VM.\n\nNote: The VM must copy text first, and the guest tools (QEMU Guest Agent or SPICE agent) must be installed for clipboard sharing to work.');
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(vmClipboard);
+                showToast('VM clipboard copied to browser');
+            } catch (err) {
+                // Fallback: show in a prompt for manual copy
+                prompt('VM clipboard content (Ctrl+C to copy):', vmClipboard);
+            }
+        };
+
+        function showToast(message) {
+            // Simple toast notification
+            const toast = document.createElement('div');
+            toast.className = 'position-fixed bottom-0 end-0 p-3';
+            toast.style.zIndex = '9999';
+            toast.innerHTML = `
+                <div class="toast show" role="alert">
+                    <div class="toast-body bg-success text-white rounded">
+                        <i class="bi bi-check-circle"></i> ${message}
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 2000);
+        }
+
+        function showError(message) {
+            loadingSpinner.classList.add('hidden');
+            overlayText.textContent = 'Connection Failed';
+            errorMessage.textContent = message;
+            errorMessage.classList.remove('hidden');
+            retryButton.classList.remove('hidden');
+
+            statusIndicator.className = 'status-indicator disconnected';
+            connectionText.textContent = 'Disconnected';
+        }
+
+        function showConnecting() {
+            overlay.classList.remove('hidden');
+            loadingSpinner.classList.remove('hidden');
+            overlayText.textContent = 'Connecting to console...';
+            errorMessage.classList.add('hidden');
+            retryButton.classList.add('hidden');
+
+            statusIndicator.className = 'status-indicator connecting';
+            connectionText.textContent = 'Connecting...';
+        }
+
+        function showConnected() {
+            overlay.classList.add('hidden');
+            statusIndicator.className = 'status-indicator connected';
+            connectionText.textContent = 'Connected';
+            reconnectAttempts = 0;
+        }
+
+        async function getVncSession() {
+            const response = await fetch(`/api/vm/${node}/${vmid}/vnc-ticket`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.error || 'Failed to get VNC ticket');
+            }
+
+            return response.json();
+        }
+
+        async function connect() {
+            // Check if VM is running
+            if (vmStatus !== 'running') {
+                showError('VM must be running to access console. Current status: ' + vmStatus);
+                return;
+            }
+
+            showConnecting();
+
+            try {
+                // Get VNC session from our proxy
+                const session = await getVncSession();
+
+                if (!session.success) {
+                    throw new Error(session.error || 'Failed to create VNC session');
+                }
+
+                // Build WebSocket URL
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${wsProtocol}//${window.location.host}${session.websocket_url}`;
+
+                // Disconnect existing connection if any
+                if (rfb) {
+                    rfb.disconnect();
+                    rfb = null;
+                }
+
+                // Create noVNC RFB connection with VNC ticket as password
+                rfb = new RFB(vncScreen, wsUrl, {
+                    shared: true,
+                    credentials: { password: session.password || '' }
+                });
+
+                // Configure RFB
+                rfb.scaleViewport = true;
+                rfb.resizeSession = true;
+                rfb.showDotCursor = true;
+
+                // Event handlers
+                rfb.addEventListener('connect', () => {
+                    console.log('VNC connected');
+                    showConnected();
+                });
+
+                rfb.addEventListener('disconnect', (e) => {
+                    console.log('VNC disconnected', e.detail);
+
+                    if (!e.detail.clean && reconnectAttempts < maxReconnectAttempts) {
+                        reconnectAttempts++;
+                        console.log(`Reconnect attempt ${reconnectAttempts}/${maxReconnectAttempts}`);
+                        setTimeout(connect, 2000);
+                    } else if (reconnectAttempts >= maxReconnectAttempts) {
+                        showError('Connection lost. Maximum reconnection attempts reached.');
+                    } else {
+                        showError('Connection closed.');
+                    }
+                });
+
+                rfb.addEventListener('credentialsrequired', () => {
+                    console.log('Credentials required');
+                    // VNC password is handled by Proxmox ticket, should not reach here
+                    showError('VNC authentication failed. Please try reconnecting.');
+                });
+
+                rfb.addEventListener('securityfailure', (e) => {
+                    console.log('Security failure', e.detail);
+                    showError('VNC security handshake failed: ' + (e.detail.reason || 'Unknown error'));
+                });
+
+                // Clipboard event - receive clipboard data from VM
+                rfb.addEventListener('clipboard', (e) => {
+                    if (e.detail && e.detail.text) {
+                        vmClipboard = e.detail.text;
+                        console.log('Received clipboard from VM:', vmClipboard.substring(0, 50) + '...');
+                        // Update button to show data is available
+                        const btn = document.getElementById('copyFromVmBtn');
+                        if (btn) {
+                            btn.classList.remove('btn-outline-secondary');
+                            btn.classList.add('btn-outline-success');
+                        }
+                    }
+                });
+
+            } catch (error) {
+                console.error('Connection error:', error);
+                showError(error.message);
+            }
+        }
+
+        // Focus handling - ensure keyboard events go to VNC
+        document.addEventListener('click', (e) => {
+            if (vncScreen.contains(e.target) && rfb) {
+                rfb.focus();
+            }
+        });
+
+        // Start connection
+        connect();
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
