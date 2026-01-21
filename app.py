@@ -1,6 +1,7 @@
 import json
 import os
 import pprint
+import ssl
 import threading
 import time
 import uuid
@@ -11,7 +12,9 @@ from functools import wraps
 import requests
 import toml
 import urllib3
+import websocket
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
+from flask_sock import Sock
 from proxmoxer import ProxmoxAPI
 
 # Disable SSL warnings if needed
@@ -103,6 +106,30 @@ def retry_on_timeout(
 
 app = Flask(__name__)
 app.secret_key = "your-secret-key-here"
+
+# Initialize Flask-Sock for WebSocket support
+sock = Sock(app)
+
+# =============================================================================
+# VNC Proxy Session Store
+# =============================================================================
+
+vnc_sessions = {}  # session_id -> {ticket, port, node, vmid, created_at, proxmox_host}
+vnc_sessions_lock = threading.Lock()
+VNC_SESSION_TIMEOUT = 300  # 5 minutes
+
+
+def cleanup_expired_vnc_sessions():
+    """Remove expired VNC sessions"""
+    now = time.time()
+    with vnc_sessions_lock:
+        expired = [
+            sid
+            for sid, data in vnc_sessions.items()
+            if now - data["created_at"] > VNC_SESSION_TIMEOUT
+        ]
+        for sid in expired:
+            del vnc_sessions[sid]
 
 
 # =============================================================================
@@ -3101,6 +3128,271 @@ def api_vm_delete(node, vmid):
             return jsonify({"error": "VM must be stopped before deletion"}), 400
         else:
             return jsonify({"error": f"Failed to delete VM: {error_msg}"}), 500
+
+
+# =============================================================================
+# VNC Proxy Endpoints
+# =============================================================================
+
+
+@app.route("/api/vm/<node>/<vmid>/vnc-ticket", methods=["POST"])
+def api_vnc_ticket(node, vmid):
+    """
+    Get a VNC ticket from Proxmox and create a proxy session.
+    Returns a session ID that can be used to connect via WebSocket.
+    """
+    cleanup_expired_vnc_sessions()
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    # Get connection metadata for this node to get the host
+    metadata = connection_metadata.get(node)
+    if not metadata:
+        # Debug: show all available metadata keys
+        print(f"Available connection_metadata keys: {list(connection_metadata.keys())}")
+        return (
+            jsonify({"error": f"Connection metadata not found for node '{node}'"}),
+            500,
+        )
+
+    try:
+        # Request VNC ticket from Proxmox
+        vnc_data = proxmox.nodes(node).qemu(vmid).vncproxy.post(websocket=1)
+
+        # Create a session for this VNC connection
+        session_id = str(uuid.uuid4())
+
+        # Prepare auth info for WebSocket connection
+        auth_token = None
+        auth_ticket = None
+
+        if metadata.get("token_name") and metadata.get("token_value"):
+            # API token authentication
+            auth_token = f"PVEAPIToken={metadata['user']}!{metadata['token_name']}={metadata['token_value']}"
+        else:
+            # Password auth - we need to get a fresh ticket or use the existing one
+            # For password auth, let's request a new access ticket
+            try:
+                # Get auth ticket by making a direct API call to get access
+                host = metadata["host"]
+                user = metadata["user"]
+                password = metadata.get("password")
+                verify_ssl = metadata.get("verify_ssl", True)
+
+                # Request access ticket from Proxmox
+                import requests as req_lib
+
+                ticket_url = f"https://{host}:8006/api2/json/access/ticket"
+                ticket_response = req_lib.post(
+                    ticket_url,
+                    data={"username": user, "password": password},
+                    verify=verify_ssl,
+                    timeout=10,
+                )
+                if ticket_response.status_code == 200:
+                    ticket_data = ticket_response.json().get("data", {})
+                    auth_ticket = ticket_data.get("ticket")
+            except Exception:
+                pass  # Auth ticket retrieval failed, will try without
+
+        with vnc_sessions_lock:
+            vnc_sessions[session_id] = {
+                "ticket": vnc_data["ticket"],
+                "port": vnc_data["port"],
+                "node": node,
+                "vmid": vmid,
+                "created_at": time.time(),
+                "proxmox_host": metadata["host"],
+                "verify_ssl": metadata.get("verify_ssl", True),
+                "auth_token": auth_token,
+                "auth_ticket": auth_ticket,
+            }
+
+        return jsonify(
+            {
+                "success": True,
+                "session_id": session_id,
+                "websocket_url": f"/vnc/{session_id}",
+                "password": vnc_data["ticket"],  # VNC password for noVNC
+            }
+        )
+
+    except Exception as e:
+        error_msg = str(e)
+        if "not running" in error_msg.lower():
+            return jsonify({"error": "VM must be running to access console"}), 400
+        return jsonify({"error": f"Failed to get VNC ticket: {error_msg}"}), 500
+
+
+@sock.route("/vnc/<session_id>")
+def vnc_websocket_proxy(ws, session_id):
+    """
+    WebSocket proxy that relays traffic between browser (noVNC) and Proxmox VNC.
+    """
+    # Get session data
+    with vnc_sessions_lock:
+        session = vnc_sessions.get(session_id)
+        if not session:
+            ws.close(1008, "Invalid or expired session")
+            return
+
+    # Build Proxmox WebSocket URL
+    proxmox_host = session["proxmox_host"]
+    port = session["port"]
+    ticket = session["ticket"]
+    node = session["node"]
+    vmid = session["vmid"]
+    verify_ssl = session["verify_ssl"]
+    auth_ticket = session.get("auth_ticket")
+    auth_token = session.get("auth_token")
+
+    # URL-encode the VNC ticket properly
+    from urllib.parse import quote
+
+    encoded_ticket = quote(ticket, safe="")
+
+    # Proxmox VNC WebSocket URL format
+    proxmox_ws_url = f"wss://{proxmox_host}:8006/api2/json/nodes/{node}/qemu/{vmid}/vncwebsocket?port={port}&vncticket={encoded_ticket}"
+
+    # SSL context
+    ssl_opts = {}
+    if not verify_ssl:
+        ssl_opts["sslopt"] = {
+            "cert_reqs": ssl.CERT_NONE,
+            "check_hostname": False,
+        }
+
+    # Build headers for authentication
+    headers = {}
+    if auth_token:
+        # API token authentication
+        headers["Authorization"] = auth_token
+    elif auth_ticket:
+        # Cookie-based authentication
+        headers["Cookie"] = f"PVEAuthCookie={quote(auth_ticket, safe='')}"
+
+    proxmox_ws = None
+    try:
+        # Connect to Proxmox WebSocket
+        proxmox_ws = websocket.create_connection(
+            proxmox_ws_url,
+            timeout=30,
+            header=headers if headers else None,
+            **ssl_opts,
+        )
+
+        # Set up bidirectional relay using threads
+        stop_event = threading.Event()
+
+        def relay_to_browser():
+            """Relay data from Proxmox to browser"""
+            try:
+                proxmox_ws.settimeout(1.0)
+                while not stop_event.is_set():
+                    try:
+                        opcode, data = proxmox_ws.recv_data()
+                        if data:
+                            # Send as binary if it's binary data
+                            if opcode == websocket.ABNF.OPCODE_BINARY:
+                                ws.send(data)
+                            else:
+                                ws.send(
+                                    data.decode("utf-8")
+                                    if isinstance(data, bytes)
+                                    else data
+                                )
+                        else:
+                            break
+                    except websocket.WebSocketTimeoutException:
+                        continue
+                    except Exception:
+                        break
+            finally:
+                stop_event.set()
+
+        def relay_to_proxmox():
+            """Relay data from browser to Proxmox"""
+            from simple_websocket import ConnectionClosed
+
+            try:
+                while not stop_event.is_set():
+                    try:
+                        # flask-sock's receive() - use longer timeout
+                        data = ws.receive(timeout=30)
+                        if data is not None:
+                            # Send binary data as binary
+                            if isinstance(data, bytes):
+                                proxmox_ws.send_binary(data)
+                            else:
+                                proxmox_ws.send(data)
+                        # None on timeout is OK, just continue
+                    except ConnectionClosed:
+                        break
+                    except TimeoutError:
+                        # Timeout is normal, just continue waiting
+                        continue
+                    except Exception as e:
+                        error_str = str(e).lower()
+                        if "timed out" in error_str or "timeout" in error_str:
+                            continue
+                        # Check for connection closed
+                        if "closed" in error_str or "disconnect" in error_str:
+                            break
+                        break
+            finally:
+                stop_event.set()
+
+        # Start relay threads
+        browser_thread = threading.Thread(target=relay_to_browser, daemon=True)
+        proxmox_thread = threading.Thread(target=relay_to_proxmox, daemon=True)
+
+        browser_thread.start()
+        proxmox_thread.start()
+
+        # Wait for either thread to finish
+        while not stop_event.is_set():
+            time.sleep(0.1)
+
+    except Exception:
+        pass  # Connection error, silently close
+    finally:
+        if proxmox_ws:
+            try:
+                proxmox_ws.close()
+            except Exception:
+                pass
+
+        # Clean up session
+        with vnc_sessions_lock:
+            vnc_sessions.pop(session_id, None)
+
+
+@app.route("/vm/<node>/<vmid>/console")
+def vm_console(node, vmid):
+    """VNC console page for a VM"""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        flash("Proxmox connection not available")
+        return redirect(url_for("index"))
+
+    try:
+        # Get VM info for the title
+        vm_status = proxmox.nodes(node).qemu(vmid).status.current.get()
+        vm_config = proxmox.nodes(node).qemu(vmid).config.get()
+        vm_name = vm_config.get("name", f"VM {vmid}")
+
+        return render_template(
+            "vm_console.html",
+            node=node,
+            vmid=vmid,
+            vm_name=vm_name,
+            vm_status=vm_status.get("status", "unknown"),
+        )
+    except Exception as e:
+        flash(f"Error loading console: {str(e)}")
+        return redirect(url_for("vm_detail", node=node, vmid=vmid))
 
 
 @app.route("/api/cloud-images")

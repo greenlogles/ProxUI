@@ -122,6 +122,18 @@
                         </button>
                     </form>
                     {% endif %}
+
+                    {% if vm_type == 'qemu' %}
+                    <hr class="my-2">
+                    <a href="{{ url_for('vm_console', node=node, vmid=vmid) }}"
+                       class="btn btn-outline-info w-100 {{ 'disabled' if status.status != 'running' else '' }}"
+                       {% if status.status != 'running' %}aria-disabled="true" tabindex="-1"{% endif %}>
+                        <i class="bi bi-display"></i> Console
+                        {% if status.status != 'running' %}
+                        <small class="d-block text-muted">(VM must be running)</small>
+                        {% endif %}
+                    </a>
+                    {% endif %}
                 </div>
             </div>
         </div>

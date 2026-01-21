@@ -115,7 +115,7 @@
                                 </td>
                                 <td>
                                     <div class="btn-group btn-group-sm" role="group">
-                                        <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}" 
+                                        <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}"
                                            class="btn btn-outline-primary" title="Details">
                                             <i class="bi bi-info-circle"></i>
                                         </a>
@@ -126,6 +126,13 @@
                                         </a>
 
                                         {% else %}
+                                            {% if vm.type == 'qemu' and vm.status == 'running' %}
+                                            <a href="{{ url_for('vm_console', node=vm.node, vmid=vm.vmid) }}"
+                                               class="btn btn-outline-info" title="Console">
+                                                <i class="bi bi-display"></i>
+                                            </a>
+                                            {% endif %}
+
                                             {% if vm.status == 'stopped' %}
                                             <form method="POST" action="{{ url_for('vm_action', node=vm.node, vmid=vm.vmid, action='start') }}" style="display: inline;">
                                                 <button type="submit" class="btn btn-outline-success" title="Start">
