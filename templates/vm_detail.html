@@ -5,20 +5,64 @@
 {% block content %}
 <div class="row">
     <div class="col-12">
-        <div class="d-flex justify-content-between align-items-center">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
             <div>
                 <h1>
-                    <i class="bi bi-{{ 'pc-display' if vm_type == 'qemu' else 'box' }}"></i> 
+                    <i class="bi bi-{{ 'pc-display' if vm_type == 'qemu' else 'box' }}"></i>
                     {{ config.name or ('VM ' + vmid) }}
                 </h1>
-                <p class="text-muted">{{ vm_type|upper }} {{ vmid }} on {{ node }}</p>
+                <p class="text-muted mb-0">{{ vm_type|upper }} {{ vmid }} on {{ node }}</p>
             </div>
-            <div>
-                <a href="{{ url_for('vm_edit', node=node, vmid=vmid) }}" class="btn btn-outline-primary">
-                    <i class="bi bi-gear"></i> Edit Configuration
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+                <!-- Power Actions -->
+                <div class="btn-group" role="group">
+                    {% if status.status == 'stopped' %}
+                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='start') }}" class="d-inline">
+                        <button type="submit" class="btn btn-success">
+                            <i class="bi bi-play-fill"></i> Start
+                        </button>
+                    </form>
+                    {% else %}
+                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='shutdown') }}" class="d-inline">
+                        <button type="submit" class="btn btn-warning">
+                            <i class="bi bi-power"></i> Shutdown
+                        </button>
+                    </form>
+                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='stop') }}" class="d-inline">
+                        <button type="submit" class="btn btn-danger" onclick="return confirm('Force stop VM?')">
+                            <i class="bi bi-stop-fill"></i> Stop
+                        </button>
+                    </form>
+                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='reset') }}" class="d-inline">
+                        <button type="submit" class="btn btn-outline-warning" onclick="return confirm('Reset VM?')">
+                            <i class="bi bi-arrow-clockwise"></i>
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+
+                <!-- Console (QEMU only) -->
+                {% if vm_type == 'qemu' %}
+                <a href="{{ url_for('vm_console', node=node, vmid=vmid) }}"
+                   class="btn btn-outline-info {{ 'disabled' if status.status != 'running' else '' }}"
+                   {% if status.status != 'running' %}aria-disabled="true" tabindex="-1" title="VM must be running"{% endif %}>
+                    <i class="bi bi-display"></i> Console
                 </a>
-                <button type="button" class="btn btn-outline-danger ms-2" data-bs-toggle="modal" data-bs-target="#deleteModal">
-                    <i class="bi bi-trash"></i> Delete VM
+                {% endif %}
+
+                <!-- Migration -->
+                <button type="button" class="btn btn-outline-secondary {{ 'disabled' if migration_info else '' }}"
+                        data-bs-toggle="modal" data-bs-target="#migrateModal"
+                        {% if migration_info %}disabled title="Migration in progress"{% endif %}>
+                    <i class="bi bi-arrow-left-right"></i> Migrate
+                </button>
+
+                <!-- Edit & Delete -->
+                <a href="{{ url_for('vm_edit', node=node, vmid=vmid) }}" class="btn btn-outline-primary">
+                    <i class="bi bi-gear"></i> Edit
+                </a>
+                <button type="button" class="btn btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteModal">
+                    <i class="bi bi-trash"></i> Delete
                 </button>
             </div>
         </div>
@@ -47,15 +91,15 @@
 
 <div class="row">
     <!-- Status Card -->
-    <div class="col-md-4 mb-3">
+    <div class="col-md-6 mb-3">
         <div class="card">
             <div class="card-header">
                 <h5 class="mb-0"><i class="bi bi-activity"></i> Status</h5>
             </div>
             <div class="card-body">
-                <dl class="row">
-                    <dt class="col-sm-4">Status:</dt>
-                    <dd class="col-sm-8">
+                <dl class="row mb-0">
+                    <dt class="col-sm-3">Status:</dt>
+                    <dd class="col-sm-9">
                         {% if status.status == 'running' %}
                             <span class="badge bg-success">Running</span>
                         {% elif status.status == 'stopped' %}
@@ -64,21 +108,21 @@
                             <span class="badge bg-warning">{{ status.status }}</span>
                         {% endif %}
                     </dd>
-                    
-                    <dt class="col-sm-4">Uptime:</dt>
-                    <dd class="col-sm-8">{{ status.uptime|humanize_uptime }}</dd>
-                    
-                    <dt class="col-sm-4">CPU:</dt>
-                    <dd class="col-sm-8">
+
+                    <dt class="col-sm-3">Uptime:</dt>
+                    <dd class="col-sm-9">{{ status.uptime|humanize_uptime }}</dd>
+
+                    <dt class="col-sm-3">CPU:</dt>
+                    <dd class="col-sm-9">
                         <div class="progress" style="height: 20px;">
                             <div class="progress-bar" style="width: {{ (status.cpu * 100)|round(1) }}%">
                                 {{ (status.cpu * 100)|round(1) }}%
                             </div>
                         </div>
                     </dd>
-                    
-                    <dt class="col-sm-4">Memory:</dt>
-                    <dd class="col-sm-8">
+
+                    <dt class="col-sm-3">Memory:</dt>
+                    <dd class="col-sm-9">
                         <div class="progress" style="height: 20px;">
                             <div class="progress-bar" style="width: {{ ((status.mem / status.maxmem) * 100)|round(1) }}%">
                                 {{ ((status.mem / status.maxmem) * 100)|round(1) }}%
@@ -90,107 +134,6 @@
             </div>
         </div>
     </div>
-
-    <!-- Actions Card -->
-    <div class="col-md-4 mb-3">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-gear"></i> Actions</h5>
-            </div>
-            <div class="card-body">
-                <div class="d-grid gap-2">
-                    {% if status.status == 'stopped' %}
-                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='start') }}">
-                        <button type="submit" class="btn btn-success w-100">
-                            <i class="bi bi-play-fill"></i> Start
-                        </button>
-                    </form>
-                    {% else %}
-                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='shutdown') }}">
-                        <button type="submit" class="btn btn-warning w-100">
-                            <i class="bi bi-power"></i> Shutdown
-                        </button>
-                    </form>
-                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='stop') }}">
-                        <button type="submit" class="btn btn-danger w-100" onclick="return confirm('Force stop VM?')">
-                            <i class="bi bi-stop-fill"></i> Force Stop
-                        </button>
-                    </form>
-                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='reset') }}">
-                        <button type="submit" class="btn btn-warning w-100" onclick="return confirm('Reset VM?')">
-                            <i class="bi bi-arrow-clockwise"></i> Reset
-                        </button>
-                    </form>
-                    {% endif %}
-
-                    {% if vm_type == 'qemu' %}
-                    <hr class="my-2">
-                    <a href="{{ url_for('vm_console', node=node, vmid=vmid) }}"
-                       class="btn btn-outline-info w-100 {{ 'disabled' if status.status != 'running' else '' }}"
-                       {% if status.status != 'running' %}aria-disabled="true" tabindex="-1"{% endif %}>
-                        <i class="bi bi-display"></i> Console
-                        {% if status.status != 'running' %}
-                        <small class="d-block text-muted">(VM must be running)</small>
-                        {% endif %}
-                    </a>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Migration Card -->
-    <div class="col-md-4 mb-3">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-arrow-left-right"></i> Migration</h5>
-            </div>
-            <div class="card-body">
-                {% if migration_info %}
-                    <div class="alert alert-warning">
-                        <i class="bi bi-exclamation-triangle"></i>
-                        Migration is already in progress. Please wait for the current migration to complete.
-                    </div>
-                    <fieldset disabled>
-                {% endif %}
-                <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='migrate') }}" id="migrateForm">
-                    <div class="mb-3">
-                        <label for="target_node" class="form-label">Target Node</label>
-                        <select class="form-select" id="target_node" name="target_node" required {{ 'disabled' if migration_info else '' }}>
-                            <option value="">Select target node...</option>
-                            {% for target in available_nodes %}
-                            <option value="{{ target }}">{{ target }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <label for="target_storage" class="form-label">Target Storage (Optional)</label>
-                        <select class="form-select" id="target_storage" name="target_storage" {{ 'disabled' if migration_info else '' }}>
-                            <option value="">Keep current storage locations</option>
-                        </select>
-                        <div class="form-text">Leave empty to keep disks on current storage</div>
-                    </div>
-                    
-                    {% if vm_type == 'lxc' %}
-                    <div class="alert alert-info mb-3">
-                        <i class="bi bi-info-circle"></i>
-                        <strong>Note:</strong> LXC containers don't support live migration. The container will be restarted during the migration process (shutdown → migrate → start on target node).
-                    </div>
-                    {% endif %}
-                    
-                    <button type="submit" class="btn btn-primary w-100" onclick="return confirm('Migrate {{ 'VM' if vm_type == 'qemu' else 'container' }} to selected node?')" {{ 'disabled' if migration_info else '' }}>
-                        <i class="bi bi-arrow-right-circle"></i> 
-                        {% if migration_info %}Migration in Progress{% else %}Migrate{% endif %}
-                    </button>
-                </form>
-                {% if migration_info %}
-                    </fieldset>
-                {% endif %}
-            </div>
-        </div>
-    </div>
-
 </div>
 
 <div class="row mt-3">
@@ -532,6 +475,54 @@
     </div>
 </div>
 
+<!-- Migration Modal -->
+<div class="modal fade" id="migrateModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-arrow-left-right"></i> Migrate {{ 'VM' if vm_type == 'qemu' else 'Container' }} {{ vmid }}
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='migrate') }}" id="migrateForm">
+                <div class="modal-body">
+                    {% if vm_type == 'lxc' %}
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle"></i>
+                        <strong>Note:</strong> LXC containers don't support live migration. The container will be restarted during the migration process.
+                    </div>
+                    {% endif %}
+
+                    <div class="mb-3">
+                        <label for="target_node" class="form-label">Target Node</label>
+                        <select class="form-select" id="target_node" name="target_node" required>
+                            <option value="">Select target node...</option>
+                            {% for target in available_nodes %}
+                            <option value="{{ target }}">{{ target }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="target_storage" class="form-label">Target Storage (Optional)</label>
+                        <select class="form-select" id="target_storage" name="target_storage">
+                            <option value="">Keep current storage locations</option>
+                        </select>
+                        <div class="form-text">Leave empty to keep disks on current storage</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary" onclick="return confirm('Migrate {{ 'VM' if vm_type == 'qemu' else 'container' }} to selected node?')">
+                        <i class="bi bi-arrow-right-circle"></i> Migrate
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <!-- Delete VM Modal -->
 <div class="modal fade" id="deleteModal" tabindex="-1">
     <div class="modal-dialog">
@@ -594,22 +585,19 @@ document.addEventListener('DOMContentLoaded', function() {
     const metricsLastUpdate = document.getElementById('metricsLastUpdate');
     const timeframeSelect = document.getElementById('timeframeSelect');
     
-    // Check if migration form is disabled
-    const migrationDisabled = {{ 'true' if migration_info else 'false' }};
-    
-    // Fetch storage options when target node changes (only if migration not disabled)
-    if (!migrationDisabled) {
+    // Fetch storage options when target node changes
+    if (targetNodeSelect) {
         targetNodeSelect.addEventListener('change', function() {
             const targetNode = this.value;
-            
+
             if (!targetNode) {
                 targetStorageSelect.innerHTML = '<option value="">Keep current storage locations</option>';
                 return;
             }
-            
+
             // Show loading state
             targetStorageSelect.innerHTML = '<option value="">Loading storages...</option>';
-            
+
             // Fetch storage for target node - use correct VM type
             fetch(`/api/node/${targetNode}/storages?vm_type=${vmType}`)
                 .then(response => response.json())
