@@ -23,22 +23,24 @@
 
         #console-toolbar {
             background-color: #343a40;
-            padding: 8px 16px;
+            padding: 6px 10px;
             display: flex;
             align-items: center;
             justify-content: space-between;
             flex-shrink: 0;
             border-bottom: 1px solid #495057;
+            gap: 8px;
         }
 
         #console-toolbar .btn {
-            margin-left: 8px;
+            padding: 4px 8px;
         }
 
         #console-status {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 8px;
+            min-width: 0;
         }
 
         #console-status .status-indicator {
@@ -46,6 +48,43 @@
             height: 10px;
             border-radius: 50%;
             display: inline-block;
+            flex-shrink: 0;
+        }
+
+        .toolbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        /* Hide text labels on mobile, show only icons */
+        @media (max-width: 768px) {
+            .btn-label {
+                display: none;
+            }
+            #console-toolbar .btn {
+                padding: 6px 10px;
+            }
+            .vm-info .text-muted {
+                display: none;
+            }
+            #connection-text {
+                display: none;
+            }
+        }
+
+        /* Very small screens */
+        @media (max-width: 480px) {
+            #console-toolbar {
+                padding: 4px 6px;
+            }
+            .vm-name {
+                max-width: 80px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
         }
 
         #console-status .status-indicator.connected {
@@ -123,7 +162,7 @@
             font-weight: 500;
         }
 
-        /* Keyboard hints */
+        /* Keyboard hints - hidden on mobile */
         .kbd-hint {
             font-size: 0.75rem;
             color: #6c757d;
@@ -135,6 +174,12 @@
             border-radius: 3px;
             font-size: 0.7rem;
         }
+
+        @media (max-width: 992px) {
+            .kbd-hint {
+                display: none;
+            }
+        }
     </style>
 </head>
 <body>
@@ -142,32 +187,30 @@
         <!-- Toolbar -->
         <div id="console-toolbar">
             <div id="console-status">
-                <a href="{{ url_for('vm_detail', node=node, vmid=vmid) }}" class="btn btn-sm btn-outline-secondary">
-                    <i class="bi bi-arrow-left"></i> Back
+                <a href="{{ url_for('vm_detail', node=node, vmid=vmid) }}" class="btn btn-sm btn-outline-secondary" title="Back to VM">
+                    <i class="bi bi-arrow-left"></i>
                 </a>
                 <span class="status-indicator connecting" id="status-indicator"></span>
                 <span class="vm-info">
                     <span class="vm-name">{{ vm_name }}</span>
-                    <span class="text-muted">({{ vmid }} on {{ node }})</span>
+                    <span class="text-muted">({{ vmid }})</span>
                 </span>
-                <span id="connection-text" class="text-muted">Connecting...</span>
+                <span id="connection-text" class="text-muted small">Connecting...</span>
             </div>
-            <div>
-                <span class="kbd-hint me-3">
-                    <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Del</kbd> sends to VM
+            <div class="toolbar-actions">
+                <span class="kbd-hint">
+                    <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Del</kbd>
                 </span>
                 <button class="btn btn-sm btn-outline-secondary" onclick="sendCtrlAltDel()" title="Send Ctrl+Alt+Del">
-                    <i class="bi bi-keyboard"></i> Ctrl+Alt+Del
+                    <i class="bi bi-keyboard"></i><span class="btn-label"> CAD</span>
                 </button>
-                <div class="btn-group ms-2">
-                    <button class="btn btn-sm btn-outline-secondary" onclick="pasteToVM()" title="Paste clipboard to VM">
-                        <i class="bi bi-clipboard-plus"></i> Paste to VM
-                    </button>
-                    <button class="btn btn-sm btn-outline-secondary" onclick="copyFromVM()" title="Copy VM clipboard" id="copyFromVmBtn">
-                        <i class="bi bi-clipboard-minus"></i> Copy from VM
-                    </button>
-                </div>
-                <button class="btn btn-sm btn-outline-secondary ms-2" onclick="toggleFullscreen()" title="Toggle Fullscreen">
+                <button class="btn btn-sm btn-outline-secondary" onclick="pasteToVM()" title="Paste to VM">
+                    <i class="bi bi-clipboard-plus"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" onclick="copyFromVM()" title="Copy from VM" id="copyFromVmBtn">
+                    <i class="bi bi-clipboard-minus"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" onclick="toggleFullscreen()" title="Fullscreen">
                     <i class="bi bi-arrows-fullscreen"></i>
                 </button>
                 <button class="btn btn-sm btn-outline-warning" onclick="reconnect()" title="Reconnect">
