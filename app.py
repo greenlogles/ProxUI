@@ -297,6 +297,23 @@ except Exception as e:
     config_file_exists = False
     config = {"clusters": []}
 
+# Demo mode configuration
+# Can be enabled via environment variable or config file
+DEMO_MODE = os.environ.get("PROXUI_DEMO_MODE", "").lower() in ("1", "true", "yes")
+if not DEMO_MODE:
+    DEMO_MODE = config.get("demo_mode", False)
+
+DEMO_MESSAGE = os.environ.get(
+    "PROXUI_DEMO_MESSAGE",
+    config.get(
+        "demo_message",
+        "This is a demo instance with read-only access. You can explore all features, but changes will not be saved due to permission restrictions.",
+    ),
+)
+
+if DEMO_MODE:
+    print(f"Demo mode enabled: {DEMO_MESSAGE}")
+
 # Cloud image definitions for VM templates
 # Load cloud images from external JSON file
 # Can be overridden via CLOUD_IMAGES_PATH environment variable
@@ -1037,6 +1054,8 @@ def inject_cluster_info():
             {"id": cluster_id, "name": cluster_config.get("name", cluster_id)}
             for cluster_id, cluster_config in all_clusters.items()
         ],
+        "demo_mode": DEMO_MODE,
+        "demo_message": DEMO_MESSAGE,
     }
 
 
