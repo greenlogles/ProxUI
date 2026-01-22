@@ -127,6 +127,21 @@
         </div>
     </nav>
 
+    {% if demo_mode %}
+    <div class="demo-banner alert alert-info alert-dismissible mb-0 rounded-0 py-2" role="alert" id="demoBanner">
+        <div class="container-fluid d-flex align-items-center justify-content-center gap-2">
+            <i class="bi bi-info-circle-fill"></i>
+            <span>{{ demo_message }}</span>
+            <button type="button" class="btn-close btn-close-sm ms-2" data-bs-dismiss="alert" aria-label="Close" onclick="sessionStorage.setItem('demoBannerDismissed', 'true')"></button>
+        </div>
+    </div>
+    <script>
+        if (sessionStorage.getItem('demoBannerDismissed') === 'true') {
+            document.getElementById('demoBanner').style.display = 'none';
+        }
+    </script>
+    {% endif %}
+
     <div class="container-fluid mt-3">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
@@ -145,6 +160,73 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
     
+    <!-- Demo Mode & Error Handling -->
+    <script>
+    const DEMO_MODE = {{ 'true' if demo_mode else 'false' }};
+
+    // Global function to handle API errors with demo-friendly messages
+    function handleApiError(error, response) {
+        let message = error.message || 'An error occurred';
+
+        // Check if it's a permission error in demo mode
+        if (DEMO_MODE && response && (response.status === 403 || response.status === 401)) {
+            message = 'Demo mode: This action requires write permissions that are not available in the demo.';
+        } else if (response && response.status === 403) {
+            message = 'Permission denied: You do not have permission to perform this action.';
+        }
+
+        return message;
+    }
+
+    // Wrapper for fetch that adds demo-friendly error handling
+    async function apiFetch(url, options = {}) {
+        const response = await fetch(url, options);
+
+        if (!response.ok) {
+            let errorMessage;
+            try {
+                const data = await response.json();
+                errorMessage = data.error || data.message || response.statusText;
+            } catch {
+                errorMessage = response.statusText;
+            }
+
+            // Enhance error message for demo mode
+            if (DEMO_MODE && (response.status === 403 || response.status === 401)) {
+                errorMessage = 'Demo mode: This action requires write permissions that are not available in the demo.';
+            }
+
+            const error = new Error(errorMessage);
+            error.status = response.status;
+            error.response = response;
+            throw error;
+        }
+
+        return response;
+    }
+
+    // Show a toast notification for errors
+    function showErrorToast(message) {
+        const toast = document.createElement('div');
+        toast.className = 'position-fixed bottom-0 end-0 p-3';
+        toast.style.zIndex = '9999';
+        toast.innerHTML = `
+            <div class="toast show" role="alert">
+                <div class="toast-header bg-danger text-white">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    <strong class="me-auto">${DEMO_MODE ? 'Demo Mode' : 'Error'}</strong>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast"></button>
+                </div>
+                <div class="toast-body">
+                    ${message}
+                </div>
+            </div>
+        `;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 6000);
+    }
+    </script>
+
     <!-- Cluster Switching JavaScript -->
     <script>
     document.addEventListener('DOMContentLoaded', function() {
@@ -491,6 +573,21 @@
 
     .jobs-active .bi-list-task {
         color: #ffc107 !important;
+    }
+
+    /* Demo banner styling */
+    .demo-banner {
+        background: linear-gradient(90deg, #0d6efd15, #0d6efd25, #0d6efd15);
+        border: none;
+        border-bottom: 1px solid #0d6efd40;
+        font-size: 0.9rem;
+    }
+    .demo-banner .btn-close {
+        font-size: 0.7rem;
+        opacity: 0.5;
+    }
+    .demo-banner .btn-close:hover {
+        opacity: 1;
     }
     </style>
 
