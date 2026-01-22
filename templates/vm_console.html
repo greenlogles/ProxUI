@@ -23,22 +23,24 @@
 
         #console-toolbar {
             background-color: #343a40;
-            padding: 8px 16px;
+            padding: 6px 10px;
             display: flex;
             align-items: center;
             justify-content: space-between;
             flex-shrink: 0;
             border-bottom: 1px solid #495057;
+            gap: 8px;
         }
 
         #console-toolbar .btn {
-            margin-left: 8px;
+            padding: 4px 8px;
         }
 
         #console-status {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 8px;
+            min-width: 0;
         }
 
         #console-status .status-indicator {
@@ -46,6 +48,43 @@
             height: 10px;
             border-radius: 50%;
             display: inline-block;
+            flex-shrink: 0;
+        }
+
+        .toolbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        /* Hide text labels on mobile, show only icons */
+        @media (max-width: 768px) {
+            .btn-label {
+                display: none;
+            }
+            #console-toolbar .btn {
+                padding: 6px 10px;
+            }
+            .vm-info .text-muted {
+                display: none;
+            }
+            #connection-text {
+                display: none;
+            }
+        }
+
+        /* Very small screens */
+        @media (max-width: 480px) {
+            #console-toolbar {
+                padding: 4px 6px;
+            }
+            .vm-name {
+                max-width: 80px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
         }
 
         #console-status .status-indicator.connected {
@@ -123,7 +162,7 @@
             font-weight: 500;
         }
 
-        /* Keyboard hints */
+        /* Keyboard hints - hidden on mobile */
         .kbd-hint {
             font-size: 0.75rem;
             color: #6c757d;
@@ -135,6 +174,115 @@
             border-radius: 3px;
             font-size: 0.7rem;
         }
+
+        @media (max-width: 992px) {
+            .kbd-hint {
+                display: none;
+            }
+        }
+
+        /* Virtual Keyboard - Full layout */
+        #virtual-keyboard {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background-color: #1a1a1a;
+            border-top: 1px solid #333;
+            padding: 3px;
+            z-index: 200;
+            display: none;
+        }
+
+        #virtual-keyboard.visible {
+            display: block;
+        }
+
+        .vkb-row {
+            display: flex;
+            justify-content: center;
+            gap: 3px;
+            margin-bottom: 3px;
+        }
+
+        .vkb-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .vkb-row.vkb-special {
+            background-color: #252525;
+            margin: 0 -3px 3px -3px;
+            padding: 2px 3px;
+        }
+
+        .vkb-key {
+            background-color: #3a3a3a;
+            border: none;
+            border-radius: 4px;
+            color: #ddd;
+            padding: 12px 0;
+            font-size: 14px;
+            font-weight: 400;
+            cursor: pointer;
+            user-select: none;
+            flex: 1;
+            text-align: center;
+            transition: background-color 0.1s;
+            min-width: 0;
+            max-width: 42px;
+        }
+
+        /* On desktop, center keyboard and limit width */
+        @media (min-width: 769px) {
+            #virtual-keyboard {
+                max-width: 500px;
+                left: 50%;
+                transform: translateX(-50%);
+                border-radius: 8px 8px 0 0;
+            }
+        }
+
+        .vkb-special .vkb-key {
+            background-color: transparent;
+            padding: 8px 0;
+            font-size: 11px;
+            color: #aaa;
+        }
+
+        .vkb-key:active {
+            background-color: #555;
+        }
+
+        .vkb-special .vkb-key:active {
+            background-color: #444;
+        }
+
+        .vkb-key.modifier {
+            color: #888;
+        }
+
+        .vkb-key.modifier.active {
+            background-color: #ffc107 !important;
+            color: #000;
+        }
+
+        @media (max-width: 380px) {
+            .vkb-key {
+                padding: 10px 0;
+                font-size: 13px;
+            }
+            .vkb-special .vkb-key {
+                padding: 6px 0;
+                font-size: 10px;
+            }
+            #virtual-keyboard {
+                padding: 2px;
+            }
+            .vkb-row {
+                gap: 2px;
+                margin-bottom: 2px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -142,32 +290,33 @@
         <!-- Toolbar -->
         <div id="console-toolbar">
             <div id="console-status">
-                <a href="{{ url_for('vm_detail', node=node, vmid=vmid) }}" class="btn btn-sm btn-outline-secondary">
-                    <i class="bi bi-arrow-left"></i> Back
+                <a href="{{ url_for('vm_detail', node=node, vmid=vmid) }}" class="btn btn-sm btn-outline-secondary" title="Back to VM">
+                    <i class="bi bi-arrow-left"></i>
                 </a>
                 <span class="status-indicator connecting" id="status-indicator"></span>
                 <span class="vm-info">
                     <span class="vm-name">{{ vm_name }}</span>
-                    <span class="text-muted">({{ vmid }} on {{ node }})</span>
+                    <span class="text-muted">({{ vmid }})</span>
                 </span>
-                <span id="connection-text" class="text-muted">Connecting...</span>
+                <span id="connection-text" class="text-muted small">Connecting...</span>
             </div>
-            <div>
-                <span class="kbd-hint me-3">
-                    <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Del</kbd> sends to VM
+            <div class="toolbar-actions">
+                <span class="kbd-hint">
+                    <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Del</kbd>
                 </span>
-                <button class="btn btn-sm btn-outline-secondary" onclick="sendCtrlAltDel()" title="Send Ctrl+Alt+Del">
-                    <i class="bi bi-keyboard"></i> Ctrl+Alt+Del
+                <button class="btn btn-sm btn-outline-danger" onclick="sendCtrlAltDel()" title="Send Ctrl+Alt+Del">
+                    <i class="bi bi-sign-stop"></i>
                 </button>
-                <div class="btn-group ms-2">
-                    <button class="btn btn-sm btn-outline-secondary" onclick="pasteToVM()" title="Paste clipboard to VM">
-                        <i class="bi bi-clipboard-plus"></i> Paste to VM
-                    </button>
-                    <button class="btn btn-sm btn-outline-secondary" onclick="copyFromVM()" title="Copy VM clipboard" id="copyFromVmBtn">
-                        <i class="bi bi-clipboard-minus"></i> Copy from VM
-                    </button>
-                </div>
-                <button class="btn btn-sm btn-outline-secondary ms-2" onclick="toggleFullscreen()" title="Toggle Fullscreen">
+                <button class="btn btn-sm btn-outline-info" onclick="toggleVirtualKeyboard()" title="Virtual Keyboard" id="vkbToggleBtn">
+                    <i class="bi bi-keyboard-fill"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" onclick="pasteToVM()" title="Paste to VM">
+                    <i class="bi bi-clipboard-plus"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" onclick="copyFromVM()" title="Copy from VM" id="copyFromVmBtn">
+                    <i class="bi bi-clipboard-minus"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" onclick="toggleFullscreen()" title="Fullscreen">
                     <i class="bi bi-arrows-fullscreen"></i>
                 </button>
                 <button class="btn btn-sm btn-outline-warning" onclick="reconnect()" title="Reconnect">
@@ -191,6 +340,87 @@
             <button class="btn btn-primary mt-3 hidden" id="retry-button" onclick="reconnect()">
                 <i class="bi bi-arrow-clockwise"></i> Retry Connection
             </button>
+        </div>
+
+        <!-- Virtual Keyboard - Full layout -->
+        <div id="virtual-keyboard">
+            <!-- Row 1: Special keys -->
+            <div class="vkb-row vkb-special">
+                <button class="vkb-key" data-key="Escape">ESC</button>
+                <button class="vkb-key" data-key="/">/ </button>
+                <button class="vkb-key" data-key="|">|</button>
+                <button class="vkb-key" data-key="-">-</button>
+                <button class="vkb-key" data-key="Home">HM</button>
+                <button class="vkb-key" data-key="ArrowUp">↑</button>
+                <button class="vkb-key" data-key="End">END</button>
+                <button class="vkb-key" data-key="PageUp">PU</button>
+                <button class="vkb-key" data-key="PageDown">PD</button>
+            </div>
+            <!-- Row 2: Modifiers and nav -->
+            <div class="vkb-row vkb-special">
+                <button class="vkb-key" data-key="Tab">TAB</button>
+                <button class="vkb-key modifier" data-modifier="ctrl">CTRL</button>
+                <button class="vkb-key modifier" data-modifier="alt">ALT</button>
+                <button class="vkb-key modifier" data-modifier="shift">SHF</button>
+                <button class="vkb-key" data-key="ArrowLeft">←</button>
+                <button class="vkb-key" data-key="ArrowDown">↓</button>
+                <button class="vkb-key" data-key="ArrowRight">→</button>
+                <button class="vkb-key" data-key="Backspace">⌫</button>
+                <button class="vkb-key" data-key="Delete">DEL</button>
+                <button class="vkb-key" onclick="toggleVirtualKeyboard()">✕</button>
+            </div>
+            <!-- Row 3: Numbers -->
+            <div class="vkb-row">
+                <button class="vkb-key" data-key="1">1</button>
+                <button class="vkb-key" data-key="2">2</button>
+                <button class="vkb-key" data-key="3">3</button>
+                <button class="vkb-key" data-key="4">4</button>
+                <button class="vkb-key" data-key="5">5</button>
+                <button class="vkb-key" data-key="6">6</button>
+                <button class="vkb-key" data-key="7">7</button>
+                <button class="vkb-key" data-key="8">8</button>
+                <button class="vkb-key" data-key="9">9</button>
+                <button class="vkb-key" data-key="0">0</button>
+            </div>
+            <!-- Row 4: QWERTY -->
+            <div class="vkb-row">
+                <button class="vkb-key" data-key="q">q</button>
+                <button class="vkb-key" data-key="w">w</button>
+                <button class="vkb-key" data-key="e">e</button>
+                <button class="vkb-key" data-key="r">r</button>
+                <button class="vkb-key" data-key="t">t</button>
+                <button class="vkb-key" data-key="y">y</button>
+                <button class="vkb-key" data-key="u">u</button>
+                <button class="vkb-key" data-key="i">i</button>
+                <button class="vkb-key" data-key="o">o</button>
+                <button class="vkb-key" data-key="p">p</button>
+            </div>
+            <!-- Row 5: ASDF -->
+            <div class="vkb-row">
+                <button class="vkb-key" data-key="a">a</button>
+                <button class="vkb-key" data-key="s">s</button>
+                <button class="vkb-key" data-key="d">d</button>
+                <button class="vkb-key" data-key="f">f</button>
+                <button class="vkb-key" data-key="g">g</button>
+                <button class="vkb-key" data-key="h">h</button>
+                <button class="vkb-key" data-key="j">j</button>
+                <button class="vkb-key" data-key="k">k</button>
+                <button class="vkb-key" data-key="l">l</button>
+                <button class="vkb-key" data-key="Enter">↵</button>
+            </div>
+            <!-- Row 6: ZXCV -->
+            <div class="vkb-row">
+                <button class="vkb-key" data-key="z">z</button>
+                <button class="vkb-key" data-key="x">x</button>
+                <button class="vkb-key" data-key="c">c</button>
+                <button class="vkb-key" data-key="v">v</button>
+                <button class="vkb-key" data-key="b">b</button>
+                <button class="vkb-key" data-key="n">n</button>
+                <button class="vkb-key" data-key="m">m</button>
+                <button class="vkb-key" data-key=",">,</button>
+                <button class="vkb-key" data-key=".">.</button>
+                <button class="vkb-key" data-key=" ">␣</button>
+            </div>
         </div>
     </div>
 
@@ -230,6 +460,130 @@
                 document.exitFullscreen();
             }
         };
+
+        // Virtual Keyboard
+        const virtualKeyboard = document.getElementById('virtual-keyboard');
+        const vkbToggleBtn = document.getElementById('vkbToggleBtn');
+        let modifiers = { ctrl: false, alt: false, shift: false };
+
+        window.toggleVirtualKeyboard = function() {
+            virtualKeyboard.classList.toggle('visible');
+            vkbToggleBtn.classList.toggle('active');
+            // Reset modifiers when closing
+            if (!virtualKeyboard.classList.contains('visible')) {
+                resetModifiers();
+            }
+        };
+
+        function resetModifiers() {
+            modifiers = { ctrl: false, alt: false, shift: false };
+            document.querySelectorAll('.vkb-key.modifier').forEach(btn => {
+                btn.classList.remove('active');
+            });
+        }
+
+        // X11 keysym mapping for noVNC
+        const keySymMap = {
+            'Escape': 0xff1b,
+            'F1': 0xffbe, 'F2': 0xffbf, 'F3': 0xffc0, 'F4': 0xffc1,
+            'F5': 0xffc2, 'F6': 0xffc3, 'F7': 0xffc4, 'F8': 0xffc5,
+            'F9': 0xffc6, 'F10': 0xffc7, 'F11': 0xffc8, 'F12': 0xffc9,
+            'Tab': 0xff09,
+            'Enter': 0xff0d,
+            'Backspace': 0xff08,
+            'Delete': 0xffff,
+            'Insert': 0xff63,
+            'Home': 0xff50,
+            'End': 0xff57,
+            'PageUp': 0xff55,
+            'PageDown': 0xff56,
+            'ArrowUp': 0xff52,
+            'ArrowDown': 0xff54,
+            'ArrowLeft': 0xff51,
+            'ArrowRight': 0xff53,
+            ' ': 0x0020,
+            'Control': 0xffe3,
+            'Alt': 0xffe9,
+            'Shift': 0xffe1
+        };
+
+        // Map virtual key names to DOM KeyboardEvent.code values
+        const keyCodeMap = {
+            'Escape': 'Escape',
+            'Tab': 'Tab',
+            'Enter': 'Enter',
+            'Backspace': 'Backspace',
+            'Delete': 'Delete',
+            'Insert': 'Insert',
+            'Home': 'Home',
+            'End': 'End',
+            'PageUp': 'PageUp',
+            'PageDown': 'PageDown',
+            'ArrowUp': 'ArrowUp',
+            'ArrowDown': 'ArrowDown',
+            'ArrowLeft': 'ArrowLeft',
+            'ArrowRight': 'ArrowRight',
+            ' ': 'Space',
+            'Control': 'ControlLeft',
+            'Alt': 'AltLeft',
+            'Shift': 'ShiftLeft'
+        };
+
+        function sendKey(key) {
+            if (!rfb) return;
+
+            // Get keysym - for single chars use charCode, otherwise use map
+            let keysym;
+            if (key.length === 1 && !keySymMap[key]) {
+                // Single character - get proper keysym
+                let charCode = key.charCodeAt(0);
+                // Apply shift for uppercase
+                if (modifiers.shift && key >= 'a' && key <= 'z') {
+                    charCode = key.toUpperCase().charCodeAt(0);
+                }
+                keysym = charCode;
+            } else {
+                keysym = keySymMap[key];
+            }
+
+            if (!keysym) return;
+
+            const code = keyCodeMap[key] || null;
+
+            // Send modifier key presses
+            if (modifiers.ctrl) rfb.sendKey(keySymMap['Control'], 'ControlLeft', true);
+            if (modifiers.alt) rfb.sendKey(keySymMap['Alt'], 'AltLeft', true);
+            if (modifiers.shift) rfb.sendKey(keySymMap['Shift'], 'ShiftLeft', true);
+
+            // Send the actual key press and release
+            rfb.sendKey(keysym, code, true);
+            rfb.sendKey(keysym, code, false);
+
+            // Release modifier keys
+            if (modifiers.shift) rfb.sendKey(keySymMap['Shift'], 'ShiftLeft', false);
+            if (modifiers.alt) rfb.sendKey(keySymMap['Alt'], 'AltLeft', false);
+            if (modifiers.ctrl) rfb.sendKey(keySymMap['Control'], 'ControlLeft', false);
+
+            // Reset modifiers after sending (one-shot behavior)
+            resetModifiers();
+        }
+
+        // Set up virtual keyboard event listeners
+        document.querySelectorAll('.vkb-key').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                e.preventDefault();
+                const modifier = this.dataset.modifier;
+                const key = this.dataset.key;
+
+                if (modifier) {
+                    // Toggle modifier
+                    modifiers[modifier] = !modifiers[modifier];
+                    this.classList.toggle('active');
+                } else if (key) {
+                    sendKey(key);
+                }
+            });
+        });
 
         window.reconnect = function() {
             reconnectAttempts = 0;
