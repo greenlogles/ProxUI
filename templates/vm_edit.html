@@ -535,7 +535,7 @@ function createNetworkInterfaceCard(iface) {
                     <small class="text-muted">${macAddr ? macAddr.substring(0, 17) : 'Auto MAC'}</small>
                 </div>
                 <div class="col-md-2">
-                    <button class="btn btn-sm btn-outline-danger" onclick="removeNetworkInterface('${iface.key}')">
+                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeNetworkInterface('${iface.key}')">
                         <i class="bi bi-trash"></i>
                     </button>
                 </div>
@@ -807,7 +807,7 @@ function createDiskInterfaceCard(disk) {
                     <small class="text-muted">Can only expand</small>
                 </div>
                 <div class="col-md-3">
-                    <button class="btn btn-sm btn-outline-primary" onclick="resizeDisk('${disk.key}')">
+                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="resizeDisk('${disk.key}')">
                         <i class="bi bi-arrows-expand"></i> Resize
                     </button>
                 </div>
@@ -946,7 +946,7 @@ function createIsoInterfaceCard(iso) {
                     </div>
                 </div>
                 <div class="col-md-3">
-                    <button class="btn btn-sm btn-outline-danger" onclick="detachIso('${iso.key}')">
+                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="detachIso('${iso.key}')">
                         <i class="bi bi-eject"></i> Detach
                     </button>
                 </div>
