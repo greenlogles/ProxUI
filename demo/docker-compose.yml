@@ -1,0 +1,14 @@
+services:
+  proxui:
+    image: ghcr.io/greenlogles/proxui:latest
+    container_name: proxui
+    privileged: true
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./proxui-data:/app/data
+    environment:
+      - FLASK_ENV=production
+      - PROXUI_DEMO_MODE=true
+      - PROXUI_DEMO_MESSAGE=This is a public demo with read-only access. Feel free to explore all features!
+    restart: unless-stopped
