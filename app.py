@@ -1504,24 +1504,37 @@ def index():
     """Dashboard with overview"""
     resources = get_all_vms_and_containers()
 
-    # Calculate statistics
-    total_vms = len([r for r in resources if r["type"] == "qemu"])
-    total_containers = len([r for r in resources if r["type"] == "lxc"])
-    running = len([r for r in resources if r.get("status") == "running"])
-    stopped = len([r for r in resources if r.get("status") == "stopped"])
+    # Separate templates from regular VMs/containers
+    templates = [r for r in resources if r.get("template")]
+    non_templates = [r for r in resources if not r.get("template")]
+    running_resources = [r for r in non_templates if r.get("status") == "running"]
 
-    # Find top resource consumers
-    top_cpu = sorted(resources, key=lambda x: x.get("cpu", 0), reverse=True)[:8]
-    top_memory = sorted(resources, key=lambda x: x.get("mem", 0), reverse=True)[:8]
+    # Calculate statistics (excluding templates)
+    total_vms = len([r for r in non_templates if r["type"] == "qemu"])
+    total_containers = len([r for r in non_templates if r["type"] == "lxc"])
+    total_templates = len(templates)
+    running = len(running_resources)
+    stopped = len([r for r in non_templates if r.get("status") == "stopped"])
+
+    # Find top resource consumers (only running VMs/containers)
+    top_cpu = sorted(running_resources, key=lambda x: x.get("cpu", 0), reverse=True)[:5]
+    top_memory = sorted(running_resources, key=lambda x: x.get("mem", 0), reverse=True)[
+        :5
+    ]
+
+    # Get node list for metrics
+    nodes = [n["name"] for n in cluster_nodes if n.get("status") == "online"]
 
     return render_template(
         "index.html",
         total_vms=total_vms,
         total_containers=total_containers,
+        total_templates=total_templates,
         running=running,
         stopped=stopped,
         top_cpu=top_cpu,
         top_memory=top_memory,
+        nodes=nodes,
     )
 
 
@@ -2161,6 +2174,57 @@ def api_nodes():
     # Sort nodes alphabetically by name
     nodes.sort(key=lambda x: x["name"])
     return jsonify(nodes)
+
+
+@app.route("/api/nodes/status")
+def api_nodes_status():
+    """API endpoint to get detailed status of all cluster nodes"""
+    nodes_status = []
+
+    for node_info in cluster_nodes:
+        node_name = node_info["name"]
+        if node_info.get("status") != "online":
+            nodes_status.append(
+                {"name": node_name, "online": False, "status": node_info.get("status")}
+            )
+            continue
+
+        # Use the stored connection from cluster_nodes
+        proxmox = node_info.get("connection")
+        if not proxmox:
+            # Fallback to looking up by node name
+            proxmox = get_proxmox_connection(node_name, auto_renew=True)
+
+        if not proxmox:
+            nodes_status.append(
+                {"name": node_name, "online": False, "error": "No connection"}
+            )
+            continue
+
+        try:
+            status = proxmox.nodes(node_name).status.get()
+            # Use same format as cluster page
+            cpu = float(status.get("cpu", 0))
+            memory = status.get("memory", {})
+            mem_used = memory.get("used", 0)
+            mem_total = memory.get("total", 1)
+
+            nodes_status.append(
+                {
+                    "name": node_name,
+                    "online": True,
+                    "cpu": cpu,
+                    "mem_used": mem_used,
+                    "mem_total": mem_total,
+                    "uptime": status.get("uptime", 0),
+                }
+            )
+        except Exception as e:
+            nodes_status.append({"name": node_name, "online": False, "error": str(e)})
+
+    # Sort nodes alphabetically by name
+    nodes_status.sort(key=lambda x: x["name"])
+    return jsonify(nodes_status)
 
 
 @app.route("/api/resources")

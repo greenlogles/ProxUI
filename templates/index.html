@@ -11,57 +11,91 @@
 
 <div class="row mt-4">
     <!-- Statistics Cards -->
-    <div class="col-md-3 col-sm-6 mb-3">
-        <div class="card text-white bg-primary">
-            <div class="card-body">
+    <div class="col-6 col-lg mb-3">
+        <div class="card text-white bg-primary h-100">
+            <div class="card-body py-2 px-3">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h6 class="card-title">Virtual Machines</h6>
-                        <h2 class="mb-0">{{ total_vms }}</h2>
+                        <h6 class="card-title mb-1 small">Virtual Machines</h6>
+                        <h3 class="mb-0">{{ total_vms }}</h3>
                     </div>
-                    <i class="bi bi-pc-display fs-1"></i>
+                    <i class="bi bi-pc-display fs-2 opacity-75"></i>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="col-md-3 col-sm-6 mb-3">
-        <div class="card text-white bg-info">
-            <div class="card-body">
+    <div class="col-6 col-lg mb-3">
+        <div class="card text-white bg-info h-100">
+            <div class="card-body py-2 px-3">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h6 class="card-title">Containers</h6>
-                        <h2 class="mb-0">{{ total_containers }}</h2>
+                        <h6 class="card-title mb-1 small">Containers</h6>
+                        <h3 class="mb-0">{{ total_containers }}</h3>
                     </div>
-                    <i class="bi bi-box fs-1"></i>
+                    <i class="bi bi-box fs-2 opacity-75"></i>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="col-md-3 col-sm-6 mb-3">
-        <div class="card text-white bg-success">
-            <div class="card-body">
+    <div class="col-6 col-lg mb-3">
+        <div class="card text-white bg-secondary h-100">
+            <div class="card-body py-2 px-3">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h6 class="card-title">Running</h6>
-                        <h2 class="mb-0">{{ running }}</h2>
+                        <h6 class="card-title mb-1 small">Templates</h6>
+                        <h3 class="mb-0">{{ total_templates }}</h3>
                     </div>
-                    <i class="bi bi-play-circle fs-1"></i>
+                    <i class="bi bi-copy fs-2 opacity-75"></i>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="col-md-3 col-sm-6 mb-3">
-        <div class="card text-white bg-danger">
-            <div class="card-body">
+    <div class="col-6 col-lg mb-3">
+        <div class="card text-white bg-success h-100">
+            <div class="card-body py-2 px-3">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h6 class="card-title">Stopped</h6>
-                        <h2 class="mb-0">{{ stopped }}</h2>
+                        <h6 class="card-title mb-1 small">Running</h6>
+                        <h3 class="mb-0">{{ running }}</h3>
                     </div>
-                    <i class="bi bi-stop-circle fs-1"></i>
+                    <i class="bi bi-play-circle fs-2 opacity-75"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-6 col-lg mb-3">
+        <div class="card text-white bg-danger h-100">
+            <div class="card-body py-2 px-3">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="card-title mb-1 small">Stopped</h6>
+                        <h3 class="mb-0">{{ stopped }}</h3>
+                    </div>
+                    <i class="bi bi-stop-circle fs-2 opacity-75"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Node Metrics -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center py-2">
+                <h5 class="mb-0"><i class="bi bi-hdd-rack"></i> Node Status</h5>
+                <button class="btn btn-sm btn-outline-primary" id="refreshNodes" title="Refresh">
+                    <i class="bi bi-arrow-clockwise"></i>
+                </button>
+            </div>
+            <div class="card-body py-2" id="nodesContainer">
+                <div class="text-center py-3">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    Loading node metrics...
                 </div>
             </div>
         </div>
@@ -76,33 +110,31 @@
                 <h5 class="mb-0"><i class="bi bi-cpu"></i> Top CPU Usage</h5>
             </div>
             <div class="card-body">
+                {% if top_cpu %}
                 <div class="table-responsive">
-                    <table class="table table-sm">
-                        <thead>
+                    <table class="table table-sm table-hover">
+                        <thead class="table-light">
                             <tr>
                                 <th>Name</th>
-                                <th>Type</th>
-                                <th>Node</th>
-                                <th>CPU</th>
+                                <th class="d-none d-md-table-cell">Node</th>
+                                <th style="width: 40%">CPU</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for vm in top_cpu %}
                             <tr>
                                 <td>
-                                    <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}">
+                                    <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}" class="text-decoration-none">
                                         {{ vm.name }}
                                     </a>
-                                </td>
-                                <td>
-                                    <span class="badge bg-{{ 'primary' if vm.type == 'qemu' else 'info' }}">
-                                        {{ vm.type }}
+                                    <span class="badge bg-{{ 'primary' if vm.type == 'qemu' else 'info' }} ms-1">
+                                        {{ 'VM' if vm.type == 'qemu' else 'CT' }}
                                     </span>
                                 </td>
-                                <td>{{ vm.node }}</td>
+                                <td class="d-none d-md-table-cell text-muted">{{ vm.node }}</td>
                                 <td>
-                                    <div class="progress" style="height: 20px;">
-                                        <div class="progress-bar bg-{{ 'danger' if vm.cpu_percent > 80 else 'warning' if vm.cpu_percent > 60 else 'success' }}" 
+                                    <div class="progress" style="height: 18px;">
+                                        <div class="progress-bar bg-{{ 'danger' if vm.cpu_percent > 80 else 'warning' if vm.cpu_percent > 60 else 'success' }}"
                                              style="width: {{ vm.cpu_percent }}%">
                                             {{ "%.1f"|format(vm.cpu_percent) }}%
                                         </div>
@@ -113,6 +145,9 @@
                         </tbody>
                     </table>
                 </div>
+                {% else %}
+                <div class="text-muted text-center py-4">No running VMs</div>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -124,33 +159,31 @@
                 <h5 class="mb-0"><i class="bi bi-memory"></i> Top Memory Usage</h5>
             </div>
             <div class="card-body">
+                {% if top_memory %}
                 <div class="table-responsive">
-                    <table class="table table-sm">
-                        <thead>
+                    <table class="table table-sm table-hover">
+                        <thead class="table-light">
                             <tr>
                                 <th>Name</th>
-                                <th>Type</th>
-                                <th>Node</th>
-                                <th>Memory</th>
+                                <th class="d-none d-md-table-cell">Node</th>
+                                <th style="width: 40%">Memory</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for vm in top_memory %}
                             <tr>
                                 <td>
-                                    <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}">
+                                    <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}" class="text-decoration-none">
                                         {{ vm.name }}
                                     </a>
-                                </td>
-                                <td>
-                                    <span class="badge bg-{{ 'primary' if vm.type == 'qemu' else 'info' }}">
-                                        {{ vm.type }}
+                                    <span class="badge bg-{{ 'primary' if vm.type == 'qemu' else 'info' }} ms-1">
+                                        {{ 'VM' if vm.type == 'qemu' else 'CT' }}
                                     </span>
                                 </td>
-                                <td>{{ vm.node }}</td>
+                                <td class="d-none d-md-table-cell text-muted">{{ vm.node }}</td>
                                 <td>
-                                    <div class="progress" style="height: 20px;">
-                                        <div class="progress-bar bg-{{ 'danger' if vm.mem_percent > 80 else 'warning' if vm.mem_percent > 60 else 'success' }}" 
+                                    <div class="progress" style="height: 18px;">
+                                        <div class="progress-bar bg-{{ 'danger' if vm.mem_percent > 80 else 'warning' if vm.mem_percent > 60 else 'success' }}"
                                              style="width: {{ vm.mem_percent }}%">
                                             {{ "%.1f"|format(vm.mem_percent) }}%
                                         </div>
@@ -161,14 +194,19 @@
                         </tbody>
                     </table>
                 </div>
+                {% else %}
+                <div class="text-muted text-center py-4">No running VMs</div>
+                {% endif %}
             </div>
         </div>
     </div>
+</div>
 
-     <!-- Recent Tasks -->
+<div class="row">
+    <!-- Recent Tasks -->
     <div class="col-md-6 mb-4">
         <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
+            <div class="card-header d-flex justify-content-between align-items-center py-2">
                 <h5 class="mb-0"><i class="bi bi-list-task"></i> Recent Tasks</h5>
                 <div class="d-flex gap-2">
                     <button class="btn btn-sm btn-outline-primary" id="refreshTasks" title="Refresh Tasks">
@@ -179,7 +217,7 @@
                     </a>
                 </div>
             </div>
-            <div class="card-body p-0" id="tasksContainer">
+            <div class="card-body p-0" id="tasksContainer" style="max-height: 350px; overflow-y: auto;">
                 <div class="text-center p-4">
                     <div class="spinner-border spinner-border-sm" role="status">
                         <span class="visually-hidden">Loading...</span>
@@ -197,7 +235,119 @@
 document.addEventListener('DOMContentLoaded', function() {
     const tasksContainer = document.getElementById('tasksContainer');
     const refreshTasksBtn = document.getElementById('refreshTasks');
-    
+    const nodesContainer = document.getElementById('nodesContainer');
+    const refreshNodesBtn = document.getElementById('refreshNodes');
+
+    // Format uptime
+    function formatUptime(seconds) {
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        if (days > 0) return `${days}d ${hours}h`;
+        const mins = Math.floor((seconds % 3600) / 60);
+        return `${hours}h ${mins}m`;
+    }
+
+    // Fetch node metrics
+    function fetchNodeMetrics() {
+        fetch('/api/nodes/status')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(nodes => {
+                displayNodeMetrics(nodes);
+            })
+            .catch(error => {
+                console.error('Error fetching node metrics:', error);
+                nodesContainer.innerHTML = `<div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> Error: ${error.message}</div>`;
+            });
+    }
+
+    // Display node metrics
+    function displayNodeMetrics(nodes) {
+        if (!Array.isArray(nodes) || nodes.length === 0) {
+            nodesContainer.innerHTML = '<div class="text-muted p-3">No nodes available</div>';
+            return;
+        }
+
+        let html = '<div class="row g-3">';
+
+        nodes.forEach(node => {
+            if (!node.online) {
+                html += `
+                    <div class="col-md-6 col-lg-4">
+                        <div class="border rounded p-2 bg-light">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <strong><i class="bi bi-hdd-network text-danger"></i> ${node.name}</strong>
+                                <span class="badge bg-danger">Offline</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            // Calculate percentages (same as cluster page)
+            const cpuPercent = (node.cpu * 100).toFixed(1);
+            const memPercent = ((node.mem_used / node.mem_total) * 100).toFixed(1);
+            const memUsedGB = (node.mem_used / 1024 / 1024 / 1024).toFixed(1);
+            const memTotalGB = (node.mem_total / 1024 / 1024 / 1024).toFixed(1);
+
+            const cpuColor = cpuPercent > 80 ? 'danger' : cpuPercent > 60 ? 'warning' : 'success';
+            const memColor = memPercent > 80 ? 'danger' : memPercent > 60 ? 'warning' : 'info';
+
+            html += `
+                <div class="col-md-6 col-lg-4">
+                    <div class="border rounded p-2">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <strong><i class="bi bi-hdd-network text-success"></i> ${node.name}</strong>
+                            <small class="text-muted"><i class="bi bi-clock"></i> ${formatUptime(node.uptime)}</small>
+                        </div>
+                        <div class="row g-2 small">
+                            <div class="col-6">
+                                <div class="text-muted mb-1">CPU ${cpuPercent}%</div>
+                                <div class="progress" style="height: 6px;">
+                                    <div class="progress-bar bg-${cpuColor}" style="width: ${cpuPercent}%"></div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="text-muted mb-1">Mem ${memUsedGB}/${memTotalGB} GB</div>
+                                <div class="progress" style="height: 6px;">
+                                    <div class="progress-bar bg-${memColor}" style="width: ${memPercent}%"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+
+        html += '</div>';
+        nodesContainer.innerHTML = html;
+    }
+
+    // Refresh nodes button
+    refreshNodesBtn.addEventListener('click', function() {
+        const icon = this.querySelector('i');
+        icon.classList.add('spin');
+        this.disabled = true;
+
+        fetchNodeMetrics();
+
+        setTimeout(() => {
+            icon.classList.remove('spin');
+            this.disabled = false;
+        }, 1000);
+    });
+
+    // Initial node metrics load
+    fetchNodeMetrics();
+
+    // Auto-refresh node metrics every 10 seconds
+    setInterval(fetchNodeMetrics, 10000);
+
     // Fetch recent tasks for dashboard
     function fetchRecentTasks() {
         fetch('/api/tasks?limit=8')
