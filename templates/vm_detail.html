@@ -9,7 +9,7 @@
             <div>
                 <h1>
                     <i class="bi bi-{{ 'pc-display' if vm_type == 'qemu' else 'box' }}"></i>
-                    {{ config.name or (('Container ' if vm_type == 'lxc' else 'VM ') + vmid) }}
+                    {{ config.name or config.hostname or (('Container ' if vm_type == 'lxc' else 'VM ') + vmid) }}
                 </h1>
                 <p class="text-muted mb-0">{{ vm_type|upper }} {{ vmid }} on {{ node }}</p>
             </div>
