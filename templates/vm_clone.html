@@ -65,9 +65,9 @@
                         
                         <div class="mb-3">
                             <label for="clone_vmid" class="form-label">New VM ID <span class="text-danger">*</span></label>
-                            <input type="number" class="form-control" id="clone_vmid" name="clone_vmid" 
+                            <input type="number" class="form-control" id="clone_vmid" name="clone_vmid"
                                    min="100" max="999999999" placeholder="Auto-generate" required>
-                            <div class="form-text">Leave empty to auto-generate next available ID</div>
+                            <div id="vmid-feedback" class="form-text">Leave empty to auto-generate next available ID</div>
                         </div>
                         
                         <div class="mb-3">
@@ -146,17 +146,73 @@ const node = '{{ node }}';
 const vmid = '{{ vmid }}';
 
 document.addEventListener('DOMContentLoaded', function() {
+    const vmidInput = document.getElementById('clone_vmid');
+    const vmidFeedback = document.getElementById('vmid-feedback');
+
     // Load next available VMID
     loadNextVMID();
-    
+
     // Load storages when target node changes
     document.getElementById('target_node').addEventListener('change', loadTargetStorages);
-    
+
     // Load storages for initial node
     loadTargetStorages();
-    
+
     // Form submission
     document.getElementById('cloneForm').addEventListener('submit', handleCloneSubmit);
+
+    // VMID validation with debounce
+    let vmidCheckTimeout = null;
+    vmidInput.addEventListener('input', function() {
+        clearTimeout(vmidCheckTimeout);
+        vmidCheckTimeout = setTimeout(() => checkVmidAvailability(this.value), 300);
+    });
+
+    // Check if VMID is available
+    function checkVmidAvailability(vmidValue) {
+        if (!vmidValue || vmidValue < 100) {
+            vmidFeedback.innerHTML = 'Leave empty to auto-generate next available ID';
+            vmidFeedback.className = 'form-text';
+            vmidInput.classList.remove('is-valid', 'is-invalid');
+            return;
+        }
+
+        vmidFeedback.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Checking...';
+        vmidFeedback.className = 'form-text text-muted';
+
+        fetch(`/api/cluster/vmid/${vmidValue}/check`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    vmidFeedback.innerHTML = `<i class="bi bi-exclamation-triangle"></i> ${data.error}`;
+                    vmidFeedback.className = 'form-text text-warning';
+                    vmidInput.classList.remove('is-valid', 'is-invalid');
+                } else if (data.available) {
+                    vmidFeedback.innerHTML = '<i class="bi bi-check-circle"></i> VMID is available';
+                    vmidFeedback.className = 'form-text text-success';
+                    vmidInput.classList.remove('is-invalid');
+                    vmidInput.classList.add('is-valid');
+                } else {
+                    let msg = `<i class="bi bi-x-circle"></i> ${data.reason}`;
+                    if (data.name) {
+                        msg += ` (${data.name} on ${data.node})`;
+                    }
+                    vmidFeedback.innerHTML = msg;
+                    vmidFeedback.className = 'form-text text-danger';
+                    vmidInput.classList.remove('is-valid');
+                    vmidInput.classList.add('is-invalid');
+                }
+            })
+            .catch(error => {
+                console.error('Error checking VMID:', error);
+                vmidFeedback.innerHTML = 'Leave empty to auto-generate next available ID';
+                vmidFeedback.className = 'form-text';
+                vmidInput.classList.remove('is-valid', 'is-invalid');
+            });
+    }
+
+    // Make checkVmidAvailability available to loadNextVMID
+    window.checkVmidAvailability = checkVmidAvailability;
 });
 
 async function loadNextVMID() {
@@ -165,6 +221,10 @@ async function loadNextVMID() {
         const data = await response.json();
         if (data.vmid) {
             document.getElementById('clone_vmid').value = data.vmid;
+            // Check the auto-filled VMID availability
+            if (window.checkVmidAvailability) {
+                window.checkVmidAvailability(data.vmid);
+            }
         }
     } catch (error) {
         console.error('Error loading next VMID:', error);

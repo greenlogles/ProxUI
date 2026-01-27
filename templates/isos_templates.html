@@ -99,6 +99,7 @@
                             <div class="col-md-6 mb-3">
                                 <label for="templateVmid" class="form-label">VM ID</label>
                                 <input type="number" class="form-control" id="templateVmid" placeholder="Auto (next available)">
+                                <div id="templateVmid-feedback" class="form-text"></div>
                             </div>
                         </div>
                         <div class="row">
@@ -320,7 +321,7 @@
                         <div class="col-md-6">
                             <label for="containerVmid" class="form-label">Container ID</label>
                             <input type="number" class="form-control" id="containerVmid" placeholder="Auto (next available)">
-                            <div class="form-text">Leave empty for next available ID</div>
+                            <div id="containerVmid-feedback" class="form-text">Leave empty for next available ID</div>
                         </div>
                         <div class="col-md-6">
                             <label for="containerHostname" class="form-label">Hostname <span class="text-danger">*</span></label>
@@ -451,7 +452,72 @@ let currentData = {};
 
 document.addEventListener('DOMContentLoaded', function() {
     loadNodes();
+
+    // VMID validation for template creation
+    const templateVmidInput = document.getElementById('templateVmid');
+    const templateVmidFeedback = document.getElementById('templateVmid-feedback');
+    if (templateVmidInput) {
+        let templateVmidTimeout = null;
+        templateVmidInput.addEventListener('input', function() {
+            clearTimeout(templateVmidTimeout);
+            templateVmidTimeout = setTimeout(() => checkVmidAvailability(this.value, templateVmidInput, templateVmidFeedback), 300);
+        });
+    }
+
+    // VMID validation for container creation
+    const containerVmidInput = document.getElementById('containerVmid');
+    const containerVmidFeedback = document.getElementById('containerVmid-feedback');
+    if (containerVmidInput) {
+        let containerVmidTimeout = null;
+        containerVmidInput.addEventListener('input', function() {
+            clearTimeout(containerVmidTimeout);
+            containerVmidTimeout = setTimeout(() => checkVmidAvailability(this.value, containerVmidInput, containerVmidFeedback, 'Leave empty for next available ID'), 300);
+        });
+    }
 });
+
+// Check if VMID is available
+function checkVmidAvailability(vmid, inputEl, feedbackEl, defaultText = '') {
+    if (!vmid || vmid < 100) {
+        feedbackEl.innerHTML = defaultText;
+        feedbackEl.className = 'form-text';
+        inputEl.classList.remove('is-valid', 'is-invalid');
+        return;
+    }
+
+    feedbackEl.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Checking...';
+    feedbackEl.className = 'form-text text-muted';
+
+    fetch(`/api/cluster/vmid/${vmid}/check`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                feedbackEl.innerHTML = `<i class="bi bi-exclamation-triangle"></i> ${data.error}`;
+                feedbackEl.className = 'form-text text-warning';
+                inputEl.classList.remove('is-valid', 'is-invalid');
+            } else if (data.available) {
+                feedbackEl.innerHTML = '<i class="bi bi-check-circle"></i> ID is available';
+                feedbackEl.className = 'form-text text-success';
+                inputEl.classList.remove('is-invalid');
+                inputEl.classList.add('is-valid');
+            } else {
+                let msg = `<i class="bi bi-x-circle"></i> ${data.reason}`;
+                if (data.name) {
+                    msg += ` (${data.name} on ${data.node})`;
+                }
+                feedbackEl.innerHTML = msg;
+                feedbackEl.className = 'form-text text-danger';
+                inputEl.classList.remove('is-valid');
+                inputEl.classList.add('is-invalid');
+            }
+        })
+        .catch(error => {
+            console.error('Error checking VMID:', error);
+            feedbackEl.innerHTML = defaultText;
+            feedbackEl.className = 'form-text';
+            inputEl.classList.remove('is-valid', 'is-invalid');
+        });
+}
 
 function showLoading() {
     document.getElementById('loadingOverlay').classList.remove('d-none');
