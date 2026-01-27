@@ -3381,12 +3381,20 @@ def api_vm_config(node, vmid):
             if "memory" in data:
                 params["memory"] = int(data["memory"])
 
+            # LXC-specific: Swap configuration
+            if "swap" in data and vm_type == "lxc":
+                params["swap"] = int(data["swap"])
+
+            # LXC-specific: Hostname
+            if "hostname" in data and vm_type == "lxc":
+                params["hostname"] = data["hostname"]
+
             # Boot configuration
             if "onboot" in data:
                 params["onboot"] = int(data["onboot"])
 
-            # Display configuration
-            if "vga" in data:
+            # Display configuration (QEMU only)
+            if "vga" in data and vm_type == "qemu":
                 params["vga"] = data["vga"]
 
             # Network interfaces (net0, net1, etc.)

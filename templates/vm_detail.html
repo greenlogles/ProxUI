@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ config.name or 'VM' }} ({{ vmid }}) - Proxmox Manager{% endblock %}
+{% block title %}{{ config.name or ('Container' if vm_type == 'lxc' else 'VM') }} ({{ vmid }}) - Proxmox Manager{% endblock %}
 
 {% block content %}
 <div class="row">
@@ -9,7 +9,7 @@
             <div>
                 <h1>
                     <i class="bi bi-{{ 'pc-display' if vm_type == 'qemu' else 'box' }}"></i>
-                    {{ config.name or ('VM ' + vmid) }}
+                    {{ config.name or (('Container ' if vm_type == 'lxc' else 'VM ') + vmid) }}
                 </h1>
                 <p class="text-muted mb-0">{{ vm_type|upper }} {{ vmid }} on {{ node }}</p>
             </div>
@@ -29,12 +29,12 @@
                         </button>
                     </form>
                     <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='stop') }}" class="d-inline">
-                        <button type="submit" class="btn btn-danger" onclick="return confirm('Force stop VM?')">
+                        <button type="submit" class="btn btn-danger" onclick="return confirm('Force stop {{ 'container' if vm_type == 'lxc' else 'VM' }}?')">
                             <i class="bi bi-stop-fill"></i> Stop
                         </button>
                     </form>
                     <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='reset') }}" class="d-inline">
-                        <button type="submit" class="btn btn-outline-warning" onclick="return confirm('Reset VM?')">
+                        <button type="submit" class="btn btn-outline-warning" onclick="return confirm('Reset {{ 'container' if vm_type == 'lxc' else 'VM' }}?')">
                             <i class="bi bi-arrow-clockwise"></i>
                         </button>
                     </form>
@@ -523,13 +523,13 @@
     </div>
 </div>
 
-<!-- Delete VM Modal -->
+<!-- Delete Modal -->
 <div class="modal fade" id="deleteModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title text-danger">
-                    <i class="bi bi-exclamation-triangle"></i> Delete VM {{ vmid }}
+                    <i class="bi bi-exclamation-triangle"></i> Delete {{ 'Container' if vm_type == 'lxc' else 'VM' }} {{ vmid }}
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
@@ -538,30 +538,30 @@
                     <i class="bi bi-exclamation-triangle"></i>
                     <strong>Warning:</strong> This action cannot be undone!
                 </div>
-                
-                <p>Are you sure you want to delete VM <strong>{{ config.name or vmid }}</strong>?</p>
-                
+
+                <p>Are you sure you want to delete {{ 'container' if vm_type == 'lxc' else 'VM' }} <strong>{{ config.name or vmid }}</strong>?</p>
+
                 <p class="text-muted">This will permanently remove:</p>
                 <ul class="text-muted">
-                    <li>VM configuration</li>
-                    <li>All VM disks and data</li>
+                    <li>{{ 'Container' if vm_type == 'lxc' else 'VM' }} configuration</li>
+                    <li>All {{ 'container' if vm_type == 'lxc' else 'VM' }} disks and data</li>
                     <li>All snapshots (if any)</li>
                 </ul>
-                
+
                 <div id="deleteStatus" class="mt-3"></div>
-                
+
                 {% if status.status != 'stopped' %}
                 <div class="alert alert-warning">
                     <i class="bi bi-exclamation-triangle"></i>
-                    VM must be stopped before deletion. Current status: <strong>{{ status.status }}</strong>
+                    {{ 'Container' if vm_type == 'lxc' else 'VM' }} must be stopped before deletion. Current status: <strong>{{ status.status }}</strong>
                 </div>
                 {% endif %}
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-danger" id="confirmDeleteBtn" onclick="deleteVM()" 
+                <button type="button" class="btn btn-danger" id="confirmDeleteBtn" onclick="deleteVM()"
                         {{ 'disabled' if status.status != 'stopped' else '' }}>
-                    <i class="bi bi-trash"></i> Delete VM
+                    <i class="bi bi-trash"></i> Delete {{ 'Container' if vm_type == 'lxc' else 'VM' }}
                 </button>
             </div>
         </div>
