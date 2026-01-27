@@ -3114,13 +3114,15 @@ def api_check_vmid(vmid):
         # Check if VMID is in use
         for resource in resources:
             if resource.get("vmid") == vmid_int:
-                return jsonify({
-                    "available": False,
-                    "reason": f"VMID {vmid} is already in use",
-                    "name": resource.get("name", ""),
-                    "node": resource.get("node", ""),
-                    "type": resource.get("type", "")
-                })
+                return jsonify(
+                    {
+                        "available": False,
+                        "reason": f"VMID {vmid} is already in use",
+                        "name": resource.get("name", ""),
+                        "node": resource.get("node", ""),
+                        "type": resource.get("type", ""),
+                    }
+                )
 
         return jsonify({"available": True})
 
@@ -3901,7 +3903,10 @@ def api_vm_delete(node, vmid):
         if "does not exist" in error_msg.lower():
             return jsonify({"error": f"VM/Container {vmid} does not exist"}), 404
         elif "not stopped" in error_msg.lower() or "running" in error_msg.lower():
-            return jsonify({"error": "VM/Container must be stopped before deletion"}), 400
+            return (
+                jsonify({"error": "VM/Container must be stopped before deletion"}),
+                400,
+            )
         else:
             return jsonify({"error": f"Failed to delete: {error_msg}"}), 500
 
