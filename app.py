@@ -3771,7 +3771,7 @@ def api_vnc_ticket(node, vmid):
         )
 
     try:
-        # Request VNC ticket from Proxmox (different endpoint for QEMU vs LXC)
+        # Request VNC ticket from Proxmox (both use vncproxy with websocket=1)
         if vm_type == "qemu":
             vnc_data = proxmox.nodes(node).qemu(vmid).vncproxy.post(websocket=1)
         else:
@@ -3819,6 +3819,7 @@ def api_vnc_ticket(node, vmid):
                 "port": vnc_data["port"],
                 "node": node,
                 "vmid": vmid,
+                "vm_type": vm_type,
                 "created_at": time.time(),
                 "proxmox_host": metadata["host"],
                 "verify_ssl": metadata.get("verify_ssl", True),
@@ -3860,6 +3861,7 @@ def vnc_websocket_proxy(ws, session_id):
     ticket = session["ticket"]
     node = session["node"]
     vmid = session["vmid"]
+    vm_type = session.get("vm_type", "qemu")
     verify_ssl = session["verify_ssl"]
     auth_ticket = session.get("auth_ticket")
     auth_token = session.get("auth_token")
@@ -3869,8 +3871,8 @@ def vnc_websocket_proxy(ws, session_id):
 
     encoded_ticket = quote(ticket, safe="")
 
-    # Proxmox VNC WebSocket URL format
-    proxmox_ws_url = f"wss://{proxmox_host}:8006/api2/json/nodes/{node}/qemu/{vmid}/vncwebsocket?port={port}&vncticket={encoded_ticket}"
+    # Proxmox WebSocket URL format (both use vncwebsocket)
+    proxmox_ws_url = f"wss://{proxmox_host}:8006/api2/json/nodes/{node}/{vm_type}/{vmid}/vncwebsocket?port={port}&vncticket={encoded_ticket}"
 
     # SSL context
     ssl_opts = {}
