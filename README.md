@@ -40,14 +40,17 @@ ProxUI isn't a replacement for Proxmox web interface, but a light-weight additio
   <img src="misc/screenshots/mobile.gif" alt="ProxUI screen cast" width="400">
 </div>
 
+## Demo
+
+Demo instance with read-only access is available at https://demo.proxui.app
+
 ## Quick Start
 
 ### Using Docker Compose (Recommended)
 
-1. Clone the repository:
+1. Download docker-compose.yml file:
 ```bash
-git clone https://github.com/greenlogles/proxui
-cd proxui
+wget -O docker-compose.yml https://raw.githubusercontent.com/greenlogles/ProxUI/refs/heads/main/docker-compose.yml
 ```
 
 2. Start the application:
