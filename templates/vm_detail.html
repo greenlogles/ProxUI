@@ -41,14 +41,12 @@
                     {% endif %}
                 </div>
 
-                <!-- Console (QEMU only) -->
-                {% if vm_type == 'qemu' %}
+                <!-- Console (QEMU and LXC) -->
                 <a href="{{ url_for('vm_console', node=node, vmid=vmid) }}"
                    class="btn btn-outline-info {{ 'disabled' if status.status != 'running' else '' }}"
-                   {% if status.status != 'running' %}aria-disabled="true" tabindex="-1" title="VM must be running"{% endif %}>
+                   {% if status.status != 'running' %}aria-disabled="true" tabindex="-1" title="{{ 'VM' if vm_type == 'qemu' else 'Container' }} must be running"{% endif %}>
                     <i class="bi bi-display"></i> Console
                 </a>
-                {% endif %}
 
                 <!-- Migration -->
                 <button type="button" class="btn btn-outline-secondary {{ 'disabled' if migration_info else '' }}"
