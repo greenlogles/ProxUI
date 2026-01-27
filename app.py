@@ -2878,6 +2878,84 @@ def api_lxc_storages(node):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/node/<node>/lxc", methods=["POST"])
+def api_create_lxc(node):
+    """API endpoint to create a new LXC container from a template"""
+    if DEMO_MODE:
+        return (
+            jsonify({"error": "Container creation is disabled in demo mode"}),
+            403,
+        )
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    data = request.json
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    # Required parameters
+    ostemplate = data.get("ostemplate")
+    hostname = data.get("hostname")
+    storage = data.get("storage")
+
+    if not ostemplate:
+        return jsonify({"error": "Template (ostemplate) is required"}), 400
+    if not hostname:
+        return jsonify({"error": "Hostname is required"}), 400
+    if not storage:
+        return jsonify({"error": "Storage is required"}), 400
+
+    try:
+        # Get next available VMID if not provided
+        vmid = data.get("vmid")
+        if not vmid:
+            vmid = proxmox.cluster.nextid.get()
+
+        # Build container creation parameters
+        params = {
+            "vmid": int(vmid),
+            "ostemplate": ostemplate,
+            "hostname": hostname,
+            "storage": storage,
+            "rootfs": f"{storage}:{data.get('rootfs_size', 8)}",
+            "cores": int(data.get("cores", 1)),
+            "memory": int(data.get("memory", 512)),
+            "swap": int(data.get("swap", 512)),
+            "unprivileged": 1 if data.get("unprivileged", True) else 0,
+            "start": 1 if data.get("start", False) else 0,
+        }
+
+        # Network configuration
+        if data.get("net0"):
+            params["net0"] = data["net0"]
+
+        # Password (optional)
+        if data.get("password"):
+            params["password"] = data["password"]
+
+        # SSH public keys (optional)
+        if data.get("ssh_public_keys"):
+            params["ssh-public-keys"] = data["ssh_public_keys"]
+
+        # Create the container
+        task = proxmox.nodes(node).lxc.post(**params)
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Container {vmid} creation started",
+                "vmid": vmid,
+                "upid": task,
+            }
+        )
+
+    except Exception as e:
+        error_msg = str(e)
+        return jsonify({"error": f"Failed to create container: {error_msg}"}), 500
+
+
 @app.route("/api/node/<node>/networks")
 def api_node_networks(node):
     """API endpoint to get network interfaces for a specific node"""

@@ -300,6 +300,140 @@
     </div>
 </div>
 
+<!-- Create Container Modal -->
+<div class="modal fade" id="createContainerModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-plus-circle"></i> Create Container</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="createContainerForm">
+                    <!-- Template Info -->
+                    <div class="alert alert-info mb-3">
+                        <i class="bi bi-box"></i> Template: <strong id="containerTemplateInfo">-</strong>
+                    </div>
+
+                    <!-- Basic Settings -->
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="containerVmid" class="form-label">Container ID</label>
+                            <input type="number" class="form-control" id="containerVmid" placeholder="Auto (next available)">
+                            <div class="form-text">Leave empty for next available ID</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="containerHostname" class="form-label">Hostname <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="containerHostname" required pattern="[a-zA-Z0-9\-]+" placeholder="my-container">
+                        </div>
+                    </div>
+
+                    <!-- Resources -->
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label for="containerCores" class="form-label">CPU Cores</label>
+                            <input type="number" class="form-control" id="containerCores" value="1" min="1" max="128">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="containerMemory" class="form-label">Memory (MB)</label>
+                            <input type="number" class="form-control" id="containerMemory" value="512" min="16" step="128">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="containerSwap" class="form-label">Swap (MB)</label>
+                            <input type="number" class="form-control" id="containerSwap" value="512" min="0" step="128">
+                        </div>
+                    </div>
+
+                    <!-- Storage -->
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="containerStorage" class="form-label">Root Disk Storage <span class="text-danger">*</span></label>
+                            <select class="form-select" id="containerStorage" required>
+                                <option value="">Loading storages...</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="containerDiskSize" class="form-label">Root Disk Size (GB)</label>
+                            <input type="number" class="form-control" id="containerDiskSize" value="8" min="1">
+                        </div>
+                    </div>
+
+                    <!-- Network -->
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="containerBridge" class="form-label">Network Bridge</label>
+                            <select class="form-select" id="containerBridge">
+                                <option value="">Loading bridges...</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="containerIpConfig" class="form-label">IP Configuration</label>
+                            <select class="form-select" id="containerIpConfig" onchange="toggleStaticIp()">
+                                <option value="dhcp">DHCP</option>
+                                <option value="static">Static IP</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Static IP fields (hidden by default) -->
+                    <div class="row mb-3 d-none" id="staticIpFields">
+                        <div class="col-md-6">
+                            <label for="containerIp" class="form-label">IP Address (CIDR)</label>
+                            <input type="text" class="form-control" id="containerIp" placeholder="192.168.1.100/24">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="containerGateway" class="form-label">Gateway</label>
+                            <input type="text" class="form-control" id="containerGateway" placeholder="192.168.1.1">
+                        </div>
+                    </div>
+
+                    <!-- Password -->
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="containerPassword" class="form-label">Root Password</label>
+                            <input type="password" class="form-control" id="containerPassword" placeholder="Leave empty for no password">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="containerSshKeys" class="form-label">SSH Public Key</label>
+                            <textarea class="form-control" id="containerSshKeys" rows="2" placeholder="ssh-rsa AAAA... or ssh-ed25519 AAAA..."></textarea>
+                        </div>
+                    </div>
+
+                    <!-- Options -->
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input type="checkbox" class="form-check-input" id="containerStart" checked>
+                                <label class="form-check-label" for="containerStart">Start after created</label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input type="checkbox" class="form-check-input" id="containerUnprivileged" checked>
+                                <label class="form-check-label" for="containerUnprivileged">Unprivileged container</label>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+
+                <!-- Progress/Result -->
+                <div id="createContainerProgress" class="d-none">
+                    <div class="alert alert-info">
+                        <i class="bi bi-hourglass-split"></i> <span id="createContainerProgressMsg">Creating container...</span>
+                    </div>
+                </div>
+                <div id="createContainerResult" class="d-none"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-success" id="createContainerBtn" onclick="createContainer()">
+                    <i class="bi bi-plus-circle"></i> Create Container
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Loading overlay -->
 <div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center"
      style="background-color: rgba(0,0,0,0.5); z-index: 9999;">
@@ -628,9 +762,14 @@ async function loadTemplates(nodeName) {
                         <td>${sizeGB} GB</td>
                         <td><small class="text-muted">${escapeHtml(filename)}</small></td>
                         <td>
-                            <button class="btn btn-sm btn-outline-danger" onclick="deleteLXCTemplate('${nodeName}', '${escapeForJs(template.volid)}')" title="Delete Template">
-                                <i class="bi bi-trash"></i>
-                            </button>
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-success" onclick="showCreateContainerModal('${nodeName}', '${escapeForJs(template.volid)}')" title="Create Container">
+                                    <i class="bi bi-plus-circle"></i>
+                                </button>
+                                <button class="btn btn-outline-danger" onclick="deleteLXCTemplate('${nodeName}', '${escapeForJs(template.volid)}')" title="Delete Template">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
                         </td>
                     </tr>
                 `;
@@ -1553,5 +1692,237 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+
+// Create Container from Template
+let currentCreateNode = '';
+let currentCreateTemplate = '';
+
+async function showCreateContainerModal(nodeName, templateVolid) {
+    currentCreateNode = nodeName;
+    currentCreateTemplate = templateVolid;
+
+    // Reset form
+    document.getElementById('createContainerForm').reset();
+    document.getElementById('createContainerProgress').classList.add('d-none');
+    document.getElementById('createContainerResult').classList.add('d-none');
+    document.getElementById('createContainerBtn').disabled = false;
+    document.getElementById('staticIpFields').classList.add('d-none');
+    document.getElementById('containerUnprivileged').checked = true;
+    document.getElementById('containerStart').checked = true;
+    document.getElementById('containerCores').value = '1';
+    document.getElementById('containerMemory').value = '512';
+    document.getElementById('containerSwap').value = '512';
+    document.getElementById('containerDiskSize').value = '8';
+
+    // Show template info
+    const filename = templateVolid.split('/').pop();
+    document.getElementById('containerTemplateInfo').textContent = filename;
+
+    // Auto-generate hostname from template name
+    const baseName = filename.replace('.tar.xz', '').replace('.tar.gz', '').replace('.tar.zst', '').replace('.tar', '');
+    const safeName = baseName.replace(/[^a-zA-Z0-9\-]/g, '-').toLowerCase().substring(0, 20);
+    document.getElementById('containerHostname').value = safeName;
+
+    // Load storages and bridges in parallel
+    await Promise.all([
+        loadContainerStorages(nodeName),
+        loadContainerBridges(nodeName)
+    ]);
+
+    // Show modal
+    const modal = new bootstrap.Modal(document.getElementById('createContainerModal'));
+    modal.show();
+}
+
+async function loadContainerStorages(nodeName) {
+    const select = document.getElementById('containerStorage');
+    select.innerHTML = '<option value="">Loading...</option>';
+
+    try {
+        const response = await fetch(`/api/node/${nodeName}/storages?vm_type=lxc`);
+        const storages = await response.json();
+
+        if (storages.error) {
+            select.innerHTML = '<option value="">Error loading storages</option>';
+            return;
+        }
+
+        select.innerHTML = '<option value="">Select storage...</option>';
+        storages.forEach(storage => {
+            const option = document.createElement('option');
+            option.value = storage.storage;
+            option.textContent = `${storage.storage} (${storage.type}) - ${storage.available_gb || 0} GB free`;
+            select.appendChild(option);
+        });
+    } catch (error) {
+        select.innerHTML = '<option value="">Error loading storages</option>';
+    }
+}
+
+async function loadContainerBridges(nodeName) {
+    const select = document.getElementById('containerBridge');
+    select.innerHTML = '<option value="">Loading...</option>';
+
+    try {
+        const response = await fetch(`/api/node/${nodeName}/networks`);
+        const networks = await response.json();
+
+        if (networks.error) {
+            select.innerHTML = '<option value="vmbr0">vmbr0 (default)</option>';
+            return;
+        }
+
+        select.innerHTML = '';
+        // Add default option first
+        const defaultOption = document.createElement('option');
+        defaultOption.value = 'vmbr0';
+        defaultOption.textContent = 'vmbr0 (default)';
+        select.appendChild(defaultOption);
+
+        networks.forEach(net => {
+            if (net.iface && net.iface !== 'vmbr0') {
+                const option = document.createElement('option');
+                option.value = net.iface;
+                option.textContent = `${net.iface}${net.comments ? ' - ' + net.comments : ''}`;
+                select.appendChild(option);
+            }
+        });
+    } catch (error) {
+        select.innerHTML = '<option value="vmbr0">vmbr0 (default)</option>';
+    }
+}
+
+function toggleStaticIp() {
+    const ipConfig = document.getElementById('containerIpConfig').value;
+    const staticFields = document.getElementById('staticIpFields');
+    if (ipConfig === 'static') {
+        staticFields.classList.remove('d-none');
+    } else {
+        staticFields.classList.add('d-none');
+    }
+}
+
+async function createContainer() {
+    const hostname = document.getElementById('containerHostname').value.trim();
+    const storage = document.getElementById('containerStorage').value;
+
+    if (!hostname) {
+        showNotification('Please enter a hostname', 'warning');
+        return;
+    }
+    if (!storage) {
+        showNotification('Please select a storage', 'warning');
+        return;
+    }
+
+    // Build request data
+    const data = {
+        ostemplate: currentCreateTemplate,
+        hostname: hostname,
+        storage: storage,
+        rootfs_size: parseInt(document.getElementById('containerDiskSize').value) || 8,
+        cores: parseInt(document.getElementById('containerCores').value) || 1,
+        memory: parseInt(document.getElementById('containerMemory').value) || 512,
+        swap: parseInt(document.getElementById('containerSwap').value) || 512,
+        unprivileged: document.getElementById('containerUnprivileged').checked,
+        start: document.getElementById('containerStart').checked
+    };
+
+    // Optional VMID
+    const vmid = document.getElementById('containerVmid').value;
+    if (vmid) {
+        data.vmid = parseInt(vmid);
+    }
+
+    // Network configuration
+    const bridge = document.getElementById('containerBridge').value || 'vmbr0';
+    const ipConfig = document.getElementById('containerIpConfig').value;
+    if (ipConfig === 'dhcp') {
+        data.net0 = `name=eth0,bridge=${bridge},ip=dhcp`;
+    } else {
+        const ip = document.getElementById('containerIp').value.trim();
+        const gw = document.getElementById('containerGateway').value.trim();
+        if (ip) {
+            data.net0 = `name=eth0,bridge=${bridge},ip=${ip}${gw ? ',gw=' + gw : ''}`;
+        } else {
+            data.net0 = `name=eth0,bridge=${bridge},ip=dhcp`;
+        }
+    }
+
+    // Password
+    const password = document.getElementById('containerPassword').value;
+    if (password) {
+        data.password = password;
+    }
+
+    // SSH keys
+    const sshKeys = document.getElementById('containerSshKeys').value.trim();
+    if (sshKeys) {
+        data.ssh_public_keys = sshKeys;
+    }
+
+    // Show progress
+    const btn = document.getElementById('createContainerBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Creating...';
+
+    document.getElementById('createContainerProgress').classList.remove('d-none');
+    document.getElementById('createContainerResult').classList.add('d-none');
+    document.getElementById('createContainerProgressMsg').textContent = 'Creating container...';
+
+    try {
+        const response = await fetch(`/api/node/${currentCreateNode}/lxc`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+
+        document.getElementById('createContainerProgress').classList.add('d-none');
+        document.getElementById('createContainerResult').classList.remove('d-none');
+
+        if (result.success) {
+            document.getElementById('createContainerResult').innerHTML = `
+                <div class="alert alert-success">
+                    <i class="bi bi-check-circle"></i> <strong>Container created successfully!</strong><br>
+                    <p class="mb-0">Container ID: <strong>${result.vmid}</strong></p>
+                    <hr>
+                    <a href="/vm/${currentCreateNode}/${result.vmid}" class="btn btn-sm btn-primary">
+                        <i class="bi bi-box"></i> Go to Container
+                    </a>
+                </div>
+            `;
+            showNotification(`Container ${result.vmid} created successfully!`, 'success');
+
+            // Close modal after a few seconds
+            setTimeout(() => {
+                const modal = bootstrap.Modal.getInstance(document.getElementById('createContainerModal'));
+                if (modal) modal.hide();
+            }, 3000);
+
+        } else {
+            document.getElementById('createContainerResult').innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle"></i> <strong>Error:</strong> ${escapeHtml(result.error || 'Unknown error')}
+                </div>
+            `;
+            showNotification(result.error || 'Failed to create container', 'error');
+        }
+
+    } catch (error) {
+        document.getElementById('createContainerProgress').classList.add('d-none');
+        document.getElementById('createContainerResult').classList.remove('d-none');
+        document.getElementById('createContainerResult').innerHTML = `
+            <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle"></i> Network error: ${escapeHtml(error.message)}
+            </div>
+        `;
+        showNotification('Network error: ' + error.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-plus-circle"></i> Create Container';
+    }
+}
 </script>
 {% endblock %}
