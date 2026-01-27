@@ -176,6 +176,130 @@
     </div>
 </div>
 
+<!-- Import LXC Template Modal -->
+<div class="modal fade" id="lxcTemplateModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-download"></i> Import Container Template</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <!-- Source Tabs -->
+                <ul class="nav nav-tabs mb-3" id="lxcSourceTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="proxmox-tab" data-bs-toggle="tab" data-bs-target="#proxmox-source" type="button" role="tab">
+                            <i class="bi bi-server"></i> Proxmox Templates
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="url-tab" data-bs-toggle="tab" data-bs-target="#url-source" type="button" role="tab">
+                            <i class="bi bi-link-45deg"></i> URL
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="oci-tab" data-bs-toggle="tab" data-bs-target="#oci-source" type="button" role="tab">
+                            <i class="bi bi-box-seam"></i> OCI Registry
+                        </button>
+                    </li>
+                </ul>
+
+                <div class="tab-content" id="lxcSourceTabContent">
+                    <!-- Proxmox Templates -->
+                    <div class="tab-pane fade show active" id="proxmox-source" role="tabpanel">
+                        <form id="proxmoxTemplateForm">
+                            <div class="mb-3">
+                                <label for="lxcStorage" class="form-label">Storage <span class="text-danger">*</span></label>
+                                <select class="form-select" id="lxcStorage" required>
+                                    <option value="">Loading storages...</option>
+                                </select>
+                                <div class="form-text">Select storage that supports container templates</div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="lxcSection" class="form-label">Category</label>
+                                <select class="form-select" id="lxcSection" onchange="filterTemplatesBySection()">
+                                    <option value="">All Categories</option>
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="lxcTemplate" class="form-label">Template <span class="text-danger">*</span></label>
+                                <select class="form-select" id="lxcTemplate" required>
+                                    <option value="">Loading templates...</option>
+                                </select>
+                                <div class="form-text" id="lxcTemplateDesc"></div>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- URL Source -->
+                    <div class="tab-pane fade" id="url-source" role="tabpanel">
+                        <form id="urlTemplateForm">
+                            <div class="mb-3">
+                                <label for="lxcUrlStorage" class="form-label">Storage <span class="text-danger">*</span></label>
+                                <select class="form-select" id="lxcUrlStorage" required>
+                                    <option value="">Loading storages...</option>
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="lxcUrl" class="form-label">Template URL <span class="text-danger">*</span></label>
+                                <input type="url" class="form-control" id="lxcUrl" placeholder="https://example.com/template.tar.xz" required>
+                                <div class="form-text">Direct URL to a container template (.tar.xz, .tar.gz, or .tar.zst)</div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="lxcUrlFilename" class="form-label">Filename</label>
+                                <input type="text" class="form-control" id="lxcUrlFilename" placeholder="Auto-detect from URL">
+                                <div class="form-text">Leave empty to auto-detect from URL</div>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- OCI Registry -->
+                    <div class="tab-pane fade" id="oci-source" role="tabpanel">
+                        <form id="ociTemplateForm">
+                            <div class="mb-3">
+                                <label for="lxcOciStorage" class="form-label">Storage <span class="text-danger">*</span></label>
+                                <select class="form-select" id="lxcOciStorage" required>
+                                    <option value="">Loading storages...</option>
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="lxcOciImage" class="form-label">OCI Image <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="lxcOciImage" placeholder="docker.io/library/alpine:latest" required>
+                                <div class="form-text">
+                                    OCI image reference (e.g., docker.io/library/alpine:latest, ghcr.io/user/image:tag)
+                                </div>
+                            </div>
+
+                            <div class="alert alert-info">
+                                <i class="bi bi-info-circle"></i> <strong>Note:</strong> OCI registry support requires Proxmox VE 8.0+. The image will be converted to an LXC template.
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Progress/Result -->
+                <div id="lxcImportProgress" class="d-none mt-3">
+                    <div class="alert alert-info">
+                        <i class="bi bi-hourglass-split"></i> <span id="lxcImportProgressMsg">Starting download...</span>
+                    </div>
+                </div>
+                <div id="lxcImportResult" class="d-none mt-3"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="importLxcBtn" onclick="importLXCTemplate()">
+                    <i class="bi bi-download"></i> Import Template
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Loading overlay -->
 <div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center"
      style="background-color: rgba(0,0,0,0.5); z-index: 9999;">
@@ -339,8 +463,11 @@ function createNodeTabs() {
                 <!-- Container Templates -->
                 <div class="col-12 mb-4">
                     <div class="card">
-                        <div class="card-header">
+                        <div class="card-header d-flex justify-content-between align-items-center">
                             <h5 class="mb-0"><i class="bi bi-box"></i> Container Templates</h5>
+                            <button class="btn btn-success btn-sm" onclick="showLXCTemplateModal('${node.name}')">
+                                <i class="bi bi-download"></i> Import Template
+                            </button>
                         </div>
                         <div class="card-body">
                             <div id="lxc-templates-${node.name}">
@@ -1055,5 +1182,376 @@ async function deleteLXCTemplate(nodeName, volid) {
         hideLoading();
     }
 }
+
+// LXC Template Import
+let currentLxcNode = '';
+let availableLxcTemplates = null;
+
+async function showLXCTemplateModal(nodeName) {
+    currentLxcNode = nodeName;
+
+    // Reset forms and state
+    document.getElementById('proxmoxTemplateForm').reset();
+    document.getElementById('urlTemplateForm').reset();
+    document.getElementById('ociTemplateForm').reset();
+    document.getElementById('lxcImportProgress').classList.add('d-none');
+    document.getElementById('lxcImportResult').classList.add('d-none');
+    document.getElementById('importLxcBtn').disabled = false;
+    document.getElementById('lxcTemplateDesc').textContent = '';
+
+    // Reset to first tab
+    const firstTab = document.querySelector('#lxcSourceTabs button[data-bs-target="#proxmox-source"]');
+    if (firstTab) {
+        bootstrap.Tab.getOrCreateInstance(firstTab).show();
+    }
+
+    // Load storages and templates in parallel
+    await Promise.all([
+        loadLxcStorages(nodeName),
+        loadAvailableLxcTemplates(nodeName)
+    ]);
+
+    // Show modal
+    const modal = new bootstrap.Modal(document.getElementById('lxcTemplateModal'));
+    modal.show();
+}
+
+async function loadLxcStorages(nodeName) {
+    const storageSelects = ['lxcStorage', 'lxcUrlStorage', 'lxcOciStorage'];
+
+    // Set loading state for all selects
+    storageSelects.forEach(id => {
+        const select = document.getElementById(id);
+        if (select) {
+            select.innerHTML = '<option value="">Loading...</option>';
+        }
+    });
+
+    try {
+        const response = await fetch(`/api/node/${nodeName}/lxc-storages`);
+        const storages = await response.json();
+
+        if (storages.error) {
+            storageSelects.forEach(id => {
+                const select = document.getElementById(id);
+                if (select) {
+                    select.innerHTML = '<option value="">Error loading storages</option>';
+                }
+            });
+            showNotification('Error loading storages: ' + storages.error, 'error');
+            return;
+        }
+
+        if (!Array.isArray(storages) || storages.length === 0) {
+            storageSelects.forEach(id => {
+                const select = document.getElementById(id);
+                if (select) {
+                    select.innerHTML = '<option value="">No compatible storages found</option>';
+                }
+            });
+            showNotification('No storages that support container templates found', 'warning');
+            return;
+        }
+
+        // Populate all storage selects
+        storageSelects.forEach(id => {
+            const select = document.getElementById(id);
+            if (select) {
+                select.innerHTML = '<option value="">Select storage...</option>';
+                storages.forEach(storage => {
+                    const option = document.createElement('option');
+                    option.value = storage.storage;
+                    option.textContent = `${storage.storage} (${storage.type}) - ${storage.available_gb} GB free`;
+                    select.appendChild(option);
+                });
+            }
+        });
+
+    } catch (error) {
+        storageSelects.forEach(id => {
+            const select = document.getElementById(id);
+            if (select) {
+                select.innerHTML = '<option value="">Error loading storages</option>';
+            }
+        });
+        showNotification('Error loading storages: ' + error.message, 'error');
+    }
+}
+
+async function loadAvailableLxcTemplates(nodeName) {
+    const templateSelect = document.getElementById('lxcTemplate');
+    const sectionSelect = document.getElementById('lxcSection');
+
+    templateSelect.innerHTML = '<option value="">Loading...</option>';
+    sectionSelect.innerHTML = '<option value="">Loading...</option>';
+
+    try {
+        const response = await fetch(`/api/node/${nodeName}/available-lxc-templates`);
+        const data = await response.json();
+
+        if (data.error) {
+            templateSelect.innerHTML = '<option value="">Error loading templates</option>';
+            sectionSelect.innerHTML = '<option value="">All Categories</option>';
+            showNotification('Error loading templates: ' + data.error, 'error');
+            return;
+        }
+
+        availableLxcTemplates = data.templates;
+
+        // Populate section/category dropdown
+        sectionSelect.innerHTML = '<option value="">All Categories</option>';
+        const sections = Object.keys(availableLxcTemplates).sort();
+        sections.forEach(section => {
+            const option = document.createElement('option');
+            option.value = section;
+            // Capitalize first letter
+            option.textContent = section.charAt(0).toUpperCase() + section.slice(1) +
+                ` (${availableLxcTemplates[section].length})`;
+            sectionSelect.appendChild(option);
+        });
+
+        // Populate template dropdown with all templates
+        populateLxcTemplateSelect('');
+
+    } catch (error) {
+        templateSelect.innerHTML = '<option value="">Error loading templates</option>';
+        sectionSelect.innerHTML = '<option value="">All Categories</option>';
+        showNotification('Error loading templates: ' + error.message, 'error');
+    }
+}
+
+function filterTemplatesBySection() {
+    const section = document.getElementById('lxcSection').value;
+    populateLxcTemplateSelect(section);
+}
+
+function populateLxcTemplateSelect(filterSection) {
+    const templateSelect = document.getElementById('lxcTemplate');
+    templateSelect.innerHTML = '<option value="">Select template...</option>';
+
+    if (!availableLxcTemplates) return;
+
+    const sections = filterSection ? [filterSection] : Object.keys(availableLxcTemplates).sort();
+
+    sections.forEach(section => {
+        const templates = availableLxcTemplates[section] || [];
+        if (templates.length === 0) return;
+
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = section.charAt(0).toUpperCase() + section.slice(1);
+
+        templates.forEach(tmpl => {
+            const option = document.createElement('option');
+            option.value = tmpl.template;
+            option.textContent = tmpl.template;
+            option.dataset.headline = tmpl.headline || '';
+            option.dataset.description = tmpl.description || '';
+            option.dataset.os = tmpl.os || '';
+            option.dataset.version = tmpl.version || '';
+            optgroup.appendChild(option);
+        });
+
+        templateSelect.appendChild(optgroup);
+    });
+
+    // Add change event to show description
+    templateSelect.onchange = function() {
+        const selected = this.options[this.selectedIndex];
+        const descDiv = document.getElementById('lxcTemplateDesc');
+        if (selected && selected.dataset.headline) {
+            let desc = `<strong>${escapeHtml(selected.dataset.headline)}</strong>`;
+            if (selected.dataset.os) {
+                desc += ` <span class="badge bg-secondary">${escapeHtml(selected.dataset.os)}</span>`;
+            }
+            if (selected.dataset.version) {
+                desc += ` <span class="badge bg-info">${escapeHtml(selected.dataset.version)}</span>`;
+            }
+            descDiv.innerHTML = desc;
+        } else {
+            descDiv.innerHTML = '';
+        }
+    };
+}
+
+async function importLXCTemplate() {
+    // Determine which tab is active
+    const activeTab = document.querySelector('#lxcSourceTabs .nav-link.active');
+    const sourceType = activeTab.id.replace('-tab', '');
+
+    let storage, requestData;
+
+    if (sourceType === 'proxmox') {
+        storage = document.getElementById('lxcStorage').value;
+        const template = document.getElementById('lxcTemplate').value;
+
+        if (!storage) {
+            showNotification('Please select a storage', 'warning');
+            return;
+        }
+        if (!template) {
+            showNotification('Please select a template', 'warning');
+            return;
+        }
+
+        requestData = {
+            storage: storage,
+            source_type: 'proxmox',
+            template: template
+        };
+
+    } else if (sourceType === 'url') {
+        storage = document.getElementById('lxcUrlStorage').value;
+        const url = document.getElementById('lxcUrl').value;
+        const filename = document.getElementById('lxcUrlFilename').value;
+
+        if (!storage) {
+            showNotification('Please select a storage', 'warning');
+            return;
+        }
+        if (!url) {
+            showNotification('Please enter a URL', 'warning');
+            return;
+        }
+
+        requestData = {
+            storage: storage,
+            source_type: 'url',
+            url: url,
+            filename: filename || undefined
+        };
+
+    } else if (sourceType === 'oci') {
+        storage = document.getElementById('lxcOciStorage').value;
+        const image = document.getElementById('lxcOciImage').value;
+
+        if (!storage) {
+            showNotification('Please select a storage', 'warning');
+            return;
+        }
+        if (!image) {
+            showNotification('Please enter an OCI image reference', 'warning');
+            return;
+        }
+
+        requestData = {
+            storage: storage,
+            source_type: 'oci',
+            image: image
+        };
+
+    } else {
+        showNotification('Unknown source type', 'error');
+        return;
+    }
+
+    // Show progress
+    const btn = document.getElementById('importLxcBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Importing...';
+
+    document.getElementById('lxcImportProgress').classList.remove('d-none');
+    document.getElementById('lxcImportResult').classList.add('d-none');
+    document.getElementById('lxcImportProgressMsg').textContent = 'Starting download...';
+
+    try {
+        const response = await fetch(`/api/node/${currentLxcNode}/download-lxc-template`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestData)
+        });
+
+        const result = await response.json();
+
+        document.getElementById('lxcImportProgress').classList.add('d-none');
+        document.getElementById('lxcImportResult').classList.remove('d-none');
+
+        if (result.success) {
+            document.getElementById('lxcImportResult').innerHTML = `
+                <div class="alert alert-info">
+                    <i class="bi bi-check-circle"></i> <strong>Download started!</strong><br>
+                    <p class="mb-2">${escapeHtml(result.message)}</p>
+                    ${result.job_id ? `<p class="mb-0"><strong>Job ID:</strong> ${escapeHtml(result.job_id)}</p>` : ''}
+                    <hr>
+                    <small class="text-muted">
+                        Track progress via the <i class="bi bi-list-task"></i> Jobs icon in the top navbar.
+                        The template will appear in the list once completed.
+                    </small>
+                </div>
+            `;
+            showNotification(result.message, 'success');
+
+            // Refresh global jobs dropdown to show the new job
+            if (typeof loadGlobalJobs === 'function') {
+                loadGlobalJobs();
+            }
+
+            // Close modal after a few seconds
+            setTimeout(() => {
+                const modal = bootstrap.Modal.getInstance(document.getElementById('lxcTemplateModal'));
+                if (modal) modal.hide();
+            }, 3000);
+
+            // Refresh templates list after longer delay to allow download to complete
+            setTimeout(() => {
+                loadTemplates(currentLxcNode);
+            }, 5000);
+
+        } else {
+            // Check for manual command (OCI not supported)
+            if (result.manual_command) {
+                document.getElementById('lxcImportResult').innerHTML = `
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle"></i> <strong>Manual download required</strong><br>
+                        <p>${escapeHtml(result.error)}</p>
+                        <hr>
+                        <p class="mb-1"><strong>Run this command on the Proxmox node:</strong></p>
+                        <code class="d-block p-2 bg-dark text-light rounded">${escapeHtml(result.manual_command)}</code>
+                        <button class="btn btn-sm btn-secondary mt-2" onclick="copyToClipboard('${escapeForJs(result.manual_command)}')">
+                            <i class="bi bi-clipboard"></i> Copy Command
+                        </button>
+                    </div>
+                `;
+            } else {
+                document.getElementById('lxcImportResult').innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-exclamation-triangle"></i> <strong>Error:</strong> ${escapeHtml(result.error || 'Unknown error')}
+                    </div>
+                `;
+                showNotification(result.error || 'Import failed', 'error');
+            }
+        }
+
+    } catch (error) {
+        document.getElementById('lxcImportProgress').classList.add('d-none');
+        document.getElementById('lxcImportResult').classList.remove('d-none');
+        document.getElementById('lxcImportResult').innerHTML = `
+            <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle"></i> Network error: ${escapeHtml(error.message)}
+            </div>
+        `;
+        showNotification('Network error: ' + error.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-download"></i> Import Template';
+    }
+}
+
+// Auto-fill filename when URL changes for LXC template
+document.addEventListener('DOMContentLoaded', function() {
+    const urlInput = document.getElementById('lxcUrl');
+    const filenameInput = document.getElementById('lxcUrlFilename');
+
+    if (urlInput && filenameInput) {
+        urlInput.addEventListener('input', function() {
+            if (this.value && !filenameInput.value) {
+                const url = this.value;
+                const filename = url.split('/').pop().split('?')[0];
+                if (filename && (filename.endsWith('.tar.xz') || filename.endsWith('.tar.gz') || filename.endsWith('.tar.zst'))) {
+                    filenameInput.value = filename;
+                }
+            }
+        });
+    }
+});
 </script>
 {% endblock %}
