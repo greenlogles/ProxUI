@@ -2658,7 +2658,11 @@ def run_lxc_template_download_job(job_id, node, params):
             image = params.get("image")
             filename = params.get("filename")
             # Remove docker:// prefix for the API call
-            image_ref = image.replace("docker://", "") if image.startswith("docker://") else image
+            image_ref = (
+                image.replace("docker://", "")
+                if image.startswith("docker://")
+                else image
+            )
             job_queue.add_step(job_id, f"Node: {node}, Storage: {storage}")
             job_queue.add_step(job_id, f"Downloading OCI image: {image_ref}")
             job_queue.add_step(job_id, f"Output filename: {filename}")
@@ -2670,9 +2674,7 @@ def run_lxc_template_download_job(job_id, node, params):
             try:
                 storage_api = proxmox.nodes(node).storage(storage)
                 task_upid = storage_api.post(
-                    "oci-registry-pull",
-                    reference=image_ref,
-                    filename=filename
+                    "oci-registry-pull", reference=image_ref, filename=filename
                 )
                 job_queue.add_step(job_id, f"Download task started: {task_upid}")
             except Exception as oci_error:
@@ -2693,7 +2695,9 @@ def run_lxc_template_download_job(job_id, node, params):
         result = wait_for_task(proxmox, node, task_upid, job_id, timeout=1800)
 
         if not result["success"]:
-            job_queue.set_failed(job_id, f"Download failed: {result.get('error', 'Unknown error')}")
+            job_queue.set_failed(
+                job_id, f"Download failed: {result.get('error', 'Unknown error')}"
+            )
             return
 
         job_queue.add_step(job_id, "Download completed successfully!")
@@ -2862,13 +2866,15 @@ def api_lxc_storages(node):
                         "type": storage.get("type"),
                         "content": storage.get("content"),
                         "available": available_bytes,
-                        "available_gb": round(available_bytes / (1024**3), 2)
-                        if available_bytes
-                        else 0,
+                        "available_gb": (
+                            round(available_bytes / (1024**3), 2)
+                            if available_bytes
+                            else 0
+                        ),
                         "total": total_bytes,
-                        "total_gb": round(total_bytes / (1024**3), 2)
-                        if total_bytes
-                        else 0,
+                        "total_gb": (
+                            round(total_bytes / (1024**3), 2) if total_bytes else 0
+                        ),
                     }
                 )
 
