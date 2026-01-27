@@ -325,7 +325,7 @@
             </div>
         </div>
 
-        <!-- VNC Screen -->
+        <!-- VNC Screen (for both QEMU VMs and LXC containers) -->
         <div id="vnc-screen">
             <!-- noVNC renders here -->
         </div>
@@ -424,13 +424,14 @@
         </div>
     </div>
 
-    <!-- noVNC Library -->
+    <!-- noVNC Library for VMs and Containers -->
     <script type="module">
         import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js';
 
         const node = '{{ node }}';
         const vmid = '{{ vmid }}';
         const vmStatus = '{{ vm_status }}';
+        const vmType = 'qemu';
 
         let rfb = null;
         let reconnectAttempts = 0;

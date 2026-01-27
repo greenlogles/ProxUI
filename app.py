@@ -2568,6 +2568,400 @@ def api_delete_lxc_template(node, volid):
         return jsonify({"error": f"Failed to delete template: {str(e)}"}), 500
 
 
+@app.route("/api/node/<node>/available-lxc-templates")
+def api_available_lxc_templates(node):
+    """API endpoint to get available LXC appliance templates from Proxmox repo"""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        # Get available appliance templates from Proxmox repository
+        templates = proxmox.nodes(node).aplinfo.get()
+
+        # Group templates by section/category
+        grouped = {}
+        for template in templates:
+            section = template.get("section", "other")
+            if section not in grouped:
+                grouped[section] = []
+
+            grouped[section].append(
+                {
+                    "template": template.get("template", ""),
+                    "headline": template.get("headline", ""),
+                    "description": template.get("description", ""),
+                    "os": template.get("os", ""),
+                    "version": template.get("version", ""),
+                    "package": template.get("package", ""),
+                    "source": template.get("source", ""),
+                    "sha512sum": template.get("sha512sum", ""),
+                    "infopage": template.get("infopage", ""),
+                }
+            )
+
+        # Sort templates within each section by template name
+        for section in grouped:
+            grouped[section].sort(key=lambda x: x["template"])
+
+        return jsonify({"templates": grouped, "total": len(templates)})
+
+    except Exception as e:
+        return jsonify({"error": f"Failed to get available templates: {str(e)}"}), 500
+
+
+def run_lxc_template_download_job(job_id, node, params):
+    """Background job to download LXC container template and track progress"""
+    job_queue.set_running(job_id)
+
+    try:
+        proxmox = get_proxmox_connection(node, auto_renew=True)
+        if not proxmox:
+            job_queue.set_failed(job_id, "Failed to connect to node")
+            return
+
+        source_type = params.get("source_type", "proxmox")
+        storage = params.get("storage")
+        template_name = params.get("template_name", "template")
+
+        job_queue.add_step(job_id, f"Starting {source_type} download...")
+        job_queue.update_job(job_id, progress=5)
+
+        task_upid = None
+
+        if source_type == "proxmox":
+            template = params.get("template")
+            job_queue.add_step(job_id, f"Downloading template: {template}")
+            job_queue.update_job(job_id, progress=10)
+
+            # Download from Proxmox appliance repository
+            task_upid = proxmox.nodes(node).aplinfo.post(
+                storage=storage, template=template
+            )
+            job_queue.add_step(job_id, f"Download task started: {task_upid}")
+
+        elif source_type == "url":
+            url = params.get("url")
+            filename = params.get("filename")
+            job_queue.add_step(job_id, f"Downloading from URL: {url}")
+            job_queue.update_job(job_id, progress=10)
+
+            # Download from URL
+            task_upid = (
+                proxmox.nodes(node)
+                .storage(storage)("download-url")
+                .post(url=url, filename=filename, content="vztmpl")
+            )
+            job_queue.add_step(job_id, f"Download task started: {task_upid}")
+
+        elif source_type == "oci":
+            image = params.get("image")
+            filename = params.get("filename")
+            # Remove docker:// prefix for the API call
+            image_ref = (
+                image.replace("docker://", "")
+                if image.startswith("docker://")
+                else image
+            )
+            job_queue.add_step(job_id, f"Node: {node}, Storage: {storage}")
+            job_queue.add_step(job_id, f"Downloading OCI image: {image_ref}")
+            job_queue.add_step(job_id, f"Output filename: {filename}")
+            job_queue.update_job(job_id, progress=10)
+
+            # OCI images are downloaded via oci-registry-pull endpoint (Proxmox 8+)
+            # Use direct path construction for proxmoxer compatibility
+            # API requires 'reference' parameter (not 'image')
+            try:
+                storage_api = proxmox.nodes(node).storage(storage)
+                task_upid = storage_api.post(
+                    "oci-registry-pull", reference=image_ref, filename=filename
+                )
+                job_queue.add_step(job_id, f"Download task started: {task_upid}")
+            except Exception as oci_error:
+                job_queue.set_failed(
+                    job_id,
+                    f"OCI download failed: {str(oci_error)}",
+                )
+                return
+
+        if not task_upid:
+            job_queue.set_failed(job_id, "Failed to start download task")
+            return
+
+        # Wait for the download task to complete
+        job_queue.add_step(job_id, "Waiting for download to complete...")
+        job_queue.update_job(job_id, progress=20)
+
+        result = wait_for_task(proxmox, node, task_upid, job_id, timeout=1800)
+
+        if not result["success"]:
+            job_queue.set_failed(
+                job_id, f"Download failed: {result.get('error', 'Unknown error')}"
+            )
+            return
+
+        job_queue.add_step(job_id, "Download completed successfully!")
+        job_queue.update_job(job_id, progress=100)
+
+        job_queue.set_completed(
+            job_id,
+            {
+                "template": template_name,
+                "storage": storage,
+                "source_type": source_type,
+            },
+        )
+
+    except Exception as e:
+        job_queue.set_failed(job_id, str(e))
+
+
+@app.route("/api/node/<node>/download-lxc-template", methods=["POST"])
+def api_download_lxc_template(node):
+    """API endpoint to download LXC container template from various sources"""
+    if DEMO_MODE:
+        return (
+            jsonify({"error": "Template download is disabled in demo mode"}),
+            403,
+        )
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    data = request.json
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    storage = data.get("storage")
+    if not storage:
+        return jsonify({"error": "Storage is required"}), 400
+
+    source_type = data.get("source_type", "proxmox")  # proxmox, url, or oci
+
+    # Validate inputs based on source type
+    template_name = ""
+    params = {"storage": storage, "source_type": source_type}
+
+    try:
+        if source_type == "proxmox":
+            template = data.get("template")
+            if not template:
+                return jsonify({"error": "Template name is required"}), 400
+            params["template"] = template
+            template_name = template
+
+        elif source_type == "url":
+            url = data.get("url")
+            if not url:
+                return jsonify({"error": "URL is required"}), 400
+
+            filename = data.get("filename")
+            if not filename:
+                filename = url.split("/")[-1].split("?")[0]
+                if not filename or not (
+                    filename.endswith(".tar.xz")
+                    or filename.endswith(".tar.gz")
+                    or filename.endswith(".tar.zst")
+                ):
+                    return (
+                        jsonify(
+                            {
+                                "error": "Could not determine filename from URL. Please provide a filename ending with .tar.xz, .tar.gz, or .tar.zst"
+                            }
+                        ),
+                        400,
+                    )
+
+            params["url"] = url
+            params["filename"] = filename
+            template_name = filename
+
+        elif source_type == "oci":
+            image = data.get("image")
+            if not image:
+                return jsonify({"error": "OCI image reference is required"}), 400
+
+            # Normalize the image reference
+            if not image.startswith("docker://"):
+                image = f"docker://{image}"
+
+            # Generate filename from image reference
+            # e.g., docker://docker.io/library/alpine:3.14 -> alpine-3.14.tar
+            # OCI images use .tar extension (Proxmox adds compression internally)
+            image_ref = image.replace("docker://", "")
+            image_name = image_ref.split("/")[-1]  # alpine:3.14
+            if ":" in image_name:
+                name, tag = image_name.split(":", 1)
+                filename = f"{name}-{tag}.tar"
+            else:
+                filename = f"{image_name}-latest.tar"
+
+            # Sanitize filename (replace invalid chars)
+            filename = filename.replace("/", "-").replace(":", "-")
+
+            params["image"] = image
+            params["filename"] = filename
+            template_name = filename
+
+        else:
+            return jsonify({"error": f"Unknown source type: {source_type}"}), 400
+
+        params["template_name"] = template_name
+        params["node"] = node
+
+        # Create background job
+        job_id = job_queue.create_job(
+            job_type="lxc_template_download",
+            description=f"Download LXC template: {template_name}",
+            params=params,
+        )
+
+        # Start background thread
+        thread = threading.Thread(
+            target=run_lxc_template_download_job,
+            args=(job_id, node, params),
+            daemon=True,
+        )
+        thread.start()
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Download started for {template_name}. Track progress in the Jobs dropdown.",
+                "job_id": job_id,
+            }
+        )
+
+    except Exception as e:
+        error_msg = str(e)
+        return jsonify({"error": f"Failed to start download: {error_msg}"}), 500
+
+
+@app.route("/api/node/<node>/lxc-storages")
+def api_lxc_storages(node):
+    """API endpoint to get storages that support container templates (vztmpl)"""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        storages = proxmox.nodes(node).storage.get()
+
+        # Filter for storages that can hold container templates
+        lxc_storages = []
+        for storage in storages:
+            # Skip disabled storages
+            if storage.get("enabled") == 0 or storage.get("active") == 0:
+                continue
+
+            content_types = storage.get("content", "").split(",")
+            # Check if storage supports vztmpl (container templates)
+            if "vztmpl" in content_types:
+                available_bytes = storage.get("avail", 0)
+                total_bytes = storage.get("total", 0)
+                lxc_storages.append(
+                    {
+                        "storage": storage.get("storage"),
+                        "type": storage.get("type"),
+                        "content": storage.get("content"),
+                        "available": available_bytes,
+                        "available_gb": (
+                            round(available_bytes / (1024**3), 2)
+                            if available_bytes
+                            else 0
+                        ),
+                        "total": total_bytes,
+                        "total_gb": (
+                            round(total_bytes / (1024**3), 2) if total_bytes else 0
+                        ),
+                    }
+                )
+
+        return jsonify(lxc_storages)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/node/<node>/lxc", methods=["POST"])
+def api_create_lxc(node):
+    """API endpoint to create a new LXC container from a template"""
+    if DEMO_MODE:
+        return (
+            jsonify({"error": "Container creation is disabled in demo mode"}),
+            403,
+        )
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    data = request.json
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    # Required parameters
+    ostemplate = data.get("ostemplate")
+    hostname = data.get("hostname")
+    storage = data.get("storage")
+
+    if not ostemplate:
+        return jsonify({"error": "Template (ostemplate) is required"}), 400
+    if not hostname:
+        return jsonify({"error": "Hostname is required"}), 400
+    if not storage:
+        return jsonify({"error": "Storage is required"}), 400
+
+    try:
+        # Get next available VMID if not provided
+        vmid = data.get("vmid")
+        if not vmid:
+            vmid = proxmox.cluster.nextid.get()
+
+        # Build container creation parameters
+        params = {
+            "vmid": int(vmid),
+            "ostemplate": ostemplate,
+            "hostname": hostname,
+            "storage": storage,
+            "rootfs": f"{storage}:{data.get('rootfs_size', 8)}",
+            "cores": int(data.get("cores", 1)),
+            "memory": int(data.get("memory", 512)),
+            "swap": int(data.get("swap", 512)),
+            "unprivileged": 1 if data.get("unprivileged", True) else 0,
+            "start": 1 if data.get("start", False) else 0,
+        }
+
+        # Network configuration
+        if data.get("net0"):
+            params["net0"] = data["net0"]
+
+        # Password (optional)
+        if data.get("password"):
+            params["password"] = data["password"]
+
+        # SSH public keys (optional)
+        if data.get("ssh_public_keys"):
+            params["ssh-public-keys"] = data["ssh_public_keys"]
+
+        # Create the container
+        task = proxmox.nodes(node).lxc.post(**params)
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Container {vmid} creation started",
+                "vmid": vmid,
+                "upid": task,
+            }
+        )
+
+    except Exception as e:
+        error_msg = str(e)
+        return jsonify({"error": f"Failed to create container: {error_msg}"}), 500
+
+
 @app.route("/api/node/<node>/networks")
 def api_node_networks(node):
     """API endpoint to get network interfaces for a specific node"""
@@ -2950,15 +3344,26 @@ def api_vm_metrics(node, vmid):
 # VM Configuration API
 @app.route("/api/vm/<node>/<vmid>/config", methods=["GET", "PUT"])
 def api_vm_config(node, vmid):
-    """Get or update VM configuration"""
+    """Get or update VM/Container configuration"""
     proxmox = get_proxmox_connection(node, auto_renew=True)
     if not proxmox:
         return jsonify({"error": "Node not found"}), 404
 
+    # Determine if this is a QEMU VM or LXC container
+    vm_type = "qemu"
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+    except:
+        vm_type = "lxc"
+
     try:
         if request.method == "GET":
-            # Get VM configuration
-            config = proxmox.nodes(node).qemu(vmid).config.get()
+            # Get VM/Container configuration
+            if vm_type == "qemu":
+                config = proxmox.nodes(node).qemu(vmid).config.get()
+            else:
+                config = proxmox.nodes(node).lxc(vmid).config.get()
+            config["_vm_type"] = vm_type  # Include type in response
             return jsonify(config)
 
         elif request.method == "PUT":
@@ -2982,12 +3387,20 @@ def api_vm_config(node, vmid):
             if "memory" in data:
                 params["memory"] = int(data["memory"])
 
+            # LXC-specific: Swap configuration
+            if "swap" in data and vm_type == "lxc":
+                params["swap"] = int(data["swap"])
+
+            # LXC-specific: Hostname
+            if "hostname" in data and vm_type == "lxc":
+                params["hostname"] = data["hostname"]
+
             # Boot configuration
             if "onboot" in data:
                 params["onboot"] = int(data["onboot"])
 
-            # Display configuration
-            if "vga" in data:
+            # Display configuration (QEMU only)
+            if "vga" in data and vm_type == "qemu":
                 params["vga"] = data["vga"]
 
             # Network interfaces (net0, net1, etc.)
@@ -3011,11 +3424,14 @@ def api_vm_config(node, vmid):
             if delete_params:
                 params["delete"] = ",".join(delete_params)
 
-            # Update VM configuration
-            proxmox.nodes(node).qemu(vmid).config.put(**params)
+            # Update VM/Container configuration
+            if vm_type == "qemu":
+                proxmox.nodes(node).qemu(vmid).config.put(**params)
+            else:
+                proxmox.nodes(node).lxc(vmid).config.put(**params)
 
             return jsonify(
-                {"success": True, "message": "VM configuration updated successfully"}
+                {"success": True, "message": "Configuration updated successfully"}
             )
 
     except Exception as e:
@@ -3024,10 +3440,17 @@ def api_vm_config(node, vmid):
 
 @app.route("/api/vm/<node>/<vmid>/resize-disk", methods=["PUT"])
 def api_vm_resize_disk(node, vmid):
-    """Resize VM disk"""
+    """Resize VM/Container disk"""
     proxmox = get_proxmox_connection(node, auto_renew=True)
     if not proxmox:
         return jsonify({"error": "Node not found"}), 404
+
+    # Determine if this is a QEMU VM or LXC container
+    vm_type = "qemu"
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+    except:
+        vm_type = "lxc"
 
     try:
         data = request.get_json()
@@ -3044,7 +3467,10 @@ def api_vm_resize_disk(node, vmid):
             size = f"{size}G"
 
         # Use Proxmox API to resize disk
-        result = proxmox.nodes(node).qemu(vmid).resize.put(disk=disk, size=size)
+        if vm_type == "qemu":
+            result = proxmox.nodes(node).qemu(vmid).resize.put(disk=disk, size=size)
+        else:
+            result = proxmox.nodes(node).lxc(vmid).resize.put(disk=disk, size=size)
 
         return jsonify(
             {
@@ -3333,12 +3759,20 @@ def api_vnc_ticket(node, vmid):
     """
     Get a VNC ticket from Proxmox and create a proxy session.
     Returns a session ID that can be used to connect via WebSocket.
+    Supports both QEMU VMs and LXC containers.
     """
     cleanup_expired_vnc_sessions()
 
     proxmox = get_proxmox_connection(node, auto_renew=True)
     if not proxmox:
         return jsonify({"error": "Node not found"}), 404
+
+    # Determine if this is a QEMU VM or LXC container
+    vm_type = "qemu"
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+    except:
+        vm_type = "lxc"
 
     # Get connection metadata for this node to get the host
     metadata = connection_metadata.get(node)
@@ -3351,8 +3785,11 @@ def api_vnc_ticket(node, vmid):
         )
 
     try:
-        # Request VNC ticket from Proxmox
-        vnc_data = proxmox.nodes(node).qemu(vmid).vncproxy.post(websocket=1)
+        # Request VNC ticket from Proxmox (both use vncproxy with websocket=1)
+        if vm_type == "qemu":
+            vnc_data = proxmox.nodes(node).qemu(vmid).vncproxy.post(websocket=1)
+        else:
+            vnc_data = proxmox.nodes(node).lxc(vmid).vncproxy.post(websocket=1)
 
         # Create a session for this VNC connection
         session_id = str(uuid.uuid4())
@@ -3396,6 +3833,7 @@ def api_vnc_ticket(node, vmid):
                 "port": vnc_data["port"],
                 "node": node,
                 "vmid": vmid,
+                "vm_type": vm_type,
                 "created_at": time.time(),
                 "proxmox_host": metadata["host"],
                 "verify_ssl": metadata.get("verify_ssl", True),
@@ -3437,6 +3875,7 @@ def vnc_websocket_proxy(ws, session_id):
     ticket = session["ticket"]
     node = session["node"]
     vmid = session["vmid"]
+    vm_type = session.get("vm_type", "qemu")
     verify_ssl = session["verify_ssl"]
     auth_ticket = session.get("auth_ticket")
     auth_token = session.get("auth_token")
@@ -3446,8 +3885,8 @@ def vnc_websocket_proxy(ws, session_id):
 
     encoded_ticket = quote(ticket, safe="")
 
-    # Proxmox VNC WebSocket URL format
-    proxmox_ws_url = f"wss://{proxmox_host}:8006/api2/json/nodes/{node}/qemu/{vmid}/vncwebsocket?port={port}&vncticket={encoded_ticket}"
+    # Proxmox WebSocket URL format (both use vncwebsocket)
+    proxmox_ws_url = f"wss://{proxmox_host}:8006/api2/json/nodes/{node}/{vm_type}/{vmid}/vncwebsocket?port={port}&vncticket={encoded_ticket}"
 
     # SSL context
     ssl_opts = {}
@@ -3564,17 +4003,24 @@ def vnc_websocket_proxy(ws, session_id):
 
 @app.route("/vm/<node>/<vmid>/console")
 def vm_console(node, vmid):
-    """VNC console page for a VM"""
+    """VNC console page for a VM or Container"""
     proxmox = get_proxmox_connection(node, auto_renew=True)
     if not proxmox:
         flash("Proxmox connection not available")
         return redirect(url_for("index"))
 
     try:
-        # Get VM info for the title
-        vm_status = proxmox.nodes(node).qemu(vmid).status.current.get()
-        vm_config = proxmox.nodes(node).qemu(vmid).config.get()
-        vm_name = vm_config.get("name", f"VM {vmid}")
+        # Determine if this is a QEMU VM or LXC container
+        vm_type = "qemu"
+        try:
+            vm_status = proxmox.nodes(node).qemu(vmid).status.current.get()
+            vm_config = proxmox.nodes(node).qemu(vmid).config.get()
+        except:
+            vm_type = "lxc"
+            vm_status = proxmox.nodes(node).lxc(vmid).status.current.get()
+            vm_config = proxmox.nodes(node).lxc(vmid).config.get()
+
+        vm_name = vm_config.get("name") or vm_config.get("hostname") or f"VM {vmid}"
 
         return render_template(
             "vm_console.html",
@@ -3582,6 +4028,7 @@ def vm_console(node, vmid):
             vmid=vmid,
             vm_name=vm_name,
             vm_status=vm_status.get("status", "unknown"),
+            vm_type=vm_type,
         )
     except Exception as e:
         flash(f"Error loading console: {str(e)}")
