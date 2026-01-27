@@ -5,6 +5,9 @@
 [[clusters]]
 id = "main"
 name = "My Proxmox Cluster 1"
+# When enabled, prevents VMID reuse by updating the cluster's next-id lower bound
+# after each VM/container creation. This avoids mixing backups and monitoring data.
+incremental_vmid = false
 
     [[clusters.nodes]]
     host = "x.y.z.1"

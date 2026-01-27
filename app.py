@@ -615,6 +615,58 @@ def proxmox_api_call(connection, api_func, *args, **kwargs):
     return None
 
 
+def update_cluster_next_id(proxmox, vmid):
+    """Update the cluster's next-id lower bound after VM/container creation.
+
+    This prevents VMID reuse when incremental_vmid is enabled for the cluster.
+    It sets the next-id lower bound to vmid + 1.
+
+    Args:
+        proxmox: Proxmox API connection
+        vmid: The VMID that was just created
+    """
+    try:
+        # Check if incremental_vmid is enabled for current cluster
+        if current_cluster_id and current_cluster_id in all_clusters:
+            cluster_config = all_clusters[current_cluster_id]
+            if not cluster_config.get("incremental_vmid", False):
+                return  # Feature not enabled
+
+            # Get current cluster options to preserve existing upper bound
+            try:
+                options = proxmox.cluster.options.get()
+                current_next_id = options.get("next-id", "")
+            except Exception:
+                current_next_id = ""
+
+            # Parse existing upper bound if present
+            upper_bound = None
+            if current_next_id:
+                # Format: "lower=X,upper=Y" or just values
+                if "upper=" in current_next_id:
+                    for part in current_next_id.split(","):
+                        if part.strip().startswith("upper="):
+                            try:
+                                upper_bound = int(part.strip().split("=")[1])
+                            except (ValueError, IndexError):
+                                pass
+
+            # Build new next-id value
+            new_lower = int(vmid) + 1
+            if upper_bound:
+                next_id_value = f"lower={new_lower},upper={upper_bound}"
+            else:
+                next_id_value = f"lower={new_lower}"
+
+            # Update cluster options
+            proxmox.cluster.options.put(**{"next-id": next_id_value})
+            print(f"Updated cluster next-id lower bound to {new_lower}")
+
+    except Exception as e:
+        # Don't fail VM creation if next-id update fails
+        print(f"Warning: Failed to update cluster next-id: {e}")
+
+
 def get_proxmox_for_node(node_name):
     """Get the appropriate Proxmox connection for a specific node"""
     # First check if we have a direct connection to this node
@@ -1090,6 +1142,7 @@ def connect():
         token_name = request.form.get("token_name")
         token_value = request.form.get("token_value")
         verify_ssl = "verify_ssl" in request.form
+        incremental_vmid = "incremental_vmid" in request.form
 
         # Check if cluster ID already exists
         if cluster_id in all_clusters:
@@ -1135,6 +1188,7 @@ def connect():
         new_cluster = {
             "id": cluster_id,
             "name": cluster_name,
+            "incremental_vmid": incremental_vmid,
             "nodes": [node_config],
         }
 
@@ -1307,6 +1361,7 @@ def api_get_cluster(cluster_id):
                 "cluster": {
                     "id": cluster_id,
                     "name": cluster_config.get("name", cluster_id),
+                    "incremental_vmid": cluster_config.get("incremental_vmid", False),
                     "nodes": nodes,
                 },
             }
@@ -1335,6 +1390,10 @@ def api_update_cluster(cluster_id):
                 # Update cluster name if provided
                 if "name" in data:
                     config["clusters"][i]["name"] = data["name"]
+
+                # Update incremental_vmid setting if provided
+                if "incremental_vmid" in data:
+                    config["clusters"][i]["incremental_vmid"] = data["incremental_vmid"]
 
                 # Update nodes if provided
                 if "nodes" in data and len(data["nodes"]) > 0:
@@ -1875,6 +1934,8 @@ def create_vm():
                 proxmox.nodes(node).qemu(template_vmid).clone.post(
                     newid=vmid, name=name, full=1  # Full clone
                 )
+                # Update next-id if incremental VMID is enabled
+                update_cluster_next_id(proxmox, vmid)
                 flash(f"VM {name} cloned from template successfully", "success")
 
             elif vm_type == "qemu":
@@ -1905,6 +1966,8 @@ def create_vm():
 
                 # Create the VM
                 proxmox.nodes(node).qemu.create(**params)
+                # Update next-id if incremental VMID is enabled
+                update_cluster_next_id(proxmox, vmid)
 
             elif vm_type == "lxc":
                 # Create container
@@ -1931,6 +1994,8 @@ def create_vm():
 
                 # Create the container
                 proxmox.nodes(node).lxc.create(**params)
+                # Update next-id if incremental VMID is enabled
+                update_cluster_next_id(proxmox, vmid)
 
             flash(f"{vm_type.upper()} {name} created successfully", "success")
             return redirect(url_for("vms"))
@@ -2948,6 +3013,9 @@ def api_create_lxc(node):
         # Create the container
         task = proxmox.nodes(node).lxc.post(**params)
 
+        # Update next-id if incremental VMID is enabled
+        update_cluster_next_id(proxmox, vmid)
+
         return jsonify(
             {
                 "success": True,
@@ -3682,6 +3750,9 @@ def api_vm_clone(node, vmid):
 
         # Execute clone operation
         result = proxmox.nodes(node).qemu(vmid).clone.post(**clone_params)
+
+        # Update next-id if incremental VMID is enabled
+        update_cluster_next_id(proxmox, clone_vmid)
 
         return jsonify(
             {
