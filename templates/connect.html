@@ -110,9 +110,17 @@
 
                         <div class="mb-3">
                             <label for="cluster_id" class="form-label">Cluster ID</label>
-                            <input type="text" class="form-control" id="cluster_id" name="cluster_id" 
+                            <input type="text" class="form-control" id="cluster_id" name="cluster_id"
                                    value="main" required pattern="[a-zA-Z0-9_-]+">
                             <div class="form-text">Unique identifier (letters, numbers, underscores, and dashes only)</div>
+                        </div>
+
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" id="incremental_vmid" name="incremental_vmid">
+                            <label class="form-check-label" for="incremental_vmid">
+                                Incremental VMID (prevent reuse)
+                            </label>
+                            <div class="form-text">When enabled, updates the cluster's next-id lower bound after each VM/container creation to prevent VMID reuse. This avoids mixing backups and monitoring data from deleted VMs.</div>
                         </div>
                     </div>
 
@@ -347,6 +355,7 @@ function editCluster(clusterId) {
                 document.getElementById('edit_node_host').value = node.host || '';
                 document.getElementById('edit_node_user').value = node.user || '';
                 document.getElementById('edit_verify_ssl').checked = node.verify_ssl !== false;
+                document.getElementById('edit_incremental_vmid').checked = cluster.incremental_vmid || false;
 
                 // Set auth type
                 if (node.auth_type === 'token') {
@@ -448,6 +457,7 @@ function saveClusterEdit() {
 
     const data = {
         name: document.getElementById('edit_cluster_name').value,
+        incremental_vmid: document.getElementById('edit_incremental_vmid').checked,
         nodes: [{
             host: document.getElementById('edit_node_host').value,
             user: document.getElementById('edit_node_user').value,
@@ -519,6 +529,14 @@ function saveClusterEdit() {
                     <div class="mb-3">
                         <label for="edit_cluster_name" class="form-label">Cluster Name</label>
                         <input type="text" class="form-control" id="edit_cluster_name" required>
+                    </div>
+
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="edit_incremental_vmid">
+                        <label class="form-check-label" for="edit_incremental_vmid">
+                            Incremental VMID (prevent reuse)
+                        </label>
+                        <div class="form-text">When enabled, updates the cluster's next-id lower bound after each VM/container creation to prevent VMID reuse.</div>
                     </div>
                 </div>
 

@@ -615,6 +615,75 @@ def proxmox_api_call(connection, api_func, *args, **kwargs):
     return None
 
 
+def update_cluster_next_id(proxmox, vmid):
+    """Update the cluster's next-id lower bound after VM/container creation.
+
+    This prevents VMID reuse when incremental_vmid is enabled for the cluster.
+    It sets the next-id lower bound to vmid + 1, but only if this would
+    increase the lower bound (not decrease it).
+
+    Args:
+        proxmox: Proxmox API connection
+        vmid: The VMID that was just created
+    """
+    try:
+        # Check if incremental_vmid is enabled for current cluster
+        if current_cluster_id and current_cluster_id in all_clusters:
+            cluster_config = all_clusters[current_cluster_id]
+            if not cluster_config.get("incremental_vmid", False):
+                return  # Feature not enabled
+
+            # Get current cluster options to preserve existing bounds
+            try:
+                options = proxmox.cluster.options.get()
+                current_next_id = options.get("next-id", "")
+            except Exception:
+                current_next_id = ""
+
+            # Parse existing lower and upper bounds
+            current_lower = None
+            upper_bound = None
+            if current_next_id:
+                # Format: "lower=X,upper=Y" or just values
+                for part in current_next_id.split(","):
+                    part = part.strip()
+                    if part.startswith("lower="):
+                        try:
+                            current_lower = int(part.split("=")[1])
+                        except (ValueError, IndexError):
+                            pass
+                    elif part.startswith("upper="):
+                        try:
+                            upper_bound = int(part.split("=")[1])
+                        except (ValueError, IndexError):
+                            pass
+
+            # Calculate new lower bound
+            new_lower = int(vmid) + 1
+
+            # Only update if new lower bound is greater than current
+            if current_lower is not None and new_lower <= current_lower:
+                print(
+                    f"Skipping next-id update: new lower {new_lower} <= "
+                    f"current lower {current_lower}"
+                )
+                return
+
+            # Build new next-id value
+            if upper_bound:
+                next_id_value = f"lower={new_lower},upper={upper_bound}"
+            else:
+                next_id_value = f"lower={new_lower}"
+
+            # Update cluster options
+            proxmox.cluster.options.put(**{"next-id": next_id_value})
+            print(f"Updated cluster next-id lower bound to {new_lower}")
+
+    except Exception as e:
+        # Don't fail VM creation if next-id update fails
+        print(f"Warning: Failed to update cluster next-id: {e}")
+
+
 def get_proxmox_for_node(node_name):
     """Get the appropriate Proxmox connection for a specific node"""
     # First check if we have a direct connection to this node
@@ -1090,6 +1159,7 @@ def connect():
         token_name = request.form.get("token_name")
         token_value = request.form.get("token_value")
         verify_ssl = "verify_ssl" in request.form
+        incremental_vmid = "incremental_vmid" in request.form
 
         # Check if cluster ID already exists
         if cluster_id in all_clusters:
@@ -1135,6 +1205,7 @@ def connect():
         new_cluster = {
             "id": cluster_id,
             "name": cluster_name,
+            "incremental_vmid": incremental_vmid,
             "nodes": [node_config],
         }
 
@@ -1307,6 +1378,7 @@ def api_get_cluster(cluster_id):
                 "cluster": {
                     "id": cluster_id,
                     "name": cluster_config.get("name", cluster_id),
+                    "incremental_vmid": cluster_config.get("incremental_vmid", False),
                     "nodes": nodes,
                 },
             }
@@ -1335,6 +1407,10 @@ def api_update_cluster(cluster_id):
                 # Update cluster name if provided
                 if "name" in data:
                     config["clusters"][i]["name"] = data["name"]
+
+                # Update incremental_vmid setting if provided
+                if "incremental_vmid" in data:
+                    config["clusters"][i]["incremental_vmid"] = data["incremental_vmid"]
 
                 # Update nodes if provided
                 if "nodes" in data and len(data["nodes"]) > 0:
@@ -1875,6 +1951,8 @@ def create_vm():
                 proxmox.nodes(node).qemu(template_vmid).clone.post(
                     newid=vmid, name=name, full=1  # Full clone
                 )
+                # Update next-id if incremental VMID is enabled
+                update_cluster_next_id(proxmox, vmid)
                 flash(f"VM {name} cloned from template successfully", "success")
 
             elif vm_type == "qemu":
@@ -1905,6 +1983,8 @@ def create_vm():
 
                 # Create the VM
                 proxmox.nodes(node).qemu.create(**params)
+                # Update next-id if incremental VMID is enabled
+                update_cluster_next_id(proxmox, vmid)
 
             elif vm_type == "lxc":
                 # Create container
@@ -1931,6 +2011,8 @@ def create_vm():
 
                 # Create the container
                 proxmox.nodes(node).lxc.create(**params)
+                # Update next-id if incremental VMID is enabled
+                update_cluster_next_id(proxmox, vmid)
 
             flash(f"{vm_type.upper()} {name} created successfully", "success")
             return redirect(url_for("vms"))
@@ -2948,6 +3030,9 @@ def api_create_lxc(node):
         # Create the container
         task = proxmox.nodes(node).lxc.post(**params)
 
+        # Update next-id if incremental VMID is enabled
+        update_cluster_next_id(proxmox, vmid)
+
         return jsonify(
             {
                 "success": True,
@@ -3002,6 +3087,49 @@ def api_next_vmid():
         return jsonify({"vmid": next_id})
     except Exception as e:
         return jsonify({"error": str(e), "vmid": 100}), 500
+
+
+@app.route("/api/cluster/vmid/<vmid>/check")
+def api_check_vmid(vmid):
+    """API endpoint to check if a VMID is available (not in use)"""
+    if not proxmox_nodes:
+        return jsonify({"error": "No Proxmox connections available"}), 500
+
+    try:
+        # Validate VMID is a number
+        vmid_int = int(vmid)
+        if vmid_int < 100:
+            return jsonify({"available": False, "reason": "VMID must be >= 100"})
+
+        # Get any working connection with auto-renewal
+        node_name = next(iter(proxmox_nodes.keys()))
+        proxmox = get_proxmox_connection(node_name, auto_renew=True)
+
+        if not proxmox:
+            return jsonify({"error": "No valid Proxmox connection available"}), 500
+
+        # Get all VMs and containers from cluster resources
+        resources = proxmox.cluster.resources.get(type="vm")
+
+        # Check if VMID is in use
+        for resource in resources:
+            if resource.get("vmid") == vmid_int:
+                return jsonify(
+                    {
+                        "available": False,
+                        "reason": f"VMID {vmid} is already in use",
+                        "name": resource.get("name", ""),
+                        "node": resource.get("node", ""),
+                        "type": resource.get("type", ""),
+                    }
+                )
+
+        return jsonify({"available": True})
+
+    except ValueError:
+        return jsonify({"available": False, "reason": "Invalid VMID format"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/vm/<node>/<vmid>/tasks")
@@ -3683,6 +3811,9 @@ def api_vm_clone(node, vmid):
         # Execute clone operation
         result = proxmox.nodes(node).qemu(vmid).clone.post(**clone_params)
 
+        # Update next-id if incremental VMID is enabled
+        update_cluster_next_id(proxmox, clone_vmid)
+
         return jsonify(
             {
                 "success": True,
@@ -3699,40 +3830,68 @@ def api_vm_clone(node, vmid):
 
 @app.route("/api/vm/<node>/<vmid>/delete", methods=["POST"])
 def api_vm_delete(node, vmid):
-    """API endpoint to delete a VM"""
+    """API endpoint to delete a VM or container"""
     proxmox = get_proxmox_connection(node, auto_renew=True)
     if not proxmox:
         return jsonify({"error": "Node not found"}), 404
 
     try:
-        # Get VM status first
-        vm_status = proxmox.nodes(node).qemu(vmid).status.current.get()
+        # Detect if this is a QEMU VM or LXC container
+        vm_type = None
+        vm_status = None
+        vm_name = vmid
 
-        # Check if VM is stopped
+        # Try QEMU first
+        try:
+            vm_status = proxmox.nodes(node).qemu(vmid).status.current.get()
+            vm_type = "qemu"
+            try:
+                vm_config = proxmox.nodes(node).qemu(vmid).config.get()
+                vm_name = vm_config.get("name", vmid)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        # Try LXC if QEMU failed
+        if vm_type is None:
+            try:
+                vm_status = proxmox.nodes(node).lxc(vmid).status.current.get()
+                vm_type = "lxc"
+                try:
+                    vm_config = proxmox.nodes(node).lxc(vmid).config.get()
+                    vm_name = vm_config.get("hostname", vmid)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        if vm_type is None:
+            return jsonify({"error": f"VM/Container {vmid} does not exist"}), 404
+
+        # Check if VM/container is stopped
         if vm_status.get("status") != "stopped":
             return (
                 jsonify(
                     {
-                        "error": f"VM must be stopped before deletion. Current status: {vm_status.get('status')}"
+                        "error": f"{'Container' if vm_type == 'lxc' else 'VM'} must be stopped before deletion. Current status: {vm_status.get('status')}"
                     }
                 ),
                 400,
             )
 
-        # Get VM config for name
-        try:
-            vm_config = proxmox.nodes(node).qemu(vmid).config.get()
-            vm_name = vm_config.get("name", vmid)
-        except:
-            vm_name = vmid
-
-        # Delete the VM (this will remove disks by default)
-        result = proxmox.nodes(node).qemu(vmid).delete(purge=1)
+        # Delete the VM or container
+        if vm_type == "lxc":
+            result = proxmox.nodes(node).lxc(vmid).delete(purge=1)
+            type_label = "Container"
+        else:
+            result = proxmox.nodes(node).qemu(vmid).delete(purge=1)
+            type_label = "VM"
 
         return jsonify(
             {
                 "success": True,
-                "message": f"VM {vm_name} (ID: {vmid}) has been deleted successfully",
+                "message": f"{type_label} {vm_name} (ID: {vmid}) has been deleted successfully",
                 "task": result,
             }
         )
@@ -3742,11 +3901,14 @@ def api_vm_delete(node, vmid):
 
         # Check for common error patterns
         if "does not exist" in error_msg.lower():
-            return jsonify({"error": f"VM {vmid} does not exist"}), 404
+            return jsonify({"error": f"VM/Container {vmid} does not exist"}), 404
         elif "not stopped" in error_msg.lower() or "running" in error_msg.lower():
-            return jsonify({"error": "VM must be stopped before deletion"}), 400
+            return (
+                jsonify({"error": "VM/Container must be stopped before deletion"}),
+                400,
+            )
         else:
-            return jsonify({"error": f"Failed to delete VM: {error_msg}"}), 500
+            return jsonify({"error": f"Failed to delete: {error_msg}"}), 500
 
 
 # =============================================================================

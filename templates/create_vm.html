@@ -54,8 +54,9 @@
                     <!-- Basic Settings -->
                     <div class="mb-3">
                         <label for="vmid" class="form-label">VM ID</label>
-                        <input type="number" class="form-control" id="vmid" name="vmid" 
+                        <input type="number" class="form-control" id="vmid" name="vmid"
                                min="100" max="999999" required placeholder="e.g., 100">
+                        <div id="vmid-feedback" class="form-text"></div>
                     </div>
 
                     <div class="mb-3">
@@ -157,12 +158,21 @@ document.addEventListener('DOMContentLoaded', function() {
     const isoSelect = document.getElementById('iso');
     const lxcOptions = document.getElementById('lxc-options');
     const osTemplateSelect = document.getElementById('ostemplate');
-    
+    const vmidInput = document.getElementById('vmid');
+    const vmidFeedback = document.getElementById('vmid-feedback');
+
+    // VMID validation with debounce
+    let vmidCheckTimeout = null;
+    vmidInput.addEventListener('input', function() {
+        clearTimeout(vmidCheckTimeout);
+        vmidCheckTimeout = setTimeout(() => checkVmidAvailability(this.value), 300);
+    });
+
     // Event listeners for form changes
     typeSelect.addEventListener('change', handleTypeChange);
     nodeSelect.addEventListener('change', handleNodeChange);
     creationMethodSelect.addEventListener('change', handleCreationMethodChange);
-    
+
     // Initial setup
     handleTypeChange();
     
@@ -390,11 +400,54 @@ document.addEventListener('DOMContentLoaded', function() {
                     console.error('Error fetching next VMID:', data.error);
                     return;
                 }
-                
+
                 document.getElementById('vmid').value = data.vmid;
+                // Check the auto-filled VMID availability
+                checkVmidAvailability(data.vmid);
             })
             .catch(error => {
                 console.error('Error fetching next VMID:', error);
+            });
+    }
+
+    // Check if VMID is available
+    function checkVmidAvailability(vmid) {
+        if (!vmid || vmid < 100) {
+            vmidFeedback.innerHTML = '';
+            vmidInput.classList.remove('is-valid', 'is-invalid');
+            return;
+        }
+
+        vmidFeedback.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Checking...';
+        vmidFeedback.className = 'form-text text-muted';
+
+        fetch(`/api/cluster/vmid/${vmid}/check`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    vmidFeedback.innerHTML = `<i class="bi bi-exclamation-triangle"></i> ${data.error}`;
+                    vmidFeedback.className = 'form-text text-warning';
+                    vmidInput.classList.remove('is-valid', 'is-invalid');
+                } else if (data.available) {
+                    vmidFeedback.innerHTML = '<i class="bi bi-check-circle"></i> VMID is available';
+                    vmidFeedback.className = 'form-text text-success';
+                    vmidInput.classList.remove('is-invalid');
+                    vmidInput.classList.add('is-valid');
+                } else {
+                    let msg = `<i class="bi bi-x-circle"></i> ${data.reason}`;
+                    if (data.name) {
+                        msg += ` (${data.name} on ${data.node})`;
+                    }
+                    vmidFeedback.innerHTML = msg;
+                    vmidFeedback.className = 'form-text text-danger';
+                    vmidInput.classList.remove('is-valid');
+                    vmidInput.classList.add('is-invalid');
+                }
+            })
+            .catch(error => {
+                console.error('Error checking VMID:', error);
+                vmidFeedback.innerHTML = '';
+                vmidInput.classList.remove('is-valid', 'is-invalid');
             });
     }
 });
