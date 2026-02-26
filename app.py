@@ -1149,6 +1149,16 @@ def connect():
 
     # Handle form submission
 
+    if DEMO_MODE:
+        flash("Cluster configuration is disabled in demo mode.", "error")
+        return render_template(
+            "connect.html",
+            existing_clusters=[
+                {"id": cid, "name": cfg.get("name", cid), "nodes": cfg.get("nodes", [])}
+                for cid, cfg in all_clusters.items()
+            ],
+        )
+
     try:
         cluster_name = request.form.get("cluster_name")
         cluster_id = request.form.get("cluster_id")
@@ -1311,6 +1321,12 @@ def api_delete_cluster(cluster_id):
     """Delete a cluster configuration"""
     global config
 
+    if DEMO_MODE:
+        return (
+            jsonify({"error": "Cluster configuration is disabled in demo mode."}),
+            403,
+        )
+
     try:
         if cluster_id not in all_clusters:
             return jsonify({"error": "Cluster not found"}), 404
@@ -1392,6 +1408,12 @@ def api_get_cluster(cluster_id):
 def api_update_cluster(cluster_id):
     """Update cluster configuration"""
     global config
+
+    if DEMO_MODE:
+        return (
+            jsonify({"error": "Cluster configuration is disabled in demo mode."}),
+            403,
+        )
 
     try:
         if cluster_id not in all_clusters:
