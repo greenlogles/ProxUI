@@ -6,4 +6,4 @@ set -e
 mkdir -p /app/data
 chown -R proxui:proxui /app/data
 
-exec su-exec proxui "$@"
+exec gosu proxui "$@"
