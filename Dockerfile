@@ -4,7 +4,9 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    apt-get update && apt-get install -y --no-install-recommends gosu && \
+    rm -rf /var/lib/apt/lists/*
 
 # Labels
 LABEL maintainer="contact@proxui.app"
@@ -20,13 +22,12 @@ COPY ./static/ /app/static/
 COPY ./templates/ /app/templates/
 COPY ./app.py /app/
 COPY ./cloud_images.json /app/
+COPY ./entrypoint.sh /entrypoint.sh
 
 # Create non-root user for security
 RUN useradd -r -u 1000 -m -d /app -s /bin/bash proxui && \
-    chown -R proxui:proxui /app
-
-# Switch to non-root user
-USER proxui
+    chown -R proxui:proxui /app && \
+    chmod +x /entrypoint.sh
 
 # Set environment variables
 ENV PYTHONPATH=/app
@@ -40,5 +41,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/ || exit 1
 
-# Default command
+# Entrypoint fixes data volume ownership at runtime, then drops to proxui user
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python3", "app.py"]
