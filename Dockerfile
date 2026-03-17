@@ -29,6 +29,10 @@ RUN useradd -r -u 1000 -m -d /app -s /bin/bash proxui && \
     chown -R proxui:proxui /app && \
     chmod +x /entrypoint.sh
 
+# Build-time version injection (pass --build-arg BUILD_VERSION=vX.Y.Z)
+ARG BUILD_VERSION=dev
+ENV PROXUI_VERSION=$BUILD_VERSION
+
 # Set environment variables
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1

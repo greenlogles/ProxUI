@@ -297,6 +297,22 @@ except Exception as e:
     config_file_exists = False
     config = {"clusters": []}
 
+# App version — set via PROXUI_VERSION env var (Docker build arg),
+# falls back to short git commit hash for local development
+def _get_app_version():
+    version = os.environ.get("PROXUI_VERSION", "").strip()
+    if version:
+        return version
+    try:
+        import subprocess
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        return "dev"
+
+APP_VERSION = _get_app_version()
+
 # Demo mode configuration
 # Can be enabled via environment variable or config file
 DEMO_MODE = os.environ.get("PROXUI_DEMO_MODE", "").lower() in ("1", "true", "yes")
@@ -1125,6 +1141,7 @@ def inject_cluster_info():
         ],
         "demo_mode": DEMO_MODE,
         "demo_message": DEMO_MESSAGE,
+        "app_version": APP_VERSION,
     }
 
 
