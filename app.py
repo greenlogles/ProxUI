@@ -297,6 +297,7 @@ except Exception as e:
     config_file_exists = False
     config = {"clusters": []}
 
+
 # App version — set via PROXUI_VERSION env var (Docker build arg),
 # falls back to short git commit hash for local development
 def _get_app_version():
@@ -305,11 +306,17 @@ def _get_app_version():
         return version
     try:
         import subprocess
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
-        ).decode().strip()
+
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+            )
+            .decode()
+            .strip()
+        )
     except Exception:
         return "dev"
+
 
 APP_VERSION = _get_app_version()
 
