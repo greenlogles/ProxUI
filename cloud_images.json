@@ -1,4 +1,16 @@
 {
+    "ubuntu-26.04": {
+        "name": "Ubuntu 26.04 LTS (Resolute) (Official)",
+        "url": "https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64.img",
+        "os_type": "l26",
+        "description": "Ubuntu 26.04 LTS"
+    },
+    "ubuntu-26.04-proxui-mirror": {
+        "name": "Ubuntu 26.04 LTS (Resolute) (proxui mirror)",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260429-b6e1eee/ubuntu-resolute-amd64.qcow2",
+        "os_type": "l26",
+        "description": "Ubuntu 26.04 LTS proxui mirror"
+    },
     "ubuntu-24.04": {
         "name": "Ubuntu 24.04 LTS (Noble) (Official)",
         "url": "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img",
@@ -7,7 +19,7 @@
     },
     "ubuntu-24.04-proxui-mirror": {
         "name": "Ubuntu 24.04 LTS (Noble) (proxui mirror)",
-        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/ubuntu-noble-amd64.qcow2",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260429-b6e1eee/ubuntu-noble-amd64.qcow2",
         "os_type": "l26",
         "description": "Ubuntu 24.04 LTS proxui mirror"
     },
@@ -19,7 +31,7 @@
     },
     "ubuntu-22.04-proxui-mirror": {
         "name": "Ubuntu 22.04 LTS (Jammy) (proxui mirror)",
-        "url": "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260429-b6e1eee/ubuntu-jammy-amd64.qcow2",
         "os_type": "l26",
         "description": "Ubuntu 22.04 LTS proxui mirror"
     },
@@ -31,7 +43,7 @@
     },
     "debian-13-proxui-mirror": {
         "name": "Debian 13 (Trixie) (proxui mirror)",
-        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/debian-13-trixie-amd64.qcow2",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260429-b6e1eee/debian-13-trixie-amd64.qcow2",
         "os_type": "l26",
         "description": "Debian 13 Trixie (proxui mirror)"
     },
@@ -43,7 +55,7 @@
     },
     "debian-12-proxui-mirror": {
         "name": "Debian 12 (Bookworm) (proxui mirror)",
-        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/debian-12-bookworm-amd64.qcow2",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260429-b6e1eee/debian-12-bookworm-amd64.qcow2",
         "os_type": "l26",
         "description": "Debian 12 Bookworm proxui mirror"
     },
@@ -61,7 +73,7 @@
     },
     "rocky-10-proxui-mirror": {
         "name": "Rocky Linux 10 (proxui mirror)",
-        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/rocky-10-amd64.qcow2",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260429-b6e1eee/rocky-10-amd64.qcow2",
         "os_type": "l26",
         "description": "Rocky Linux 10 proxui mirror"
     },
@@ -73,7 +85,7 @@
     },
     "rocky-9-proxui-mirror": {
         "name": "Rocky Linux 9 (proxui mirror)",
-        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/rocky-9-amd64.qcow2",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260429-b6e1eee/rocky-9-amd64.qcow2",
         "os_type": "l26",
         "description": "Rocky Linux 9 proxui mirror"
     },
@@ -97,7 +109,7 @@
     },
     "fedora-43-proxui-mirror": {
         "name": "Fedora 43 Cloud (proxui mirror)",
-        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/fedora-42-amd64.qcow2",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260429-b6e1eee/fedora-43-amd64.qcow2",
         "os_type": "l26",
         "description": "Fedora 43 proxui mirror"
     },
@@ -109,7 +121,7 @@
     },
     "fedora-42-proxui-mirror": {
         "name": "Fedora 42 Cloud (Official) (proxui mirror)",
-        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/fedora-42-amd64.qcow2",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260429-b6e1eee/fedora-42-amd64.qcow2",
         "os_type": "l26",
         "description": "Fedora 42 proxui mirror"
     },
@@ -121,7 +133,7 @@
     },
     "freebsd-15-ufs-proxui-mirror": {
         "name": "FreeBSD 15 UFS (proxui mirror)",
-        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260119-dbdd07a/freebsd-15.0-ufs-amd64.qcow2",
+        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/download/v20260429-b6e1eee/freebsd-15.0-ufs-amd64.qcow2",
         "os_type": "other",
         "description": "FreeBSD 15 UFS proxui mirror"
     },
