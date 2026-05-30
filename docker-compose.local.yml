@@ -1,0 +1,22 @@
+services:
+  proxui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_VERSION: local
+    image: proxui:local
+    container_name: proxui-local
+    ports:
+      - "${PROXUI_PORT:-48080}:8080"
+    volumes:
+      - ./data:/app/data
+    environment:
+      CONFIG_FILE_PATH: /app/data/config.toml
+      PROXUI_SECRET_KEY: "${PROXUI_SECRET_KEY:-local-testing-secret-change-me}"
+      PROXUI_AUTH_USERNAME: "${PROXUI_AUTH_USERNAME:-}"
+      PROXUI_AUTH_PASSWORD: "${PROXUI_AUTH_PASSWORD:-}"
+      PROXUI_DEBUG: "${PROXUI_DEBUG:-false}"
+      PROXUI_SESSION_COOKIE_SECURE: "false"
+      CLOUD_IMAGE_CACHE: "${CLOUD_IMAGE_CACHE:-REUSE}"
+    restart: unless-stopped

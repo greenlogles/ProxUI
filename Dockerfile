@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt && \
-    apt-get update && apt-get install -y --no-install-recommends gosu && \
+    apt-get update && apt-get install -y --no-install-recommends curl gosu && \
     rm -rf /var/lib/apt/lists/*
 
 # Labels
@@ -27,6 +27,7 @@ COPY ./entrypoint.sh /entrypoint.sh
 # Create non-root user for security
 RUN useradd -r -u 1000 -m -d /app -s /bin/bash proxui && \
     chown -R proxui:proxui /app && \
+    sed -i 's/\r$//' /entrypoint.sh && \
     chmod +x /entrypoint.sh
 
 # Build-time version injection (pass --build-arg BUILD_VERSION=vX.Y.Z)

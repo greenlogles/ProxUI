@@ -1,6 +1,8 @@
 import json
 import os
 import pprint
+import re
+import secrets
 import ssl
 import threading
 import time
@@ -8,12 +10,23 @@ import uuid
 from collections import defaultdict
 from datetime import datetime
 from functools import wraps
+from urllib.parse import urlparse
 
-import requests
 import toml
 import urllib3
 import websocket
-from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
+from flask import (
+    Flask,
+    Response,
+    abort,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from flask_sock import Sock
 from proxmoxer import ProxmoxAPI
 
@@ -105,7 +118,161 @@ def retry_on_timeout(
 
 
 app = Flask(__name__)
-app.secret_key = "your-secret-key-here"
+
+
+def _get_secret_key():
+    secret_key = os.environ.get("PROXUI_SECRET_KEY") or os.environ.get("SECRET_KEY")
+    if secret_key:
+        return secret_key
+
+    print(
+        "WARNING: PROXUI_SECRET_KEY is not set; using a temporary generated "
+        "secret key. Set PROXUI_SECRET_KEY for stable, secure sessions."
+    )
+    return secrets.token_hex(32)
+
+
+app.secret_key = _get_secret_key()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE=os.environ.get("PROXUI_SESSION_COOKIE_SAMESITE", "Lax"),
+    SESSION_COOKIE_SECURE=os.environ.get(
+        "PROXUI_SESSION_COOKIE_SECURE", ""
+    ).lower()
+    in ("1", "true", "yes"),
+)
+
+CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
+MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+ALLOWED_DOWNLOAD_SCHEMES = {"http", "https"}
+
+
+def app_auth_credentials():
+    username = os.environ.get("PROXUI_AUTH_USERNAME", "").strip()
+    password = os.environ.get("PROXUI_AUTH_PASSWORD", "")
+    if username and password:
+        return username, password
+    return None, None
+
+
+def app_auth_challenge():
+    return Response(
+        "Authentication required",
+        401,
+        {"WWW-Authenticate": 'Basic realm="ProxUI"'},
+    )
+
+
+@app.before_request
+def require_app_auth():
+    username, password = app_auth_credentials()
+    if not username or not password or request.endpoint == "static":
+        return
+
+    auth = request.authorization
+    if not auth:
+        return app_auth_challenge()
+
+    username_ok = secrets.compare_digest(auth.username or "", username)
+    password_ok = secrets.compare_digest(auth.password or "", password)
+    if not username_ok or not password_ok:
+        return app_auth_challenge()
+
+
+def csrf_protection_enabled():
+    if app.config.get("TESTING") and not app.config.get("ENABLE_CSRF_IN_TESTS"):
+        return False
+    return app.config.get("WTF_CSRF_ENABLED", True)
+
+
+def csrf_token():
+    token = session.get("_csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["_csrf_token"] = token
+    return token
+
+
+app.jinja_env.globals["csrf_token"] = csrf_token
+
+
+@app.before_request
+def validate_csrf_token():
+    if (
+        not csrf_protection_enabled()
+        or request.method in CSRF_SAFE_METHODS
+        or request.endpoint == "static"
+    ):
+        return
+
+    sent_token = (
+        request.form.get("_csrf_token")
+        or request.headers.get("X-CSRF-Token")
+        or request.headers.get("X-CSRFToken")
+    )
+    expected_token = session.get("_csrf_token")
+
+    if not sent_token or not expected_token:
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Missing CSRF token"}), 400
+        abort(400)
+
+    if not secrets.compare_digest(sent_token, expected_token):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Invalid CSRF token"}), 400
+        abort(400)
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    return response
+
+
+def is_allowed_download_url(url):
+    if not isinstance(url, str):
+        return False
+
+    try:
+        parsed = urlparse(url.strip())
+    except ValueError:
+        return False
+
+    if parsed.scheme.lower() not in ALLOWED_DOWNLOAD_SCHEMES:
+        return False
+    if not parsed.netloc:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    return True
+
+
+def filename_from_url(url):
+    try:
+        path = urlparse(url.strip()).path
+    except ValueError:
+        return ""
+    return path.rsplit("/", 1)[-1]
+
+
+def is_safe_download_filename(filename, allowed_suffixes):
+    if not isinstance(filename, str):
+        return False
+
+    filename = filename.strip()
+    if not filename or filename in {".", ".."}:
+        return False
+    if "/" in filename or "\\" in filename or "\x00" in filename:
+        return False
+    if ".." in filename:
+        return False
+    if any(ord(char) < 32 for char in filename):
+        return False
+    if not filename.endswith(allowed_suffixes):
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9._ -]+", filename))
 
 # Initialize Flask-Sock for WebSocket support
 sock = Sock(app)
@@ -296,6 +463,15 @@ except Exception as e:
     print(f"Error loading {CONFIG_FILE_PATH}: {e}")
     config_file_exists = False
     config = {"clusters": []}
+
+
+def save_config_file(config_data):
+    with open(CONFIG_FILE_PATH, "w") as f:
+        toml.dump(config_data, f)
+    try:
+        os.chmod(CONFIG_FILE_PATH, 0o600)
+    except OSError:
+        pass
 
 
 # App version — set via PROXUI_VERSION env var (Docker build arg),
@@ -1260,8 +1436,7 @@ def connect():
             return render_template("connect.html")
 
         # Save config file
-        with open(CONFIG_FILE_PATH, "w") as f:
-            toml.dump(config, f)
+        save_config_file(config)
 
         # Reload configuration
         config_file_exists = True
@@ -1366,8 +1541,7 @@ def api_delete_cluster(cluster_id):
         ]
 
         # Save config file
-        with open(CONFIG_FILE_PATH, "w") as f:
-            toml.dump(config, f)
+        save_config_file(config)
 
         # If we deleted the current cluster, switch to another one
         if current_cluster_id == cluster_id:
@@ -1555,8 +1729,7 @@ def api_update_cluster(cluster_id):
                 return jsonify({"error": f"Connection test failed: {str(e)}"}), 400
 
         # Save config file
-        with open(CONFIG_FILE_PATH, "w") as f:
-            toml.dump(config, f)
+        save_config_file(config)
 
         # Reinitialize clusters
         init_all_clusters()
@@ -2562,19 +2735,34 @@ def api_node_download_iso(node):
         if not data or "url" not in data or "storage" not in data:
             return jsonify({"error": "Missing URL or storage parameter"}), 400
 
-        url = data["url"]
+        url = data["url"].strip() if isinstance(data["url"], str) else data["url"]
         storage = data["storage"]
         filename = data.get("filename", "")
 
+        if not is_allowed_download_url(url):
+            return (
+                jsonify(
+                    {
+                        "error": "Only http:// and https:// URLs without embedded credentials are supported"
+                    }
+                ),
+                400,
+            )
+
         # If no filename provided, extract from URL
         if not filename:
-            filename = url.split("/")[-1]
-            if not filename.endswith(".iso"):
-                filename += ".iso"
+            filename = filename_from_url(url)
 
         # Validate filename
-        if not filename.endswith(".iso"):
-            return jsonify({"error": "Filename must end with .iso"}), 400
+        if not is_safe_download_filename(filename, (".iso",)):
+            return (
+                jsonify(
+                    {
+                        "error": "Filename must be a simple .iso filename without path separators"
+                    }
+                ),
+                400,
+            )
 
         # Check Proxmox version and try appropriate download method
         try:
@@ -2883,23 +3071,33 @@ def api_download_lxc_template(node):
             url = data.get("url")
             if not url:
                 return jsonify({"error": "URL is required"}), 400
+            url = url.strip() if isinstance(url, str) else url
+
+            if not is_allowed_download_url(url):
+                return (
+                    jsonify(
+                        {
+                            "error": "Only http:// and https:// URLs without embedded credentials are supported"
+                        }
+                    ),
+                    400,
+                )
 
             filename = data.get("filename")
             if not filename:
-                filename = url.split("/")[-1].split("?")[0]
-                if not filename or not (
-                    filename.endswith(".tar.xz")
-                    or filename.endswith(".tar.gz")
-                    or filename.endswith(".tar.zst")
-                ):
-                    return (
-                        jsonify(
-                            {
-                                "error": "Could not determine filename from URL. Please provide a filename ending with .tar.xz, .tar.gz, or .tar.zst"
-                            }
-                        ),
-                        400,
-                    )
+                filename = filename_from_url(url)
+
+            if not is_safe_download_filename(
+                filename, (".tar.xz", ".tar.gz", ".tar.zst")
+            ):
+                return (
+                    jsonify(
+                        {
+                            "error": "Filename must be a simple .tar.xz, .tar.gz, or .tar.zst filename without path separators"
+                        }
+                    ),
+                    400,
+                )
 
             params["url"] = url
             params["filename"] = filename
@@ -4333,7 +4531,11 @@ def run_cloud_template_job(job_id, node, params):
         image_id = params["image_id"]
         image_info = CLOUD_IMAGES[image_id]
         image_url = image_info["url"]
-        image_filename_original = image_url.split("/")[-1]
+        if not is_allowed_download_url(image_url):
+            job_queue.set_failed(job_id, "Cloud image URL must be http:// or https://")
+            return
+
+        image_filename_original = filename_from_url(image_url)
 
         # Normalize filename extension for Proxmox import
         # Cloud images with .img extension are typically qcow2 format
@@ -4347,6 +4549,12 @@ def run_cloud_template_job(job_id, node, params):
             image_filename = image_filename_original + ".qcow2"
         else:
             image_filename = image_filename_original
+
+        if not is_safe_download_filename(
+            image_filename, (".img", ".qcow2", ".raw", ".vmdk")
+        ):
+            job_queue.set_failed(job_id, "Cloud image filename is invalid")
+            return
 
         storage = params["storage"]
         vmid = params["vmid"]
@@ -4798,4 +5006,11 @@ if __name__ == "__main__":
             f"Current cluster '{current_cluster_id}' contains {len(cluster_nodes)} total nodes"
         )
 
-    app.run(debug=True, host="0.0.0.0", port=8080)
+    debug_enabled = os.environ.get("PROXUI_DEBUG", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    host = os.environ.get("PROXUI_HOST", "0.0.0.0")
+    port = int(os.environ.get("PROXUI_PORT", "8080"))
+    app.run(debug=debug_enabled, host=host, port=port)
