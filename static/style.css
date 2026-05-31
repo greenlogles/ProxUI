@@ -1,29 +1,86 @@
 /* Custom styles for Proxmox Manager */
 
+:root {
+    color-scheme: light;
+    --app-bg: #f5f7fb;
+    --app-surface: #ffffff;
+    --app-surface-alt: #f8f9fa;
+    --app-surface-elevated: #ffffff;
+    --app-text: #212529;
+    --app-muted: #6c757d;
+    --app-border: #dee2e6;
+    --app-hover: rgba(13, 110, 253, 0.06);
+    --app-input-bg: #ffffff;
+    --app-input-disabled-bg: #e9ecef;
+    --app-shadow: rgba(0, 0, 0, 0.075);
+}
+
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --app-bg: #111827;
+    --app-surface: #172033;
+    --app-surface-alt: #202a3d;
+    --app-surface-elevated: #1c2638;
+    --app-text: #e6eaf0;
+    --app-muted: #a5afbf;
+    --app-border: #334155;
+    --app-hover: rgba(96, 165, 250, 0.12);
+    --app-input-bg: #101827;
+    --app-input-disabled-bg: #253044;
+    --app-shadow: rgba(0, 0, 0, 0.35);
+}
+
 body {
-    background-color: #f8f9fa;
+    background-color: var(--app-bg);
+    color: var(--app-text);
 }
 
 .navbar-brand {
     font-weight: bold;
 }
 
+.navbar.bg-dark {
+    background-color: #202938 !important;
+}
+
+:root[data-theme="dark"] .navbar.bg-dark {
+    background-color: #0f1724 !important;
+    border-bottom: 1px solid var(--app-border);
+}
+
 .card {
-    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    background-color: var(--app-surface);
+    border-color: var(--app-border);
+    box-shadow: 0 0.125rem 0.25rem var(--app-shadow);
+    color: var(--app-text);
     margin-bottom: 1rem;
 }
 
 .card-header {
-    background-color: #f8f9fa;
-    border-bottom: 1px solid #dee2e6;
+    background-color: var(--app-surface-alt);
+    border-bottom: 1px solid var(--app-border);
 }
 
 .progress {
-    background-color: #e9ecef;
+    background-color: var(--app-input-disabled-bg);
 }
 
 .table td {
     vertical-align: middle;
+}
+
+.table {
+    color: var(--app-text);
+}
+
+.table > :not(:last-child) > :last-child > * {
+    border-bottom-color: var(--app-border);
+}
+
+.table-light {
+    --bs-table-bg: var(--app-surface-alt);
+    --bs-table-color: var(--app-text);
+    color: var(--app-text);
 }
 
 /* Resource usage colors */
@@ -66,7 +123,7 @@ body {
 
 /* Hover effects */
 .table-hover tbody tr:hover {
-    background-color: rgba(0, 0, 0, 0.02);
+    background-color: var(--app-hover);
 }
 
 .btn-group .btn {
@@ -110,10 +167,138 @@ body {
     box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
 }
 
+.form-control,
+.form-select {
+    background-color: var(--app-input-bg);
+    border-color: var(--app-border);
+    color: var(--app-text);
+}
+
+.form-control:disabled,
+.form-control[readonly],
+.form-select:disabled {
+    background-color: var(--app-input-disabled-bg);
+    color: var(--app-muted);
+}
+
+.form-control::placeholder {
+    color: var(--app-muted);
+    opacity: 1;
+}
+
+.form-text,
+.text-muted {
+    color: var(--app-muted) !important;
+}
+
+.dropdown-menu,
+.modal-content,
+.toast,
+.popover,
+.list-group-item {
+    background-color: var(--app-surface);
+    border-color: var(--app-border);
+    color: var(--app-text);
+}
+
+.dropdown-item {
+    color: var(--app-text);
+}
+
+.dropdown-item:hover,
+.dropdown-item:focus,
+.list-group-item-action:hover,
+.list-group-item-action:focus {
+    background-color: var(--app-hover);
+    color: var(--app-text);
+}
+
+.dropdown-divider,
+.modal-header,
+.modal-footer {
+    border-color: var(--app-border);
+}
+
+.modal-header,
+.modal-footer {
+    background-color: var(--app-surface-alt);
+}
+
+.btn-close {
+    filter: var(--app-btn-close-filter, none);
+}
+
+:root[data-theme="dark"] {
+    --app-btn-close-filter: invert(1) grayscale(100%) brightness(200%);
+}
+
+.bg-light,
+.bg-white {
+    background-color: var(--app-surface-alt) !important;
+    color: var(--app-text) !important;
+}
+
+.border,
+.border-top,
+.border-end,
+.border-bottom,
+.border-start {
+    border-color: var(--app-border) !important;
+}
+
+.nav-tabs {
+    border-color: var(--app-border);
+}
+
+.nav-tabs .nav-link {
+    color: var(--app-muted);
+}
+
+.nav-tabs .nav-link.active {
+    background-color: var(--app-surface);
+    border-color: var(--app-border) var(--app-border) var(--app-surface);
+    color: var(--app-text);
+}
+
+.theme-toggle {
+    width: 2.25rem;
+    height: 2.25rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-color: rgba(255, 255, 255, 0.4);
+    flex: 0 0 auto;
+}
+
+.theme-toggle:hover,
+.theme-toggle:focus {
+    border-color: rgba(255, 255, 255, 0.8);
+}
+
 /* Alert improvements */
 .alert {
     border: none;
     border-radius: 0.5rem;
+}
+
+:root[data-theme="dark"] .alert-info {
+    background-color: #12314c;
+    color: #bfe3ff;
+}
+
+:root[data-theme="dark"] .alert-success {
+    background-color: #123524;
+    color: #b7f3cd;
+}
+
+:root[data-theme="dark"] .alert-warning {
+    background-color: #3d310c;
+    color: #ffe8a3;
+}
+
+:root[data-theme="dark"] .alert-danger {
+    background-color: #431c23;
+    color: #ffc4cd;
 }
 
 /* Navigation active state */

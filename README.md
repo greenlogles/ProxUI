@@ -33,6 +33,7 @@ ProxUI isn't a replacement for Proxmox web interface, but a light-weight additio
 
 ### User Experience
 - Focus on desktop and mobile devices
+- Light and dark mode with saved browser preference
 
 ## Screencast
 
@@ -125,6 +126,13 @@ Configuration file can be managed manually or through the web UI (Cluster Manage
 | `CONFIG_FILE_PATH` | Path to the main configuration file | `./data/config.toml` |
 | `CLOUD_IMAGES_PATH` | Path to custom cloud images JSON file | `./cloud_images.json` |
 | `CLOUD_IMAGE_CACHE` | How to handle existing cloud images: `REUSE` (skip download if exists) or `OVERWRITE` (delete and re-download) | `REUSE` |
+| `PROXUI_SECRET_KEY` | Secret key used to sign Flask sessions and CSRF tokens. Set this to a long random value for deployments. | Temporary random key per process |
+| `PROXUI_AUTH_USERNAME` | Optional HTTP Basic Auth username for protecting the whole UI. Requires `PROXUI_AUTH_PASSWORD`. | Disabled |
+| `PROXUI_AUTH_PASSWORD` | Optional HTTP Basic Auth password for protecting the whole UI. Requires `PROXUI_AUTH_USERNAME`. | Disabled |
+| `PROXUI_SESSION_COOKIE_SECURE` | Set to `true` when serving ProxUI over HTTPS so browsers only send session cookies over TLS. | `false` |
+| `PROXUI_DEBUG` | Enables Flask debug mode when set to `true`. Do not enable in production. | `false` |
+| `PROXUI_HOST` | Host interface for the built-in Flask server. | `0.0.0.0` |
+| `PROXUI_PORT` | Port for the built-in Flask server. | `8080` |
 
 ### Custom Cloud Images
 
@@ -234,9 +242,12 @@ Images are published to GitHub Container Registry at `ghcr.io/greenlogles/proxui
 ## Security Notes
 
 - Configuration files contain sensitive credentials
+- Set `PROXUI_SECRET_KEY` to a stable random value before exposing the app
+- Set `PROXUI_AUTH_USERNAME` and `PROXUI_AUTH_PASSWORD`, or place ProxUI behind another authenticated reverse proxy
 - Use strong passwords and consider API tokens instead of root passwords
 - SSL certificate verification can be disabled for self-signed certificates
 - Ensure proper network security when exposing the web interface
+- URL-based template and ISO downloads only accept `http://` and `https://` URLs with simple filenames
 
 ## Support
 

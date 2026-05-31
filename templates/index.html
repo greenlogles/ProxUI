@@ -247,6 +247,12 @@ document.addEventListener('DOMContentLoaded', function() {
         return `${hours}h ${mins}m`;
     }
 
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text == null ? '' : String(text);
+        return div.innerHTML;
+    }
+
     // Fetch node metrics
     function fetchNodeMetrics() {
         fetch('/api/nodes/status')
@@ -261,7 +267,7 @@ document.addEventListener('DOMContentLoaded', function() {
             })
             .catch(error => {
                 console.error('Error fetching node metrics:', error);
-                nodesContainer.innerHTML = `<div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> Error: ${error.message}</div>`;
+                nodesContainer.innerHTML = `<div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> Error: ${escapeHtml(error.message)}</div>`;
             });
     }
 
@@ -275,12 +281,13 @@ document.addEventListener('DOMContentLoaded', function() {
         let html = '<div class="row g-3">';
 
         nodes.forEach(node => {
+            const nodeName = escapeHtml(node.name || 'Unknown');
             if (!node.online) {
                 html += `
                     <div class="col-md-6 col-lg-4">
                         <div class="border rounded p-2 bg-light">
                             <div class="d-flex justify-content-between align-items-center mb-2">
-                                <strong><i class="bi bi-hdd-network text-danger"></i> ${node.name}</strong>
+                                <strong><i class="bi bi-hdd-network text-danger"></i> ${nodeName}</strong>
                                 <span class="badge bg-danger">Offline</span>
                             </div>
                         </div>
@@ -302,7 +309,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 <div class="col-md-6 col-lg-4">
                     <div class="border rounded p-2">
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <strong><i class="bi bi-hdd-network text-success"></i> ${node.name}</strong>
+                            <strong><i class="bi bi-hdd-network text-success"></i> ${nodeName}</strong>
                             <small class="text-muted"><i class="bi bi-clock"></i> ${formatUptime(node.uptime)}</small>
                         </div>
                         <div class="row g-2 small">
@@ -406,16 +413,17 @@ document.addEventListener('DOMContentLoaded', function() {
             const taskType = task.type || 'unknown';
             const taskStatus = task.status || 'unknown';
             const startTime = task.start_time_formatted || 'Unknown';
-            const statusClass = task.status_class || 'secondary';
+            const allowedStatusClasses = new Set(['primary', 'secondary', 'success', 'danger', 'warning', 'info', 'dark']);
+            const statusClass = allowedStatusClasses.has(task.status_class) ? task.status_class : 'secondary';
             const node = task.node || 'Unknown';
             const vmid = task.id || '';
             
-            const displayName = taskTypeNames[taskType] || taskType.toUpperCase();
+            const displayName = escapeHtml(taskTypeNames[taskType] || taskType.toUpperCase());
             
             // Create VM/Container link if VMID exists
-            let vmidDisplay = vmid;
+            let vmidDisplay = escapeHtml(vmid);
             if (vmid && (taskType.startsWith('qm') || taskType.startsWith('vz'))) {
-                vmidDisplay = `VM/CT <a href="/vm/${node}/${vmid}" class="text-decoration-none">${vmid}</a>`;
+                vmidDisplay = `VM/CT <a href="/vm/${encodeURIComponent(node)}/${encodeURIComponent(vmid)}" class="text-decoration-none">${escapeHtml(vmid)}</a>`;
             }
             
             tasksHtml += `
@@ -424,14 +432,14 @@ document.addEventListener('DOMContentLoaded', function() {
                         <div>
                             <h6 class="mb-1">${displayName}</h6>
                             <p class="mb-1 text-muted small">
-                                Node: <span class="badge bg-secondary">${node}</span>
+                                Node: <span class="badge bg-secondary">${escapeHtml(node)}</span>
                                 ${vmid ? `| ${vmidDisplay}` : ''}
                             </p>
                             
                         </div>
                         <div>
-                            <span class="badge bg-${statusClass}">${taskStatus}</span></br>
-                            <small class="text-muted">${startTime}</small>
+                            <span class="badge bg-${statusClass}">${escapeHtml(taskStatus)}</span></br>
+                            <small class="text-muted">${escapeHtml(startTime)}</small>
                         </div>
                     </div>
                 </div>
