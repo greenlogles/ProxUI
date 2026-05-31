@@ -136,9 +136,7 @@ app.secret_key = _get_secret_key()
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE=os.environ.get("PROXUI_SESSION_COOKIE_SAMESITE", "Lax"),
-    SESSION_COOKIE_SECURE=os.environ.get(
-        "PROXUI_SESSION_COOKIE_SECURE", ""
-    ).lower()
+    SESSION_COOKIE_SECURE=os.environ.get("PROXUI_SESSION_COOKIE_SECURE", "").lower()
     in ("1", "true", "yes"),
 )
 
@@ -273,6 +271,7 @@ def is_safe_download_filename(filename, allowed_suffixes):
     if not filename.endswith(allowed_suffixes):
         return False
     return bool(re.fullmatch(r"[A-Za-z0-9._ -]+", filename))
+
 
 # Initialize Flask-Sock for WebSocket support
 sock = Sock(app)
