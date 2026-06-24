@@ -1,0 +1,47 @@
+{
+    "jellyfin-quicksync": {
+        "name": "Jellyfin / QuickSync",
+        "description": "Intel GPU passthrough for hardware transcoding via VA-API. Adds renderD128 and card0 device nodes with correct GIDs.",
+        "tags": ["media", "intel", "hardware-transcode"],
+        "features": {
+            "nesting": "1"
+        },
+        "devices": [
+            {"path": "/dev/dri/renderD128", "gid": "104", "uid": "0"},
+            {"path": "/dev/dri/card0",      "gid": "44",  "uid": "0"}
+        ]
+    },
+    "immich": {
+        "name": "Immich",
+        "description": "Photo library with ML processing and optional QuickSync acceleration. Enables nesting for Compose stack and keyctl for secret management.",
+        "tags": ["photos", "ml", "intel"],
+        "features": {
+            "nesting": "1",
+            "keyctl": "1"
+        },
+        "devices": [
+            {"path": "/dev/dri/renderD128", "gid": "104", "uid": "0"}
+        ]
+    },
+    "docker-host": {
+        "name": "Docker Host",
+        "description": "Run Docker (or Compose) inside an LXC container. Requires nesting and keyctl. No device passthrough.",
+        "tags": ["docker", "compose"],
+        "features": {
+            "nesting": "1",
+            "keyctl": "1"
+        },
+        "devices": []
+    },
+    "tailscale": {
+        "name": "Tailscale",
+        "description": "Run Tailscale inside LXC. Passes through /dev/net/tun and enables the tun kernel module via nesting.",
+        "tags": ["networking", "vpn"],
+        "features": {
+            "nesting": "1"
+        },
+        "devices": [
+            {"path": "/dev/net/tun", "gid": "", "uid": ""}
+        ]
+    }
+}

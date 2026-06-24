@@ -595,6 +595,47 @@
     </div>
 </div>
 
+<!-- LXC Profiles Card -->
+<div class="row mt-3">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-collection"></i> Apply Config Profile</h5>
+                <button class="btn btn-sm btn-outline-primary" onclick="loadLxcProfiles()" title="Refresh">
+                    <i class="bi bi-arrow-clockwise"></i>
+                </button>
+            </div>
+            <div class="card-body" id="lxcProfilesBody">
+                <div class="text-center py-3">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    <span class="ms-2">Loading…</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Profile Diff Modal -->
+<div class="modal fade" id="lxcProfileDiffModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="profileDiffTitle"><i class="bi bi-eye"></i> Profile Preview</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="profileDiffBody">
+                <div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="profileApplyBtn" onclick="applyLxcProfile()">
+                    <i class="bi bi-check2-circle"></i> Apply Profile
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- LXC Feature Preview Modal -->
 <div class="modal fade" id="lxcPreviewModal" tabindex="-1">
     <div class="modal-dialog">
@@ -1348,6 +1389,7 @@ function deleteVM() {
         .catch(err => {
             body.innerHTML = '<div class="alert alert-danger">Failed to load advanced config</div>';
         });
+        loadLxcProfiles();
     }
 
     // kept as an alias so existing callers (restore, apply) still work
@@ -1690,6 +1732,131 @@ function deleteVM() {
         })
         .then(r => r.json())
         .then(data => { _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error); if (data.success) loadAll(); });
+    };
+
+    // ── Profiles ──────────────────────────────────────────────────────────────
+    let _profileDiffCache = null;
+
+    window.loadLxcProfiles = function () {
+        const body = document.getElementById('lxcProfilesBody');
+        body.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div><span class="ms-2">Loading…</span></div>';
+        fetch('/api/lxc-profiles')
+            .then(r => r.json())
+            .then(data => {
+                if (!data.profiles || data.profiles.length === 0) {
+                    body.innerHTML = '<p class="text-muted">No profiles found.</p>';
+                    return;
+                }
+                let html = '<div class="row g-3">';
+                for (const p of data.profiles) {
+                    const tagBadges = (p.tags || []).map(t => `<span class="badge bg-secondary me-1">${t}</span>`).join('');
+                    const devCount = (p.devices || []).length;
+                    const featCount = Object.keys(p.features || {}).length;
+                    html += `<div class="col-md-6">
+                        <div class="border rounded p-3 h-100 d-flex flex-column">
+                            <div class="d-flex justify-content-between align-items-start mb-1">
+                                <strong>${p.name}</strong>
+                                <div>${tagBadges}</div>
+                            </div>
+                            <p class="text-muted small flex-grow-1 mb-2">${p.description}</p>
+                            <div class="d-flex gap-2 text-muted small mb-2">
+                                <span><i class="bi bi-toggles"></i> ${featCount} flag(s)</span>
+                                <span><i class="bi bi-device-hdd"></i> ${devCount} device(s)</span>
+                            </div>
+                            <button class="btn btn-sm btn-outline-primary" onclick="previewProfile('${p.id}', '${p.name}')">
+                                <i class="bi bi-eye"></i> Preview &amp; Apply
+                            </button>
+                        </div>
+                    </div>`;
+                }
+                html += '</div>';
+                body.innerHTML = html;
+            })
+            .catch(() => { body.innerHTML = '<div class="alert alert-danger">Failed to load profiles</div>'; });
+    };
+
+    window.previewProfile = function (profileId, profileName) {
+        _profileDiffCache = null;
+        document.getElementById('profileDiffTitle').innerHTML = `<i class="bi bi-eye"></i> ${profileName} — Preview`;
+        document.getElementById('profileDiffBody').innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div></div>';
+        document.getElementById('profileApplyBtn').dataset.profileId = profileId;
+        new bootstrap.Modal(document.getElementById('lxcProfileDiffModal')).show();
+
+        fetch(`/api/vm/${node}/${vmid}/lxc/profile-diff/${profileId}`)
+            .then(r => r.json())
+            .then(diff => {
+                _profileDiffCache = diff;
+                if (diff.error) {
+                    document.getElementById('profileDiffBody').innerHTML = `<div class="alert alert-danger">${diff.error}</div>`;
+                    return;
+                }
+                let html = '';
+                if (!diff.changes_needed) {
+                    html = '<div class="alert alert-success"><i class="bi bi-check-circle"></i> This profile is already fully applied to this container.</div>';
+                    document.getElementById('profileApplyBtn').disabled = true;
+                } else {
+                    document.getElementById('profileApplyBtn').disabled = false;
+                    if (diff.features_to_add.length) {
+                        html += `<div class="mb-3">
+                            <h6 class="text-primary"><i class="bi bi-plus-circle"></i> Features to enable</h6>
+                            <ul class="mb-0">
+                                ${diff.features_to_add.map(f => `<li><code>${f}</code></li>`).join('')}
+                            </ul>
+                        </div>`;
+                    }
+                    if (diff.devices_to_add.length) {
+                        html += `<div class="mb-3">
+                            <h6 class="text-primary"><i class="bi bi-device-hdd"></i> Devices to add</h6>
+                            <ul class="mb-0">
+                                ${diff.devices_to_add.map(d => `<li><code>${d.path}</code>${d.gid ? ` (gid=${d.gid})` : ''}</li>`).join('')}
+                            </ul>
+                        </div>`;
+                    }
+                    if (diff.features_already_set.length || diff.devices_already_present.length) {
+                        html += `<div class="text-muted small">
+                            <i class="bi bi-check2"></i> Already present:
+                            ${[...diff.features_already_set, ...diff.devices_already_present.map(d=>d.path)].join(', ')}
+                        </div>`;
+                    }
+                    if (diff.running && diff.devices_require_stop) {
+                        html += `<div class="alert alert-warning mt-3 mb-0">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            <strong>Container is running.</strong> Device changes require it to be stopped first.
+                        </div>`;
+                        document.getElementById('profileApplyBtn').disabled = true;
+                    } else if (diff.running) {
+                        html += `<div class="alert alert-info mt-3 mb-0">
+                            <i class="bi bi-info-circle"></i> Container is running — feature changes take effect after restart.
+                        </div>`;
+                    }
+                    if (!diff.pve_supports_dev_n && diff.devices_to_add.length) {
+                        html += `<div class="alert alert-warning mt-3 mb-0">
+                            <i class="bi bi-exclamation-triangle"></i> PVE &lt; 8.2 detected — device passthrough not supported via API.
+                        </div>`;
+                        document.getElementById('profileApplyBtn').disabled = true;
+                    }
+                }
+                document.getElementById('profileDiffBody').innerHTML = html;
+            })
+            .catch(() => { document.getElementById('profileDiffBody').innerHTML = '<div class="alert alert-danger">Failed to load diff</div>'; });
+    };
+
+    window.applyLxcProfile = function () {
+        const profileId = document.getElementById('profileApplyBtn').dataset.profileId;
+        const btn = document.getElementById('profileApplyBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Applying…';
+        fetch(`/api/vm/${node}/${vmid}/lxc/profile-apply/${profileId}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+        })
+        .then(r => r.json())
+        .then(data => {
+            bootstrap.Modal.getInstance(document.getElementById('lxcProfileDiffModal')).hide();
+            _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
+            if (data.success) loadAll();
+        })
+        .catch(() => _flash('danger', 'Network error'))
+        .finally(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-check2-circle"></i> Apply Profile'; });
     };
 
     // ── Helpers ───────────────────────────────────────────────────────────────
