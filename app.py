@@ -1325,6 +1325,138 @@ def check_lxc_write_permission(proxmox, vmid):
         return True  # Assume write access if permission check is unavailable
 
 
+# ─── LXC Device & Mount Helpers ──────────────────────────────────────────────
+
+# Known device cgroup info for PVE < 8.2 fallback (type, major, minor)
+KNOWN_LXC_DEVICE_CGROUPS = {
+    "/dev/dri/card0":      ("c", 226, 0),
+    "/dev/dri/card1":      ("c", 226, 1),
+    "/dev/dri/renderD128": ("c", 226, 128),
+    "/dev/dri/renderD129": ("c", 226, 129),
+    "/dev/net/tun":        ("c", 10,  200),
+    "/dev/fuse":           ("c", 10,  229),
+    "/dev/kvm":            ("c", 10,  232),
+}
+
+
+def parse_lxc_dev(dev_str):
+    """Parse a dev[n] config value → dict with path and optional uid/gid/mode."""
+    if not dev_str:
+        return {}
+    parts = str(dev_str).split(",")
+    result = {"path": parts[0].strip()}
+    for part in parts[1:]:
+        part = part.strip()
+        if "=" in part:
+            k, v = part.split("=", 1)
+            result[k.strip()] = v.strip()
+    return result
+
+
+def serialize_lxc_dev(dev_dict):
+    """Serialize a dev[n] dict → PVE config string."""
+    parts = [dev_dict.get("path", "")]
+    for k in ["uid", "gid", "mode"]:
+        v = dev_dict.get(k)
+        if v is not None and str(v) != "":
+            parts.append(f"{k}={v}")
+    return ",".join(p for p in parts if p)
+
+
+def parse_lxc_mp(mp_str):
+    """Parse an mp[n] config value → dict with host_path and options."""
+    if not mp_str:
+        return {}
+    parts = str(mp_str).split(",")
+    result = {"host_path": parts[0].strip()}
+    for part in parts[1:]:
+        part = part.strip()
+        if "=" in part:
+            k, v = part.split("=", 1)
+            result[k.strip()] = v.strip()
+    return result
+
+
+def serialize_lxc_mp(mp_dict):
+    """Serialize an mp[n] dict → PVE config string."""
+    parts = [mp_dict.get("host_path", "")]
+    for k in ["mp", "ro", "backup", "quota", "shared"]:
+        v = mp_dict.get(k)
+        if v is not None and str(v) != "":
+            parts.append(f"{k}={v}")
+    return ",".join(p for p in parts if p)
+
+
+def is_lxc_bind_mount(mp_str):
+    """True if mp[n] value is a host-path bind mount (starts with '/')."""
+    return bool(mp_str) and str(mp_str).strip().startswith("/")
+
+
+def get_pve_version_tuple(node):
+    """Return PVE version as (major, minor, patch) for a node."""
+    meta = connection_metadata.get(node) or {}
+    ver_str = meta.get("pve_version", "")
+    if not ver_str:
+        return (0, 0, 0)
+    try:
+        clean = ver_str.replace("-", ".").split(".")
+        nums = [int(x) for x in clean if x.isdigit()]
+        return tuple((nums + [0, 0, 0])[:3])
+    except (ValueError, AttributeError):
+        return (0, 0, 0)
+
+
+def _next_key_index(config, prefix):
+    """Return the lowest unused numeric index for a config key prefix (dev, mp, lxc…)."""
+    pattern = re.compile(rf'^{re.escape(prefix)}(\d+)$')
+    used = {int(m.group(1)) for k in config for m in [pattern.match(k)] if m}
+    i = 0
+    while i in used:
+        i += 1
+    return i
+
+
+def _backup_lxc_config(node, vmid, config):
+    """Snapshot current LXC config before any write."""
+    lxc_config_backups[f"{node}:{vmid}"] = {
+        "config": dict(config),
+        "timestamp": datetime.now().isoformat(),
+        "features": config.get("features", ""),
+    }
+
+
+def _restore_advanced_keys(proxmox, node, vmid, backup_config, current_config):
+    """Restore all LXC advanced keys (features, dev[n], lxc[n], mp[n] binds) from backup."""
+    adv_pattern = re.compile(r'^(dev|lxc)\d+$')
+
+    def is_advanced(key, cfg):
+        return (
+            key == "features"
+            or bool(adv_pattern.match(key))
+            or (re.match(r'^mp\d+$', key) and is_lxc_bind_mount(cfg.get(key, "")))
+        )
+
+    backup_adv = {k: v for k, v in backup_config.items() if is_advanced(k, backup_config)}
+    current_adv = {k: v for k, v in current_config.items() if is_advanced(k, current_config)}
+
+    params = {}
+    delete_list = [k for k in current_adv if k not in backup_adv]
+
+    for k, v in backup_adv.items():
+        if current_config.get(k) != v:
+            params[k] = v
+
+    if delete_list:
+        params["delete"] = ",".join(delete_list)
+
+    if params:
+        proxmox.nodes(node).lxc(vmid).config.put(**params)
+
+    return params, delete_list
+
+
+# ─── End Device & Mount Helpers ───────────────────────────────────────────────
+
 # ─── End LXC helpers ──────────────────────────────────────────────────────────
 
 # ROUTES - Make sure all routes are defined
@@ -5083,13 +5215,7 @@ def api_lxc_features(node, vmid):
         if not data:
             return jsonify({"error": "No data provided"}), 400
 
-        # Snapshot current config before any write
-        backup_key = f"{node}:{vmid}"
-        lxc_config_backups[backup_key] = {
-            "config": config,
-            "timestamp": datetime.now().isoformat(),
-            "features": config.get("features", ""),
-        }
+        _backup_lxc_config(node, vmid, config)
 
         new_features_str = serialize_lxc_features(data.get("features", {}))
         params = {}
@@ -5134,7 +5260,7 @@ def api_lxc_config_snapshot(node, vmid):
 
 @app.route("/api/vm/<node>/<vmid>/lxc/config-restore", methods=["POST"])
 def api_lxc_config_restore(node, vmid):
-    """Restore the pre-write config snapshot for an LXC container."""
+    """Restore all LXC advanced config keys from the pre-write snapshot."""
     proxmox = get_proxmox_connection(node, auto_renew=True)
     if not proxmox:
         return jsonify({"error": "Node not found"}), 404
@@ -5145,21 +5271,277 @@ def api_lxc_config_restore(node, vmid):
         return jsonify({"error": "No snapshot available"}), 404
 
     try:
-        old_features = backup.get("features", "")
-        if old_features:
-            proxmox.nodes(node).lxc(vmid).config.put(features=old_features)
-        else:
-            proxmox.nodes(node).lxc(vmid).config.put(delete="features")
-
+        current_config = proxmox.nodes(node).lxc(vmid).config.get()
+        backup_config = backup["config"]
+        _restore_advanced_keys(proxmox, node, vmid, backup_config, current_config)
         del lxc_config_backups[backup_key]
 
         return jsonify(
             {
                 "success": True,
                 "message": f"Config restored to snapshot from {backup['timestamp']}.",
-                "features_raw": old_features,
+                "features_raw": backup_config.get("features", ""),
             }
         )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/devices", methods=["GET", "POST"])
+def api_lxc_devices(node, vmid):
+    """List or add device passthrough entries for an LXC container."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+        is_running = status.get("status") == "running"
+        pve_ver = get_pve_version_tuple(node)
+        supports_dev_n = pve_ver >= (8, 2, 0)
+
+        if request.method == "GET":
+            # Enumerate dev[n] entries (PVE 8.2+)
+            devices = []
+            dev_pattern = re.compile(r'^dev(\d+)$')
+            for key in sorted(config):
+                m = dev_pattern.match(key)
+                if m:
+                    parsed = parse_lxc_dev(config[key])
+                    parsed["key"] = key
+                    parsed["type"] = "dev_n"
+                    devices.append(parsed)
+
+            # Enumerate lxc[n] raw entries (PVE < 8.2 or manual)
+            legacy = []
+            lxc_pattern = re.compile(r'^lxc(\d+)$')
+            for key in sorted(config):
+                if lxc_pattern.match(key):
+                    raw = str(config[key])
+                    if "lxc.cgroup2.devices.allow" in raw or "lxc.mount.entry" in raw:
+                        legacy.append({"key": key, "raw": raw})
+
+            can_write = check_lxc_write_permission(proxmox, vmid)
+            return jsonify(
+                {
+                    "devices": devices,
+                    "legacy_devices": legacy,
+                    "pve_version": ".".join(str(x) for x in pve_ver),
+                    "pve_supports_dev_n": supports_dev_n,
+                    "running": is_running,
+                    "can_write": can_write,
+                }
+            )
+
+        # POST — add a device
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        if is_running:
+            return jsonify(
+                {"error": "Container must be stopped before adding devices.", "stop_required": True}
+            ), 409
+
+        device_path = (data.get("path") or "").strip()
+        if not device_path:
+            return jsonify({"error": "Device path is required"}), 400
+
+        _backup_lxc_config(node, vmid, config)
+
+        if supports_dev_n:
+            idx = _next_key_index(config, "dev")
+            dev_value = serialize_lxc_dev(
+                {
+                    "path": device_path,
+                    "uid": data.get("uid") or None,
+                    "gid": data.get("gid") or None,
+                    "mode": data.get("mode") or None,
+                }
+            )
+            proxmox.nodes(node).lxc(vmid).config.put(**{f"dev{idx}": dev_value})
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"Device {device_path} added as dev{idx}.",
+                    "key": f"dev{idx}",
+                }
+            )
+        else:
+            # PVE < 8.2: write cgroup2 allow + mount.entry via lxc[n] raw keys
+            cgroup_info = KNOWN_LXC_DEVICE_CGROUPS.get(device_path)
+            major = data.get("major")
+            minor = data.get("minor")
+            dev_type = data.get("dev_type", "c")
+
+            if cgroup_info:
+                dev_type, major, minor = cgroup_info
+            elif major is None or minor is None:
+                return jsonify(
+                    {
+                        "error": (
+                            "PVE < 8.2 requires cgroup major:minor for unknown devices. "
+                            "Provide major, minor, dev_type fields."
+                        )
+                    }
+                ), 400
+
+            idx0 = _next_key_index(config, "lxc")
+            # Container path strips leading /dev/ prefix
+            ct_path = device_path.lstrip("/")
+            params = {
+                f"lxc{idx0}": f"lxc.cgroup2.devices.allow = {dev_type} {major}:{minor} rwm",
+                f"lxc{idx0 + 1}": (
+                    f"lxc.mount.entry = {device_path} {ct_path} "
+                    "none bind,optional,create=file"
+                ),
+            }
+            proxmox.nodes(node).lxc(vmid).config.put(**params)
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"Device {device_path} added via cgroup2 (PVE < 8.2 mode).",
+                    "key": f"lxc{idx0}",
+                }
+            )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/devices/<key>", methods=["DELETE"])
+def api_lxc_device_delete(node, vmid, key):
+    """Remove a device passthrough entry by config key."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+
+        if status.get("status") == "running":
+            return jsonify(
+                {"error": "Container must be stopped before removing devices.", "stop_required": True}
+            ), 409
+
+        if key not in config:
+            return jsonify({"error": f"Key '{key}' not found in container config"}), 404
+
+        _backup_lxc_config(node, vmid, config)
+
+        # For lxc[n] mount.entry lines, also remove the paired cgroup2 allow line
+        delete_keys = [key]
+        lxc_pattern = re.compile(r'^lxc\d+$')
+        if lxc_pattern.match(key) and "lxc.mount.entry" in str(config.get(key, "")):
+            mount_val = str(config[key])
+            # Find the cgroup2 allow line that was written alongside this entry
+            for k, v in config.items():
+                if k != key and lxc_pattern.match(k) and "lxc.cgroup2.devices.allow" in str(v):
+                    # Heuristic: assume cgroup2 allow directly precedes this mount.entry
+                    # (they are always written as a pair)
+                    # A more robust check would track pairs by index proximity
+                    try:
+                        if abs(int(key[3:]) - int(k[3:])) == 1:
+                            delete_keys.append(k)
+                    except ValueError:
+                        pass
+
+        proxmox.nodes(node).lxc(vmid).config.put(delete=",".join(delete_keys))
+        return jsonify({"success": True, "message": f"Device entry {key} removed."})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/mounts", methods=["GET", "POST"])
+def api_lxc_mounts(node, vmid):
+    """List or add bind mount entries (mp[n]) for an LXC container."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+        is_running = status.get("status") == "running"
+
+        if request.method == "GET":
+            mounts = []
+            mp_pattern = re.compile(r'^mp(\d+)$')
+            for key in sorted(config):
+                if mp_pattern.match(key) and is_lxc_bind_mount(config[key]):
+                    parsed = parse_lxc_mp(config[key])
+                    parsed["key"] = key
+                    mounts.append(parsed)
+            can_write = check_lxc_write_permission(proxmox, vmid)
+            return jsonify({"mounts": mounts, "running": is_running, "can_write": can_write})
+
+        # POST — add a bind mount
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        if is_running:
+            return jsonify(
+                {"error": "Container must be stopped before adding mounts.", "stop_required": True}
+            ), 409
+
+        host_path = (data.get("host_path") or "").strip()
+        mp = (data.get("mp") or "").strip()
+        if not host_path or not mp:
+            return jsonify({"error": "host_path and mp (container path) are required"}), 400
+        if not host_path.startswith("/"):
+            return jsonify({"error": "host_path must be an absolute path starting with /"}), 400
+
+        _backup_lxc_config(node, vmid, config)
+
+        idx = _next_key_index(config, "mp")
+        mp_value = serialize_lxc_mp(
+            {
+                "host_path": host_path,
+                "mp": mp,
+                "ro": "1" if data.get("ro") else "0",
+                "backup": "1" if data.get("backup") else "0",
+            }
+        )
+        proxmox.nodes(node).lxc(vmid).config.put(**{f"mp{idx}": mp_value})
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Mount {host_path} → {mp} added as mp{idx}.",
+                "key": f"mp{idx}",
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/mounts/<key>", methods=["DELETE"])
+def api_lxc_mount_delete(node, vmid, key):
+    """Remove a bind mount entry by config key."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+
+        if status.get("status") == "running":
+            return jsonify(
+                {"error": "Container must be stopped before removing mounts.", "stop_required": True}
+            ), 409
+
+        if key not in config:
+            return jsonify({"error": f"Key '{key}' not found in container config"}), 404
+
+        _backup_lxc_config(node, vmid, config)
+        proxmox.nodes(node).lxc(vmid).config.put(delete=key)
+        return jsonify({"success": True, "message": f"Mount {key} removed."})
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

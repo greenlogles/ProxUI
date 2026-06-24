@@ -620,6 +620,107 @@
         </div>
     </div>
 </div>
+
+<!-- LXC Add Device Modal -->
+<div class="modal fade" id="lxcAddDeviceModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-device-hdd"></i> Add Device Passthrough</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Quick Preset</label>
+                    <select class="form-select" onchange="fillDevicePreset(this)">
+                        <option value="">— choose a common device —</option>
+                        <option value="0">renderD128 (QuickSync / VA-API)</option>
+                        <option value="1">card0 (DRI primary)</option>
+                        <option value="2">card1 (DRI secondary)</option>
+                        <option value="3">net/tun (Tailscale)</option>
+                        <option value="4">fuse</option>
+                        <option value="5">kvm</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label for="devPath" class="form-label">Device path <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control font-monospace" id="devPath"
+                           placeholder="/dev/dri/renderD128">
+                </div>
+                <div class="row g-2 mb-2">
+                    <div class="col-6">
+                        <label for="devGid" class="form-label">GID override
+                            <i class="bi bi-info-circle text-muted" title="Debian render group = 104, video group = 44"></i>
+                        </label>
+                        <input type="number" class="form-control" id="devGid" placeholder="104 (render)">
+                    </div>
+                    <div class="col-6">
+                        <label for="devUid" class="form-label">UID override</label>
+                        <input type="number" class="form-control" id="devUid" placeholder="0">
+                    </div>
+                </div>
+                <div class="alert alert-info py-2 small mb-0">
+                    <i class="bi bi-info-circle"></i>
+                    Requires PVE 8.2+ and the container must be <strong>stopped</strong>.
+                    Debian render group GID is typically <strong>104</strong>.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="addDeviceBtn" onclick="addLxcDevice()">
+                    <i class="bi bi-plus-circle"></i> Add
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Add Mount Modal -->
+<div class="modal fade" id="lxcAddMountModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-folder2-open"></i> Add Bind Mount</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label for="mpHostPath" class="form-label">Host path <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control font-monospace" id="mpHostPath"
+                           placeholder="/mnt/nvme/data">
+                    <div class="form-text">Absolute path on the Proxmox host.</div>
+                </div>
+                <div class="mb-3">
+                    <label for="mpContainerPath" class="form-label">Container path <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control font-monospace" id="mpContainerPath"
+                           placeholder="/data">
+                    <div class="form-text">Absolute path inside the container.</div>
+                </div>
+                <div class="d-flex gap-4 mb-2">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="mpReadOnly">
+                        <label class="form-check-label" for="mpReadOnly">Read-only</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="mpBackup">
+                        <label class="form-check-label" for="mpBackup">Include in backup</label>
+                    </div>
+                </div>
+                <div class="alert alert-info py-2 small mb-0">
+                    <i class="bi bi-info-circle"></i>
+                    Container must be <strong>stopped</strong> before adding mounts.
+                    For unprivileged containers, the host directory owner must match the container UID mapping.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="addMountBtn" onclick="addLxcMount()">
+                    <i class="bi bi-plus-circle"></i> Add
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endif %}
 {% endblock %}
 
@@ -1099,173 +1200,333 @@ function deleteVM() {
         { key: 'mknod',   label: 'Mknod',   desc: 'Allow mknod in unprivileged containers' },
     ];
 
+    const QUICKSYNC_DEVICES = [
+        { label: 'renderD128 (QuickSync / VA-API)', path: '/dev/dri/renderD128', gid: '104', uid: '0' },
+        { label: 'card0 (DRI primary)',              path: '/dev/dri/card0',      gid: '44',  uid: '0' },
+        { label: 'card1 (DRI secondary)',            path: '/dev/dri/card1',      gid: '44',  uid: '0' },
+        { label: 'net/tun (Tailscale)',              path: '/dev/net/tun',        gid: '',    uid: '' },
+        { label: 'fuse',                             path: '/dev/fuse',           gid: '',    uid: '' },
+        { label: 'kvm',                              path: '/dev/kvm',            gid: '',    uid: '' },
+    ];
+
     let _currentFeatures = {};
     let _isRunning = false;
     let _canWrite = true;
+    let _supportsDevN = true;
 
-    window.loadLxcFeatures = function () {
+    // ── Unified loader ────────────────────────────────────────────────────────
+    function loadAll() {
         const body = document.getElementById('lxcAdvancedBody');
         body.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div><span class="ms-2">Loading…</span></div>';
 
-        fetch(`/api/vm/${node}/${vmid}/lxc/features`)
-            .then(r => r.json())
-            .then(data => {
-                if (data.error) { body.innerHTML = `<div class="alert alert-danger">${data.error}</div>`; return; }
-                _currentFeatures = data.features || {};
-                _isRunning = data.running;
-                _canWrite = data.can_write;
-                renderFeatures(data);
-            })
-            .catch(() => { body.innerHTML = '<div class="alert alert-danger">Failed to load features</div>'; });
-    };
+        Promise.all([
+            fetch(`/api/vm/${node}/${vmid}/lxc/features`).then(r => r.json()),
+            fetch(`/api/vm/${node}/${vmid}/lxc/devices`).then(r => r.json()),
+            fetch(`/api/vm/${node}/${vmid}/lxc/mounts`).then(r => r.json()),
+        ])
+        .then(([fData, dData, mData]) => {
+            if (fData.error && dData.error && mData.error) {
+                body.innerHTML = `<div class="alert alert-danger">${fData.error}</div>`;
+                return;
+            }
+            _currentFeatures = fData.features || {};
+            _isRunning = fData.running || dData.running || mData.running;
+            _canWrite = (fData.can_write !== false) && (dData.can_write !== false);
+            _supportsDevN = dData.pve_supports_dev_n !== false;
 
-    function renderFeatures(data) {
-        const body = document.getElementById('lxcAdvancedBody');
-        const backupInfo = document.getElementById('lxcBackupInfo');
-        const restoreBtn = document.getElementById('lxcRestoreBtn');
+            const backupInfo = document.getElementById('lxcBackupInfo');
+            const restoreBtn = document.getElementById('lxcRestoreBtn');
+            if (fData.has_backup && fData.backup_timestamp) {
+                backupInfo.textContent = `Snapshot: ${fData.backup_timestamp}`;
+                backupInfo.style.display = '';
+                restoreBtn.style.display = '';
+            } else {
+                backupInfo.style.display = 'none';
+                restoreBtn.style.display = 'none';
+            }
 
-        if (data.has_backup && data.backup_timestamp) {
-            backupInfo.textContent = `Snapshot: ${data.backup_timestamp}`;
-            backupInfo.style.display = '';
-            restoreBtn.style.display = '';
-        } else {
-            backupInfo.style.display = 'none';
-            restoreBtn.style.display = 'none';
-        }
+            let html = '';
+            if (_isRunning) {
+                html += `<div class="alert alert-info py-2 mb-3">
+                    <i class="bi bi-info-circle"></i>
+                    <strong>Container is running.</strong>
+                    Feature flag changes take effect after restart.
+                    Device &amp; mount changes require the container to be stopped first.
+                </div>`;
+            }
+            if (!_canWrite) {
+                html += `<div class="alert alert-warning py-2 mb-3">
+                    <i class="bi bi-lock"></i>
+                    <strong>Read-only connection.</strong> Write actions are disabled.
+                </div>`;
+            }
 
-        let html = '';
+            html += buildFeaturesHtml();
+            html += '<hr class="my-3">';
+            html += buildDevicesHtml(dData);
+            html += '<hr class="my-3">';
+            html += buildMountsHtml(mData);
 
-        if (_isRunning) {
-            html += `<div class="alert alert-info py-2 mb-3">
-                <i class="bi bi-info-circle"></i>
-                <strong>Container is running.</strong> Feature changes take effect after restart.
-            </div>`;
-        }
-        if (!_canWrite) {
-            html += `<div class="alert alert-warning py-2 mb-3">
-                <i class="bi bi-lock"></i>
-                <strong>Read-only connection.</strong> Write actions are disabled.
-            </div>`;
-        }
+            body.innerHTML = html;
+        })
+        .catch(err => {
+            body.innerHTML = '<div class="alert alert-danger">Failed to load advanced config</div>';
+        });
+    }
 
-        html += '<h6 class="text-primary mb-3"><i class="bi bi-toggles"></i> Feature Flags</h6>';
+    // kept as an alias so existing callers (restore, apply) still work
+    window.loadLxcFeatures = loadAll;
+
+    // ── Feature flags ─────────────────────────────────────────────────────────
+    function buildFeaturesHtml() {
+        let html = '<h6 class="text-primary mb-3"><i class="bi bi-toggles"></i> Feature Flags</h6>';
         html += '<div class="row g-2 mb-3">';
         for (const f of LXC_FLAGS) {
             const enabled = _currentFeatures[f.key] === '1';
-            const checkId = `lxcFlag_${f.key}`;
+            const id = `lxcFlag_${f.key}`;
             html += `<div class="col-sm-6 col-lg-4">
                 <div class="border rounded p-2 d-flex align-items-start gap-2">
                     <div class="form-check form-switch mt-1">
-                        <input class="form-check-input" type="checkbox" role="switch" id="${checkId}"
+                        <input class="form-check-input" type="checkbox" role="switch" id="${id}"
                                ${enabled ? 'checked' : ''} ${!_canWrite ? 'disabled' : ''}
                                data-flag="${f.key}">
                     </div>
                     <div>
-                        <label class="form-check-label fw-semibold mb-0" for="${checkId}">${f.label}</label>
+                        <label class="form-check-label fw-semibold mb-0" for="${id}">${f.label}</label>
                         <div class="text-muted small">${f.desc}</div>
                     </div>
                 </div>
             </div>`;
         }
         html += '</div>';
-
         if (_canWrite) {
-            html += `<button class="btn btn-primary" onclick="previewLxcFeatures()">
+            html += `<button class="btn btn-primary btn-sm" onclick="previewLxcFeatures()">
                 <i class="bi bi-eye"></i> Preview &amp; Apply
             </button>`;
         }
-
-        body.innerHTML = html;
+        return html;
     }
 
+    // ── Devices ───────────────────────────────────────────────────────────────
+    function buildDevicesHtml(data) {
+        let html = '<h6 class="text-primary mb-2"><i class="bi bi-device-hdd"></i> Devices / Passthrough</h6>';
+
+        if (!data.pve_supports_dev_n) {
+            html += `<div class="alert alert-warning py-2 mb-2">
+                <i class="bi bi-exclamation-triangle"></i>
+                PVE ${data.pve_version || '< 8.2'} detected — the <code>dev[n]</code> API requires PVE 8.2+.
+                Use the idmap / raw config section (Phase 3) for older nodes.
+            </div>`;
+        }
+
+        const devs = (data.devices || []);
+        const legacy = (data.legacy_devices || []);
+
+        if (devs.length === 0 && legacy.length === 0) {
+            html += '<p class="text-muted small mb-2">No device passthrough configured.</p>';
+        } else {
+            html += '<div class="mb-2">';
+            for (const d of devs) {
+                const badge = `<span class="badge bg-secondary me-1">${d.key}</span>`;
+                const gid  = d.gid  ? `<span class="badge bg-outline-secondary border me-1">gid=${d.gid}</span>` : '';
+                const uid  = d.uid  ? `<span class="badge bg-outline-secondary border me-1">uid=${d.uid}</span>` : '';
+                const del  = _canWrite && !_isRunning
+                    ? `<button class="btn btn-sm btn-outline-danger ms-auto" onclick="removeLxcDevice('${d.key}')"><i class="bi bi-trash"></i></button>`
+                    : '';
+                html += `<div class="border rounded p-2 mb-1 d-flex align-items-center gap-2">
+                    ${badge}<code class="flex-grow-1">${d.path}</code>${uid}${gid}${del}
+                </div>`;
+            }
+            for (const l of legacy) {
+                html += `<div class="border rounded p-2 mb-1 d-flex align-items-center gap-2 opacity-75">
+                    <span class="badge bg-warning text-dark me-1">${l.key}</span>
+                    <code class="flex-grow-1 small">${l.raw}</code>
+                    <span class="badge bg-secondary">legacy</span>
+                </div>`;
+            }
+            html += '</div>';
+        }
+
+        if (_canWrite && data.pve_supports_dev_n) {
+            html += `<button class="btn btn-sm btn-outline-primary" onclick="showAddDeviceModal()">
+                <i class="bi bi-plus-circle"></i> Add Device
+            </button>`;
+        }
+        return html;
+    }
+
+    // ── Mounts ────────────────────────────────────────────────────────────────
+    function buildMountsHtml(data) {
+        let html = '<h6 class="text-primary mb-2"><i class="bi bi-folder2-open"></i> Bind Mounts</h6>';
+
+        const mounts = data.mounts || [];
+        if (mounts.length === 0) {
+            html += '<p class="text-muted small mb-2">No bind mounts configured.</p>';
+        } else {
+            html += '<div class="mb-2">';
+            for (const m of mounts) {
+                const badge = `<span class="badge bg-secondary me-1">${m.key}</span>`;
+                const ro    = m.ro === '1' ? '<span class="badge bg-warning text-dark me-1">ro</span>' : '';
+                const del   = _canWrite && !_isRunning
+                    ? `<button class="btn btn-sm btn-outline-danger ms-auto" onclick="removeLxcMount('${m.key}')"><i class="bi bi-trash"></i></button>`
+                    : '';
+                html += `<div class="border rounded p-2 mb-1 d-flex align-items-center gap-2">
+                    ${badge}
+                    <code class="small flex-grow-1">${m.host_path} → ${m.mp}</code>
+                    ${ro}${del}
+                </div>`;
+            }
+            html += '</div>';
+        }
+
+        if (_canWrite) {
+            html += `<button class="btn btn-sm btn-outline-primary" onclick="showAddMountModal()">
+                <i class="bi bi-plus-circle"></i> Add Mount
+            </button>`;
+        }
+        return html;
+    }
+
+    // ── Feature preview / apply ───────────────────────────────────────────────
     window.previewLxcFeatures = function () {
         const desired = {};
         document.querySelectorAll('[data-flag]').forEach(el => {
             desired[el.dataset.flag] = el.checked ? '1' : '0';
         });
-
-        // Build diff display
-        const before = Object.entries(_currentFeatures)
-            .filter(([, v]) => v === '1').map(([k]) => `${k}=1`).join(',') || '(none)';
-        const after = Object.entries(desired)
-            .filter(([, v]) => v === '1').map(([k]) => `${k}=1`).join(',') || '(none)';
-
-        const diffEl = document.getElementById('lxcDiffPre');
-        diffEl.textContent = `features: ${before}\n       → ${after}`;
-
-        const warnEl = document.getElementById('lxcRunningWarn');
-        warnEl.style.display = _isRunning ? '' : 'none';
-
-        // Store pending changes for apply
+        const before = Object.entries(_currentFeatures).filter(([,v])=>v==='1').map(([k])=>`${k}=1`).join(',') || '(none)';
+        const after  = Object.entries(desired).filter(([,v])=>v==='1').map(([k])=>`${k}=1`).join(',') || '(none)';
+        document.getElementById('lxcDiffPre').textContent = `features: ${before}\n       → ${after}`;
+        document.getElementById('lxcRunningWarn').style.display = _isRunning ? '' : 'none';
         window._lxcPendingFeatures = desired;
-
-        const modal = new bootstrap.Modal(document.getElementById('lxcPreviewModal'));
-        modal.show();
+        new bootstrap.Modal(document.getElementById('lxcPreviewModal')).show();
     };
 
     window.applyLxcFeatures = function () {
-        const applyBtn = document.getElementById('lxcApplyBtn');
-        applyBtn.disabled = true;
-        applyBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Applying…';
-
+        const btn = document.getElementById('lxcApplyBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Applying…';
         fetch(`/api/vm/${node}/${vmid}/lxc/features`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ features: window._lxcPendingFeatures }),
         })
         .then(r => r.json())
         .then(data => {
             bootstrap.Modal.getInstance(document.getElementById('lxcPreviewModal')).hide();
-            const body = document.getElementById('lxcAdvancedBody');
-            if (data.success) {
-                body.insertAdjacentHTML('afterbegin',
-                    `<div class="alert alert-success alert-dismissible fade show" role="alert">
-                        <i class="bi bi-check-circle"></i> ${data.message}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                    </div>`);
-                loadLxcFeatures();
-            } else {
-                body.insertAdjacentHTML('afterbegin',
-                    `<div class="alert alert-danger alert-dismissible fade show" role="alert">
-                        <i class="bi bi-exclamation-triangle"></i> ${data.error}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                    </div>`);
-            }
+            _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
+            if (data.success) loadAll();
         })
-        .catch(() => {
-            bootstrap.Modal.getInstance(document.getElementById('lxcPreviewModal')).hide();
-            document.getElementById('lxcAdvancedBody').insertAdjacentHTML('afterbegin',
-                '<div class="alert alert-danger">Network error while applying features</div>');
-        })
-        .finally(() => {
-            applyBtn.disabled = false;
-            applyBtn.innerHTML = '<i class="bi bi-check2-circle"></i> Apply';
-        });
+        .catch(() => { bootstrap.Modal.getInstance(document.getElementById('lxcPreviewModal')).hide(); _flash('danger', 'Network error'); })
+        .finally(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-check2-circle"></i> Apply'; });
     };
 
-    window.restoreLxcConfig = function () {
-        if (!confirm('Restore the pre-write config snapshot?')) return;
-        fetch(`/api/vm/${node}/${vmid}/lxc/config-restore`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}),
+    // ── Add device ────────────────────────────────────────────────────────────
+    window.showAddDeviceModal = function () {
+        document.getElementById('devPath').value = '';
+        document.getElementById('devGid').value = '';
+        document.getElementById('devUid').value = '0';
+        const modal = new bootstrap.Modal(document.getElementById('lxcAddDeviceModal'));
+        modal.show();
+    };
+
+    window.fillDevicePreset = function (sel) {
+        const opt = QUICKSYNC_DEVICES[sel.value];
+        if (!opt) return;
+        document.getElementById('devPath').value = opt.path;
+        document.getElementById('devGid').value = opt.gid;
+        document.getElementById('devUid').value = opt.uid;
+    };
+
+    window.addLxcDevice = function () {
+        const path = document.getElementById('devPath').value.trim();
+        const gid  = document.getElementById('devGid').value.trim();
+        const uid  = document.getElementById('devUid').value.trim();
+        if (!path) { alert('Device path is required'); return; }
+
+        const btn = document.getElementById('addDeviceBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+        fetch(`/api/vm/${node}/${vmid}/lxc/devices`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, gid: gid || undefined, uid: uid || undefined }),
         })
         .then(r => r.json())
         .then(data => {
-            const body = document.getElementById('lxcAdvancedBody');
-            const cls = data.success ? 'success' : 'danger';
-            const icon = data.success ? 'check-circle' : 'exclamation-triangle';
-            const msg = data.success ? data.message : data.error;
-            body.insertAdjacentHTML('afterbegin',
-                `<div class="alert alert-${cls} alert-dismissible fade show">
-                    <i class="bi bi-${icon}"></i> ${msg}
-                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                </div>`);
-            if (data.success) loadLxcFeatures();
-        });
+            bootstrap.Modal.getInstance(document.getElementById('lxcAddDeviceModal')).hide();
+            _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
+            if (data.success) loadAll();
+        })
+        .catch(() => _flash('danger', 'Network error'))
+        .finally(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-plus-circle"></i> Add'; });
     };
 
-    document.addEventListener('DOMContentLoaded', loadLxcFeatures);
+    window.removeLxcDevice = function (key) {
+        if (!confirm(`Remove device entry ${key}?`)) return;
+        fetch(`/api/vm/${node}/${vmid}/lxc/devices/${key}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => { _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error); if (data.success) loadAll(); });
+    };
+
+    // ── Add mount ─────────────────────────────────────────────────────────────
+    window.showAddMountModal = function () {
+        document.getElementById('mpHostPath').value = '';
+        document.getElementById('mpContainerPath').value = '';
+        document.getElementById('mpReadOnly').checked = false;
+        document.getElementById('mpBackup').checked = false;
+        new bootstrap.Modal(document.getElementById('lxcAddMountModal')).show();
+    };
+
+    window.addLxcMount = function () {
+        const host_path = document.getElementById('mpHostPath').value.trim();
+        const mp        = document.getElementById('mpContainerPath').value.trim();
+        const ro        = document.getElementById('mpReadOnly').checked;
+        const backup    = document.getElementById('mpBackup').checked;
+        if (!host_path || !mp) { alert('Host path and container path are required'); return; }
+
+        const btn = document.getElementById('addMountBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+        fetch(`/api/vm/${node}/${vmid}/lxc/mounts`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ host_path, mp, ro, backup }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            bootstrap.Modal.getInstance(document.getElementById('lxcAddMountModal')).hide();
+            _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
+            if (data.success) loadAll();
+        })
+        .catch(() => _flash('danger', 'Network error'))
+        .finally(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-plus-circle"></i> Add'; });
+    };
+
+    window.removeLxcMount = function (key) {
+        if (!confirm(`Remove mount ${key}?`)) return;
+        fetch(`/api/vm/${node}/${vmid}/lxc/mounts/${key}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => { _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error); if (data.success) loadAll(); });
+    };
+
+    // ── Restore ───────────────────────────────────────────────────────────────
+    window.restoreLxcConfig = function () {
+        if (!confirm('Restore the pre-write config snapshot? This will revert all Advanced/Passthrough changes.')) return;
+        fetch(`/api/vm/${node}/${vmid}/lxc/config-restore`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+        })
+        .then(r => r.json())
+        .then(data => { _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error); if (data.success) loadAll(); });
+    };
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    function _flash(cls, msg) {
+        const body = document.getElementById('lxcAdvancedBody');
+        body.insertAdjacentHTML('afterbegin',
+            `<div class="alert alert-${cls} alert-dismissible fade show" role="alert">
+                <i class="bi bi-${cls === 'success' ? 'check-circle' : 'exclamation-triangle'}"></i> ${msg}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>`);
+    }
+
+    document.addEventListener('DOMContentLoaded', loadAll);
 }());
 {% endif %}
 </script>
