@@ -577,5 +577,155 @@ class TestLxcMountsApi(unittest.TestCase):
         self.assertTrue(resp.get_json()["success"])
 
 
+class TestParseLxcIdmap(unittest.TestCase):
+    def test_full_format(self):
+        result = app.parse_lxc_idmap_line("lxc.idmap = u 0 100000 65536")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["type"], "u")
+        self.assertEqual(result["ct_id"], 0)
+        self.assertEqual(result["host_id"], 100000)
+        self.assertEqual(result["count"], 65536)
+
+    def test_bare_format(self):
+        result = app.parse_lxc_idmap_line("g 0 100000 65536")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["type"], "g")
+
+    def test_invalid_type(self):
+        self.assertIsNone(app.parse_lxc_idmap_line("lxc.idmap = x 0 0 1"))
+
+    def test_non_idmap_line(self):
+        self.assertIsNone(app.parse_lxc_idmap_line("lxc.cgroup2.devices.allow = c 226:128 rwm"))
+
+    def test_empty(self):
+        self.assertIsNone(app.parse_lxc_idmap_line(""))
+
+    def test_serialise_roundtrip(self):
+        m = {"type": "u", "ct_id": 0, "host_id": 100000, "count": 65536}
+        raw = app.serialize_lxc_idmap_line(m)
+        self.assertIn("lxc.idmap", raw)
+        reparsed = app.parse_lxc_idmap_line(raw)
+        self.assertEqual(reparsed["host_id"], 100000)
+
+    def test_collect_idmaps_filters_correctly(self):
+        config = {
+            "lxc0": "lxc.idmap = u 0 100000 65536",
+            "lxc1": "lxc.idmap = g 0 100000 65536",
+            "lxc2": "lxc.cgroup2.devices.allow = c 226:128 rwm",
+            "dev0": "/dev/dri/renderD128",
+        }
+        maps = app.collect_lxc_idmaps(config)
+        self.assertEqual(len(maps), 2)
+        types = {m["type"] for m in maps}
+        self.assertIn("u", types)
+        self.assertIn("g", types)
+
+
+class TestLxcIdmapApi(unittest.TestCase):
+    def setUp(self):
+        flask_app.config["TESTING"] = True
+        self.client = flask_app.test_client()
+        app.proxmox_nodes.clear()
+        app.cluster_nodes.clear()
+        app.all_clusters.clear()
+        app.connection_metadata.clear()
+        app.lxc_config_backups.clear()
+        app.all_clusters["test-cluster"] = {
+            "id": "test-cluster", "name": "T",
+            "nodes": [{"host": "192.168.1.100", "user": "root@pam", "password": "t"}],
+        }
+        app.current_cluster_id = "test-cluster"
+        self.mock = Mock()
+        app.proxmox_nodes["test-node"] = self.mock
+        app.cluster_nodes.append({"name": "test-node", "status": "online", "connection": self.mock})
+
+    def tearDown(self):
+        app.proxmox_nodes.clear(); app.cluster_nodes.clear(); app.all_clusters.clear()
+        app.connection_metadata.clear(); app.lxc_config_backups.clear()
+        app.current_cluster_id = None
+
+    def _csrf(self):
+        with self.client.session_transaction() as sess:
+            sess["_csrf_token"] = "tok"
+        return "tok"
+
+    def test_list_idmaps(self):
+        self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {
+            "lxc0": "lxc.idmap = u 0 100000 65536",
+            "lxc1": "lxc.idmap = g 0 100000 65536",
+        }
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.access.permissions.get.return_value = {"VM.Config.Options": 1}
+        resp = self.client.get("/api/vm/test-node/100/lxc/idmap")
+        data = resp.get_json()
+        self.assertEqual(len(data["idmaps"]), 2)
+
+    def test_add_idmap_success(self):
+        self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.config.put.return_value = None
+        token = self._csrf()
+        resp = self.client.post(
+            "/api/vm/test-node/100/lxc/idmap",
+            data=json.dumps({"type": "u", "ct_id": 0, "host_id": 100000, "count": 65536}),
+            content_type="application/json",
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data["success"])
+        self.assertIn("lxc.idmap", data["raw"])
+
+    def test_add_idmap_rejected_if_running(self):
+        self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "running"}
+        token = self._csrf()
+        resp = self.client.post(
+            "/api/vm/test-node/100/lxc/idmap",
+            data=json.dumps({"type": "u", "ct_id": 0, "host_id": 100000, "count": 65536}),
+            content_type="application/json",
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(resp.status_code, 409)
+
+    def test_add_idmap_invalid_type(self):
+        self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        token = self._csrf()
+        resp = self.client.post(
+            "/api/vm/test-node/100/lxc/idmap",
+            data=json.dumps({"type": "x", "ct_id": 0, "host_id": 100000, "count": 65536}),
+            content_type="application/json",
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_delete_idmap_success(self):
+        self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {
+            "lxc0": "lxc.idmap = u 0 100000 65536"
+        }
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.config.put.return_value = None
+        token = self._csrf()
+        resp = self.client.delete(
+            "/api/vm/test-node/100/lxc/idmap/lxc0",
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.get_json()["success"])
+
+    def test_delete_idmap_wrong_key_type(self):
+        self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {
+            "lxc0": "lxc.cgroup2.devices.allow = c 226:128 rwm"
+        }
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        token = self._csrf()
+        resp = self.client.delete(
+            "/api/vm/test-node/100/lxc/idmap/lxc0",
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(resp.status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

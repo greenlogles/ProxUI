@@ -675,6 +675,72 @@
     </div>
 </div>
 
+<!-- LXC Add idmap Modal -->
+<div class="modal fade" id="lxcAddIdmapModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-person-lock"></i> Add UID/GID Mapping</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Quick preset</label>
+                    <select class="form-select" id="idmapPreset" onchange="fillIdmapPreset(this)">
+                        <option value="">— common patterns —</option>
+                        <option value="full_u">Full UID map (u 0 100000 65536)</option>
+                        <option value="full_g">Full GID map (g 0 100000 65536)</option>
+                        <option value="root_u">Map root only — UID (u 0 0 1)</option>
+                        <option value="root_g">Map root only — GID (g 0 0 1)</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Type</label>
+                    <div class="d-flex gap-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="idmapType" id="idmapTypeU" value="u" checked>
+                            <label class="form-check-label" for="idmapTypeU">UID (u)</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="idmapType" id="idmapTypeG" value="g">
+                            <label class="form-check-label" for="idmapTypeG">GID (g)</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-4">
+                        <label for="idmapCtId" class="form-label">Container start ID</label>
+                        <input type="number" class="form-control" id="idmapCtId" value="0" min="0">
+                    </div>
+                    <div class="col-4">
+                        <label for="idmapHostId" class="form-label">Host start ID</label>
+                        <input type="number" class="form-control" id="idmapHostId" value="100000" min="0">
+                    </div>
+                    <div class="col-4">
+                        <label for="idmapCount" class="form-label">Count</label>
+                        <input type="number" class="form-control" id="idmapCount" value="65536" min="1">
+                    </div>
+                </div>
+                <div class="bg-body-secondary rounded p-2 small font-monospace mb-3" id="idmapPreview">
+                    lxc.idmap = u 0 100000 65536
+                </div>
+                <div class="alert alert-warning py-2 small mb-0">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    For an <strong>unprivileged</strong> container to access a bind-mounted directory,
+                    the host directory must be owned by the mapped UID/GID.
+                    Use <code>chown -R 100000:100000 /host/path</code> as root on the host.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="addIdmapBtn" onclick="addLxcIdmap()">
+                    <i class="bi bi-plus-circle"></i> Add
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- LXC Add Mount Modal -->
 <div class="modal fade" id="lxcAddMountModal" tabindex="-1">
     <div class="modal-dialog">
@@ -1223,14 +1289,15 @@ function deleteVM() {
             fetch(`/api/vm/${node}/${vmid}/lxc/features`).then(r => r.json()),
             fetch(`/api/vm/${node}/${vmid}/lxc/devices`).then(r => r.json()),
             fetch(`/api/vm/${node}/${vmid}/lxc/mounts`).then(r => r.json()),
+            fetch(`/api/vm/${node}/${vmid}/lxc/idmap`).then(r => r.json()),
         ])
-        .then(([fData, dData, mData]) => {
-            if (fData.error && dData.error && mData.error) {
+        .then(([fData, dData, mData, iData]) => {
+            if (fData.error && dData.error && mData.error && iData.error) {
                 body.innerHTML = `<div class="alert alert-danger">${fData.error}</div>`;
                 return;
             }
             _currentFeatures = fData.features || {};
-            _isRunning = fData.running || dData.running || mData.running;
+            _isRunning = fData.running || dData.running || mData.running || iData.running;
             _canWrite = (fData.can_write !== false) && (dData.can_write !== false);
             _supportsDevN = dData.pve_supports_dev_n !== false;
 
@@ -1266,8 +1333,17 @@ function deleteVM() {
             html += buildDevicesHtml(dData);
             html += '<hr class="my-3">';
             html += buildMountsHtml(mData);
+            html += '<hr class="my-3">';
+            html += buildIdmapHtml(iData);
 
             body.innerHTML = html;
+            // Wire live preview updates for idmap modal fields
+            ['idmapCtId','idmapHostId','idmapCount'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('input', updateIdmapPreview);
+            });
+            document.querySelectorAll('input[name="idmapType"]').forEach(el =>
+                el.addEventListener('change', updateIdmapPreview));
         })
         .catch(err => {
             body.innerHTML = '<div class="alert alert-danger">Failed to load advanced config</div>';
@@ -1386,6 +1462,106 @@ function deleteVM() {
         }
         return html;
     }
+
+    // ── UID/GID idmap ─────────────────────────────────────────────────────────
+    function buildIdmapHtml(data) {
+        let html = '<h6 class="text-primary mb-2"><i class="bi bi-person-lock"></i> UID/GID Mapping (idmap)</h6>';
+
+        const maps = data.idmaps || [];
+        if (maps.length === 0) {
+            html += '<p class="text-muted small mb-2">No idmap entries (container uses default subuid/subgid mapping).</p>';
+        } else {
+            html += '<div class="mb-2">';
+            for (const m of maps) {
+                const typeLabel = m.type === 'u' ? 'UID' : 'GID';
+                const badge = `<span class="badge bg-secondary me-1">${m.key}</span>`;
+                const typebadge = `<span class="badge ${m.type==='u' ? 'bg-info' : 'bg-success'} me-1">${typeLabel}</span>`;
+                const desc = `<code class="small">${m.ct_id}–${m.ct_id + m.count - 1} → ${m.host_id}–${m.host_id + m.count - 1} (${m.count})</code>`;
+                const del = _canWrite && !_isRunning
+                    ? `<button class="btn btn-sm btn-outline-danger ms-auto" onclick="removeLxcIdmap('${m.key}')"><i class="bi bi-trash"></i></button>`
+                    : '';
+                html += `<div class="border rounded p-2 mb-1 d-flex align-items-center gap-2">
+                    ${badge}${typebadge}<span class="flex-grow-1">${desc}</span>${del}
+                </div>`;
+            }
+            html += '</div>';
+        }
+
+        if (_canWrite) {
+            html += `<button class="btn btn-sm btn-outline-primary" onclick="showAddIdmapModal()">
+                <i class="bi bi-plus-circle"></i> Add Mapping
+            </button>`;
+        }
+        return html;
+    }
+
+    const IDMAP_PRESETS = {
+        full_u:  { type: 'u', ct_id: 0, host_id: 100000, count: 65536 },
+        full_g:  { type: 'g', ct_id: 0, host_id: 100000, count: 65536 },
+        root_u:  { type: 'u', ct_id: 0, host_id: 0,      count: 1 },
+        root_g:  { type: 'g', ct_id: 0, host_id: 0,      count: 1 },
+    };
+
+    window.showAddIdmapModal = function () {
+        document.getElementById('idmapPreset').value = '';
+        document.getElementById('idmapCtId').value = '0';
+        document.getElementById('idmapHostId').value = '100000';
+        document.getElementById('idmapCount').value = '65536';
+        document.querySelector('input[name="idmapType"][value="u"]').checked = true;
+        updateIdmapPreview();
+        new bootstrap.Modal(document.getElementById('lxcAddIdmapModal')).show();
+    };
+
+    window.fillIdmapPreset = function (sel) {
+        const p = IDMAP_PRESETS[sel.value];
+        if (!p) return;
+        document.querySelector(`input[name="idmapType"][value="${p.type}"]`).checked = true;
+        document.getElementById('idmapCtId').value = p.ct_id;
+        document.getElementById('idmapHostId').value = p.host_id;
+        document.getElementById('idmapCount').value = p.count;
+        updateIdmapPreview();
+    };
+
+    function updateIdmapPreview() {
+        const type    = (document.querySelector('input[name="idmapType"]:checked') || {}).value || 'u';
+        const ctId    = document.getElementById('idmapCtId')?.value || '0';
+        const hostId  = document.getElementById('idmapHostId')?.value || '100000';
+        const count   = document.getElementById('idmapCount')?.value || '65536';
+        const prev    = document.getElementById('idmapPreview');
+        if (prev) prev.textContent = `lxc.idmap = ${type} ${ctId} ${hostId} ${count}`;
+    }
+
+    window.addLxcIdmap = function () {
+        const type   = (document.querySelector('input[name="idmapType"]:checked') || {}).value;
+        const ct_id  = parseInt(document.getElementById('idmapCtId').value, 10);
+        const host_id = parseInt(document.getElementById('idmapHostId').value, 10);
+        const count  = parseInt(document.getElementById('idmapCount').value, 10);
+        if (!type || isNaN(ct_id) || isNaN(host_id) || isNaN(count)) {
+            alert('All fields are required'); return;
+        }
+        const btn = document.getElementById('addIdmapBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+        fetch(`/api/vm/${node}/${vmid}/lxc/idmap`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type, ct_id, host_id, count }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            bootstrap.Modal.getInstance(document.getElementById('lxcAddIdmapModal')).hide();
+            _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
+            if (data.success) loadAll();
+        })
+        .catch(() => _flash('danger', 'Network error'))
+        .finally(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-plus-circle"></i> Add'; });
+    };
+
+    window.removeLxcIdmap = function (key) {
+        if (!confirm(`Remove idmap entry ${key}?`)) return;
+        fetch(`/api/vm/${node}/${vmid}/lxc/idmap/${key}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => { _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error); if (data.success) loadAll(); });
+    };
 
     // ── Feature preview / apply ───────────────────────────────────────────────
     window.previewLxcFeatures = function () {

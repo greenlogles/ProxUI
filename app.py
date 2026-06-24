@@ -1457,6 +1457,69 @@ def _restore_advanced_keys(proxmox, node, vmid, backup_config, current_config):
 
 # ─── End Device & Mount Helpers ───────────────────────────────────────────────
 
+# ─── LXC idmap Helpers ───────────────────────────────────────────────────────
+
+
+def parse_lxc_idmap_line(raw_value):
+    """Parse a raw lxc.idmap value into a structured dict.
+
+    Expected format (from lxc[n] raw key): 'lxc.idmap = u 0 100000 65536'
+    Also accepts the bare mapping portion: 'u 0 100000 65536'
+    Returns None if the value is not an idmap line.
+    """
+    raw = str(raw_value).strip()
+    # Strip the 'lxc.idmap = ' prefix if present
+    if "lxc.idmap" in raw:
+        idx = raw.find("=")
+        if idx == -1:
+            return None
+        raw = raw[idx + 1:].strip()
+
+    parts = raw.split()
+    if len(parts) != 4 or parts[0] not in ("u", "g"):
+        return None
+    try:
+        return {
+            "type": parts[0],          # 'u' or 'g'
+            "ct_id": int(parts[1]),    # start ID inside container
+            "host_id": int(parts[2]),  # start ID on host
+            "count": int(parts[3]),    # count of IDs mapped
+        }
+    except ValueError:
+        return None
+
+
+def serialize_lxc_idmap_line(idmap_dict):
+    """Serialize an idmap dict to the raw lxc.idmap config value string."""
+    return (
+        f"lxc.idmap = {idmap_dict['type']} "
+        f"{idmap_dict['ct_id']} {idmap_dict['host_id']} {idmap_dict['count']}"
+    )
+
+
+def collect_lxc_idmaps(config):
+    """Return all lxc.idmap entries from a container config as a list of dicts.
+
+    Each dict has 'key' (the lxc[n] config key), 'raw', and parsed fields.
+    """
+    result = []
+    lxc_pattern = re.compile(r'^lxc(\d+)$')
+    for key in sorted(config, key=lambda k: int(k[3:]) if lxc_pattern.match(k) else 999):
+        if not lxc_pattern.match(key):
+            continue
+        raw = str(config[key])
+        if "lxc.idmap" not in raw:
+            continue
+        parsed = parse_lxc_idmap_line(raw)
+        if parsed:
+            parsed["key"] = key
+            parsed["raw"] = raw
+            result.append(parsed)
+    return result
+
+
+# ─── End LXC idmap Helpers ───────────────────────────────────────────────────
+
 # ─── End LXC helpers ──────────────────────────────────────────────────────────
 
 # ROUTES - Make sure all routes are defined
@@ -5541,6 +5604,102 @@ def api_lxc_mount_delete(node, vmid, key):
         _backup_lxc_config(node, vmid, config)
         proxmox.nodes(node).lxc(vmid).config.put(delete=key)
         return jsonify({"success": True, "message": f"Mount {key} removed."})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/idmap", methods=["GET", "POST"])
+def api_lxc_idmap(node, vmid):
+    """List or add lxc.idmap entries for an LXC container."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+        is_running = status.get("status") == "running"
+
+        if request.method == "GET":
+            idmaps = collect_lxc_idmaps(config)
+            can_write = check_lxc_write_permission(proxmox, vmid)
+            backup = lxc_config_backups.get(f"{node}:{vmid}")
+            return jsonify(
+                {
+                    "idmaps": idmaps,
+                    "running": is_running,
+                    "can_write": can_write,
+                    "has_backup": backup is not None,
+                }
+            )
+
+        # POST — add an idmap entry
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        if is_running:
+            return jsonify(
+                {"error": "Container must be stopped before modifying idmap.", "stop_required": True}
+            ), 409
+
+        id_type = data.get("type", "").strip()
+        if id_type not in ("u", "g"):
+            return jsonify({"error": "type must be 'u' (UID) or 'g' (GID)"}), 400
+
+        try:
+            ct_id   = int(data["ct_id"])
+            host_id = int(data["host_id"])
+            count   = int(data["count"])
+        except (KeyError, ValueError, TypeError):
+            return jsonify({"error": "ct_id, host_id, count must be integers"}), 400
+
+        _backup_lxc_config(node, vmid, config)
+
+        idx = _next_key_index(config, "lxc")
+        raw_value = serialize_lxc_idmap_line(
+            {"type": id_type, "ct_id": ct_id, "host_id": host_id, "count": count}
+        )
+        proxmox.nodes(node).lxc(vmid).config.put(**{f"lxc{idx}": raw_value})
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"idmap entry added: {raw_value}",
+                "key": f"lxc{idx}",
+                "raw": raw_value,
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/idmap/<key>", methods=["DELETE"])
+def api_lxc_idmap_delete(node, vmid, key):
+    """Remove a specific lxc.idmap entry by config key."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+
+        if status.get("status") == "running":
+            return jsonify(
+                {"error": "Container must be stopped before removing idmap.", "stop_required": True}
+            ), 409
+
+        if key not in config:
+            return jsonify({"error": f"Key '{key}' not found in container config"}), 404
+        if "lxc.idmap" not in str(config[key]):
+            return jsonify({"error": f"Key '{key}' is not an idmap entry"}), 400
+
+        _backup_lxc_config(node, vmid, config)
+        proxmox.nodes(node).lxc(vmid).config.put(delete=key)
+        return jsonify({"success": True, "message": f"idmap entry {key} removed."})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
