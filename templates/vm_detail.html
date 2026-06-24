@@ -567,6 +567,60 @@
         </div>
     </div>
 </div>
+{% if vm_type == 'lxc' %}
+<!-- LXC Advanced / Passthrough -->
+<div class="row mt-3">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-sliders2"></i> Advanced / Passthrough</h5>
+                <div class="d-flex gap-2 align-items-center">
+                    <small class="text-muted fst-italic" id="lxcBackupInfo" style="display:none;"></small>
+                    <button class="btn btn-sm btn-outline-secondary" id="lxcRestoreBtn" style="display:none;"
+                            onclick="restoreLxcConfig()" title="Revert to pre-write snapshot">
+                        <i class="bi bi-arrow-counterclockwise"></i> Restore
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="loadLxcFeatures()" title="Refresh">
+                        <i class="bi bi-arrow-clockwise"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body" id="lxcAdvancedBody">
+                <div class="text-center py-3">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    <span class="ms-2">Loading…</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Feature Preview Modal -->
+<div class="modal fade" id="lxcPreviewModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-eye"></i> Preview Changes</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted mb-2">The following will be written to the container config:</p>
+                <pre id="lxcDiffPre" class="bg-body-secondary rounded p-3 small mb-2" style="white-space:pre-wrap;"></pre>
+                <div class="alert alert-warning mb-0" id="lxcRunningWarn" style="display:none;">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <strong>Container is running.</strong> Changes take effect after the next restart.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="lxcApplyBtn" onclick="applyLxcFeatures()">
+                    <i class="bi bi-check2-circle"></i> Apply
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
@@ -1033,5 +1087,186 @@ function deleteVM() {
         deleteBtn.innerHTML = '<i class="bi bi-trash"></i> Delete VM';
     });
 }
+
+// ─── LXC Advanced / Passthrough ───────────────────────────────────────────
+{% if vm_type == 'lxc' %}
+(function () {
+    const LXC_FLAGS = [
+        { key: 'nesting', label: 'Nesting', desc: 'Docker-in-LXC, systemd, nested LXC' },
+        { key: 'keyctl',  label: 'Keyctl',  desc: 'Key retention service (needed by some apps)' },
+        { key: 'fuse',    label: 'FUSE',    desc: 'User-space filesystem support' },
+        { key: 'mount',   label: 'Mount',   desc: 'Mount arbitrary filesystems (cifs, nfs…)' },
+        { key: 'mknod',   label: 'Mknod',   desc: 'Allow mknod in unprivileged containers' },
+    ];
+
+    let _currentFeatures = {};
+    let _isRunning = false;
+    let _canWrite = true;
+
+    window.loadLxcFeatures = function () {
+        const body = document.getElementById('lxcAdvancedBody');
+        body.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div><span class="ms-2">Loading…</span></div>';
+
+        fetch(`/api/vm/${node}/${vmid}/lxc/features`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) { body.innerHTML = `<div class="alert alert-danger">${data.error}</div>`; return; }
+                _currentFeatures = data.features || {};
+                _isRunning = data.running;
+                _canWrite = data.can_write;
+                renderFeatures(data);
+            })
+            .catch(() => { body.innerHTML = '<div class="alert alert-danger">Failed to load features</div>'; });
+    };
+
+    function renderFeatures(data) {
+        const body = document.getElementById('lxcAdvancedBody');
+        const backupInfo = document.getElementById('lxcBackupInfo');
+        const restoreBtn = document.getElementById('lxcRestoreBtn');
+
+        if (data.has_backup && data.backup_timestamp) {
+            backupInfo.textContent = `Snapshot: ${data.backup_timestamp}`;
+            backupInfo.style.display = '';
+            restoreBtn.style.display = '';
+        } else {
+            backupInfo.style.display = 'none';
+            restoreBtn.style.display = 'none';
+        }
+
+        let html = '';
+
+        if (_isRunning) {
+            html += `<div class="alert alert-info py-2 mb-3">
+                <i class="bi bi-info-circle"></i>
+                <strong>Container is running.</strong> Feature changes take effect after restart.
+            </div>`;
+        }
+        if (!_canWrite) {
+            html += `<div class="alert alert-warning py-2 mb-3">
+                <i class="bi bi-lock"></i>
+                <strong>Read-only connection.</strong> Write actions are disabled.
+            </div>`;
+        }
+
+        html += '<h6 class="text-primary mb-3"><i class="bi bi-toggles"></i> Feature Flags</h6>';
+        html += '<div class="row g-2 mb-3">';
+        for (const f of LXC_FLAGS) {
+            const enabled = _currentFeatures[f.key] === '1';
+            const checkId = `lxcFlag_${f.key}`;
+            html += `<div class="col-sm-6 col-lg-4">
+                <div class="border rounded p-2 d-flex align-items-start gap-2">
+                    <div class="form-check form-switch mt-1">
+                        <input class="form-check-input" type="checkbox" role="switch" id="${checkId}"
+                               ${enabled ? 'checked' : ''} ${!_canWrite ? 'disabled' : ''}
+                               data-flag="${f.key}">
+                    </div>
+                    <div>
+                        <label class="form-check-label fw-semibold mb-0" for="${checkId}">${f.label}</label>
+                        <div class="text-muted small">${f.desc}</div>
+                    </div>
+                </div>
+            </div>`;
+        }
+        html += '</div>';
+
+        if (_canWrite) {
+            html += `<button class="btn btn-primary" onclick="previewLxcFeatures()">
+                <i class="bi bi-eye"></i> Preview &amp; Apply
+            </button>`;
+        }
+
+        body.innerHTML = html;
+    }
+
+    window.previewLxcFeatures = function () {
+        const desired = {};
+        document.querySelectorAll('[data-flag]').forEach(el => {
+            desired[el.dataset.flag] = el.checked ? '1' : '0';
+        });
+
+        // Build diff display
+        const before = Object.entries(_currentFeatures)
+            .filter(([, v]) => v === '1').map(([k]) => `${k}=1`).join(',') || '(none)';
+        const after = Object.entries(desired)
+            .filter(([, v]) => v === '1').map(([k]) => `${k}=1`).join(',') || '(none)';
+
+        const diffEl = document.getElementById('lxcDiffPre');
+        diffEl.textContent = `features: ${before}\n       → ${after}`;
+
+        const warnEl = document.getElementById('lxcRunningWarn');
+        warnEl.style.display = _isRunning ? '' : 'none';
+
+        // Store pending changes for apply
+        window._lxcPendingFeatures = desired;
+
+        const modal = new bootstrap.Modal(document.getElementById('lxcPreviewModal'));
+        modal.show();
+    };
+
+    window.applyLxcFeatures = function () {
+        const applyBtn = document.getElementById('lxcApplyBtn');
+        applyBtn.disabled = true;
+        applyBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Applying…';
+
+        fetch(`/api/vm/${node}/${vmid}/lxc/features`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ features: window._lxcPendingFeatures }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            bootstrap.Modal.getInstance(document.getElementById('lxcPreviewModal')).hide();
+            const body = document.getElementById('lxcAdvancedBody');
+            if (data.success) {
+                body.insertAdjacentHTML('afterbegin',
+                    `<div class="alert alert-success alert-dismissible fade show" role="alert">
+                        <i class="bi bi-check-circle"></i> ${data.message}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>`);
+                loadLxcFeatures();
+            } else {
+                body.insertAdjacentHTML('afterbegin',
+                    `<div class="alert alert-danger alert-dismissible fade show" role="alert">
+                        <i class="bi bi-exclamation-triangle"></i> ${data.error}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>`);
+            }
+        })
+        .catch(() => {
+            bootstrap.Modal.getInstance(document.getElementById('lxcPreviewModal')).hide();
+            document.getElementById('lxcAdvancedBody').insertAdjacentHTML('afterbegin',
+                '<div class="alert alert-danger">Network error while applying features</div>');
+        })
+        .finally(() => {
+            applyBtn.disabled = false;
+            applyBtn.innerHTML = '<i class="bi bi-check2-circle"></i> Apply';
+        });
+    };
+
+    window.restoreLxcConfig = function () {
+        if (!confirm('Restore the pre-write config snapshot?')) return;
+        fetch(`/api/vm/${node}/${vmid}/lxc/config-restore`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+        })
+        .then(r => r.json())
+        .then(data => {
+            const body = document.getElementById('lxcAdvancedBody');
+            const cls = data.success ? 'success' : 'danger';
+            const icon = data.success ? 'check-circle' : 'exclamation-triangle';
+            const msg = data.success ? data.message : data.error;
+            body.insertAdjacentHTML('afterbegin',
+                `<div class="alert alert-${cls} alert-dismissible fade show">
+                    <i class="bi bi-${icon}"></i> ${msg}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>`);
+            if (data.success) loadLxcFeatures();
+        });
+    };
+
+    document.addEventListener('DOMContentLoaded', loadLxcFeatures);
+}());
+{% endif %}
 </script>
 {% endblock %}

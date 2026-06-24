@@ -284,6 +284,8 @@ vnc_sessions = {}  # session_id -> {ticket, port, node, vmid, created_at, proxmo
 vnc_sessions_lock = threading.Lock()
 VNC_SESSION_TIMEOUT = 300  # 5 minutes
 
+lxc_config_backups = {}  # "node:vmid" -> {"config": {...}, "timestamp": "...", "features": "..."}
+
 
 def cleanup_expired_vnc_sessions():
     """Remove expired VNC sessions"""
@@ -648,6 +650,7 @@ def init_proxmox_connections(cluster_id=None):
                 "user": node_config["user"],
                 "verify_ssl": node_config.get("verify_ssl", True),
                 "last_authenticated": datetime.now(),
+                "pve_version": version.get("version", ""),
             }
             # Store auth credentials (token or password)
             if node_config.get("token_name") and node_config.get("token_value"):
@@ -1259,6 +1262,70 @@ def parse_ssh_keys(ssh_keys_string):
 
     return parsed_keys
 
+
+# ─── LXC Advanced Configuration Helpers ──────────────────────────────────────
+
+LXC_FEATURE_FLAGS = [
+    ("nesting", "Container nesting (Docker-in-LXC, systemd, nested LXC)"),
+    ("keyctl", "Key retention service (required by some apps)"),
+    ("fuse", "FUSE filesystem support"),
+    ("mount", "Mount arbitrary filesystems (cifs, nfs, ext4…)"),
+    ("mknod", "Allow mknod in unprivileged containers"),
+]
+
+_LXC_FLAG_ORDER = [name for name, _ in LXC_FEATURE_FLAGS]
+
+
+def parse_lxc_features(features_str):
+    """Parse LXC features string into a flag dict.
+
+    'nesting=1,keyctl=1' → {'nesting': '1', 'keyctl': '1'}
+    """
+    if not features_str:
+        return {}
+    result = {}
+    for part in str(features_str).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" in part:
+            k, v = part.split("=", 1)
+            result[k.strip()] = v.strip()
+        else:
+            result[part] = "1"
+    return result
+
+
+def serialize_lxc_features(flags_dict):
+    """Serialize a flag dict to a PVE features string.
+
+    Only enabled flags (value truthy/1) are included.
+    Known flags are written in canonical order; unknown flags appended.
+    """
+    parts = []
+    seen = set()
+    for k in _LXC_FLAG_ORDER:
+        if k in flags_dict:
+            seen.add(k)
+            if str(flags_dict[k]) in ("1", "true", "True"):
+                parts.append(f"{k}=1")
+    for k, v in flags_dict.items():
+        if k not in seen and str(v) in ("1", "true", "True"):
+            parts.append(f"{k}=1")
+    return ",".join(parts)
+
+
+def check_lxc_write_permission(proxmox, vmid):
+    """Return True if the current connection can write to this container's config."""
+    try:
+        perms = proxmox.access.permissions.get(path=f"/vms/{vmid}")
+        write_privs = {"VM.Config.Options", "VM.Allocate", "VM.Config.Disk", "VM.Config.Network"}
+        return any(perms.get(p) for p in write_privs)
+    except Exception:
+        return True  # Assume write access if permission check is unavailable
+
+
+# ─── End LXC helpers ──────────────────────────────────────────────────────────
 
 # ROUTES - Make sure all routes are defined
 
@@ -4978,6 +5045,126 @@ def api_create_cloud_template(node):
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ─── LXC Advanced Configuration Routes ───────────────────────────────────────
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/features", methods=["GET", "PUT"])
+def api_lxc_features(node, vmid):
+    """Get or update LXC container feature flags (nesting, keyctl, fuse, mount, mknod)."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+        is_running = status.get("status") == "running"
+
+        if request.method == "GET":
+            features_str = config.get("features", "")
+            can_write = check_lxc_write_permission(proxmox, vmid)
+            backup_key = f"{node}:{vmid}"
+            backup = lxc_config_backups.get(backup_key)
+            return jsonify(
+                {
+                    "features": parse_lxc_features(features_str),
+                    "features_raw": features_str,
+                    "running": is_running,
+                    "can_write": can_write,
+                    "has_backup": backup is not None,
+                    "backup_timestamp": backup["timestamp"] if backup else None,
+                }
+            )
+
+        # PUT — update features
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        # Snapshot current config before any write
+        backup_key = f"{node}:{vmid}"
+        lxc_config_backups[backup_key] = {
+            "config": config,
+            "timestamp": datetime.now().isoformat(),
+            "features": config.get("features", ""),
+        }
+
+        new_features_str = serialize_lxc_features(data.get("features", {}))
+        params = {}
+        if new_features_str:
+            params["features"] = new_features_str
+        else:
+            params["delete"] = "features"
+
+        proxmox.nodes(node).lxc(vmid).config.put(**params)
+
+        msg = "Features updated."
+        if is_running:
+            msg += " Restart the container for changes to take effect."
+
+        return jsonify(
+            {
+                "success": True,
+                "message": msg,
+                "features_raw": new_features_str,
+                "restart_required": is_running,
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/config-snapshot", methods=["GET"])
+def api_lxc_config_snapshot(node, vmid):
+    """Return the last config snapshot taken before a write for this container."""
+    backup_key = f"{node}:{vmid}"
+    backup = lxc_config_backups.get(backup_key)
+    if not backup:
+        return jsonify({"error": "No snapshot available"}), 404
+    return jsonify(
+        {
+            "timestamp": backup["timestamp"],
+            "features": backup.get("features", ""),
+        }
+    )
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/config-restore", methods=["POST"])
+def api_lxc_config_restore(node, vmid):
+    """Restore the pre-write config snapshot for an LXC container."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    backup_key = f"{node}:{vmid}"
+    backup = lxc_config_backups.get(backup_key)
+    if not backup:
+        return jsonify({"error": "No snapshot available"}), 404
+
+    try:
+        old_features = backup.get("features", "")
+        if old_features:
+            proxmox.nodes(node).lxc(vmid).config.put(features=old_features)
+        else:
+            proxmox.nodes(node).lxc(vmid).config.put(delete="features")
+
+        del lxc_config_backups[backup_key]
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Config restored to snapshot from {backup['timestamp']}.",
+                "features_raw": old_features,
+            }
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─── End LXC Advanced Routes ──────────────────────────────────────────────────
 
 
 @app.errorhandler(404)
