@@ -549,6 +549,29 @@ def load_cloud_images():
 
 CLOUD_IMAGES = load_cloud_images()
 
+LXC_PROFILES_DEFAULT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "lxc_profiles.json"
+)
+LXC_PROFILES_FILE = os.environ.get("LXC_PROFILES_PATH", LXC_PROFILES_DEFAULT_PATH)
+
+
+def load_lxc_profiles():
+    """Load LXC profile bundles from JSON file (path overridable via LXC_PROFILES_PATH)."""
+    try:
+        with open(LXC_PROFILES_FILE, "r") as f:
+            profiles = json.load(f)
+            print(f"Loaded {len(profiles)} LXC profiles from {LXC_PROFILES_FILE}")
+            return profiles
+    except FileNotFoundError:
+        print(f"Warning: LXC profiles file not found: {LXC_PROFILES_FILE}")
+        return {}
+    except json.JSONDecodeError as e:
+        print(f"Warning: Invalid JSON in LXC profiles file: {e}")
+        return {}
+
+
+LXC_PROFILES = load_lxc_profiles()
+
 # Store Proxmox connections for multiple clusters
 all_clusters = {}  # cluster_id -> cluster config
 current_cluster_id = None
@@ -1519,6 +1542,67 @@ def collect_lxc_idmaps(config):
 
 
 # ─── End LXC idmap Helpers ───────────────────────────────────────────────────
+
+# ─── LXC Profile Helpers ─────────────────────────────────────────────────────
+
+
+def compute_profile_diff(profile, config):
+    """Compute what a profile would add to an existing container config.
+
+    Returns a dict with:
+    - features_to_add: list of 'flag=1' strings not yet enabled
+    - features_already_set: list already enabled
+    - devices_to_add: list of device dicts not yet in config
+    - devices_already_present: list already matching a dev[n] or lxc[n] entry
+    - changes_needed: True if any addition is required
+    - devices_require_stop: True if new devices would be added
+    """
+    current_features = parse_lxc_features(config.get("features", ""))
+    profile_features = profile.get("features", {})
+
+    features_to_add = []
+    features_already_set = []
+    for flag, val in profile_features.items():
+        if str(val) in ("1", "true", "True"):
+            if current_features.get(flag) == "1":
+                features_already_set.append(f"{flag}=1")
+            else:
+                features_to_add.append(f"{flag}=1")
+
+    # Collect existing device paths from dev[n] and lxc.mount.entry
+    existing_paths = set()
+    dev_pattern = re.compile(r'^dev\d+$')
+    lxc_pattern = re.compile(r'^lxc\d+$')
+    for key, val in config.items():
+        if dev_pattern.match(key):
+            parsed = parse_lxc_dev(val)
+            if parsed.get("path"):
+                existing_paths.add(parsed["path"])
+        elif lxc_pattern.match(key) and "lxc.mount.entry" in str(val):
+            # Extract path from: lxc.mount.entry = /dev/... dev/... none ...
+            parts = str(val).split()
+            if len(parts) >= 4:
+                existing_paths.add(parts[2])  # source path
+
+    devices_to_add = []
+    devices_already_present = []
+    for dev in profile.get("devices", []):
+        if dev.get("path") in existing_paths:
+            devices_already_present.append(dev)
+        else:
+            devices_to_add.append(dev)
+
+    return {
+        "features_to_add": features_to_add,
+        "features_already_set": features_already_set,
+        "devices_to_add": devices_to_add,
+        "devices_already_present": devices_already_present,
+        "changes_needed": bool(features_to_add or devices_to_add),
+        "devices_require_stop": bool(devices_to_add),
+    }
+
+
+# ─── End LXC Profile Helpers ─────────────────────────────────────────────────
 
 # ─── End LXC helpers ──────────────────────────────────────────────────────────
 
@@ -5700,6 +5784,119 @@ def api_lxc_idmap_delete(node, vmid, key):
         _backup_lxc_config(node, vmid, config)
         proxmox.nodes(node).lxc(vmid).config.put(delete=key)
         return jsonify({"success": True, "message": f"idmap entry {key} removed."})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lxc-profiles", methods=["GET"])
+def api_lxc_profiles():
+    """Return all available LXC config profiles."""
+    profiles = [
+        {"id": pid, **{k: v for k, v in p.items()}}
+        for pid, p in LXC_PROFILES.items()
+    ]
+    return jsonify({"profiles": profiles})
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/profile-diff/<profile_id>", methods=["GET"])
+def api_lxc_profile_diff(node, vmid, profile_id):
+    """Compute the diff of applying a profile to the current container config."""
+    if profile_id not in LXC_PROFILES:
+        return jsonify({"error": f"Profile '{profile_id}' not found"}), 404
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+        profile = LXC_PROFILES[profile_id]
+        diff = compute_profile_diff(profile, config)
+        diff["running"] = status.get("status") == "running"
+        diff["profile"] = {"id": profile_id, **profile}
+        diff["pve_supports_dev_n"] = get_pve_version_tuple(node) >= (8, 2, 0)
+        return jsonify(diff)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/profile-apply/<profile_id>", methods=["POST"])
+def api_lxc_profile_apply(node, vmid, profile_id):
+    """Apply a profile to an LXC container (additive — never removes existing config)."""
+    if profile_id not in LXC_PROFILES:
+        return jsonify({"error": f"Profile '{profile_id}' not found"}), 404
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+        is_running = status.get("status") == "running"
+        profile = LXC_PROFILES[profile_id]
+        diff = compute_profile_diff(profile, config)
+
+        if not diff["changes_needed"]:
+            return jsonify(
+                {"success": True, "message": "Profile already fully applied — nothing to change."}
+            )
+
+        if is_running and diff["devices_require_stop"]:
+            return jsonify(
+                {
+                    "error": "Container must be stopped before applying device passthrough from this profile.",
+                    "stop_required": True,
+                }
+            ), 409
+
+        _backup_lxc_config(node, vmid, config)
+
+        params = {}
+        applied = []
+
+        # Merge features (additive)
+        if diff["features_to_add"]:
+            current_features = parse_lxc_features(config.get("features", ""))
+            for f in diff["features_to_add"]:
+                k = f.split("=")[0]
+                current_features[k] = "1"
+            params["features"] = serialize_lxc_features(current_features)
+            applied.append(f"features: {', '.join(diff['features_to_add'])}")
+
+        # Add devices (additive, PVE 8.2+ only)
+        pve_ver = get_pve_version_tuple(node)
+        if diff["devices_to_add"]:
+            if pve_ver < (8, 2, 0):
+                return jsonify(
+                    {"error": "Device passthrough requires PVE 8.2+ (dev[n] API)."}
+                ), 400
+            working_config = dict(config)
+            working_config.update(params)
+            for dev in diff["devices_to_add"]:
+                idx = _next_key_index(working_config, "dev")
+                dev_val = serialize_lxc_dev(
+                    {
+                        "path": dev["path"],
+                        "uid": dev.get("uid") or None,
+                        "gid": dev.get("gid") or None,
+                    }
+                )
+                key = f"dev{idx}"
+                params[key] = dev_val
+                working_config[key] = dev_val
+                applied.append(f"{key}: {dev_val}")
+
+        if params:
+            proxmox.nodes(node).lxc(vmid).config.put(**params)
+
+        msg = f"Profile '{profile['name']}' applied: {'; '.join(applied)}."
+        if is_running and diff["features_to_add"]:
+            msg += " Restart to activate feature changes."
+
+        return jsonify({"success": True, "message": msg, "applied": applied})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500

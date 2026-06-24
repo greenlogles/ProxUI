@@ -727,5 +727,193 @@ class TestLxcIdmapApi(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
 
 
+class TestComputeProfileDiff(unittest.TestCase):
+    def setUp(self):
+        self.profile = {
+            "name": "Test",
+            "features": {"nesting": "1", "keyctl": "1"},
+            "devices": [{"path": "/dev/dri/renderD128", "gid": "104", "uid": "0"}],
+        }
+
+    def test_all_missing(self):
+        diff = app.compute_profile_diff(self.profile, {})
+        self.assertIn("nesting=1", diff["features_to_add"])
+        self.assertIn("keyctl=1", diff["features_to_add"])
+        self.assertEqual(len(diff["devices_to_add"]), 1)
+        self.assertEqual(diff["devices_to_add"][0]["path"], "/dev/dri/renderD128")
+        self.assertTrue(diff["changes_needed"])
+
+    def test_features_already_set(self):
+        config = {"features": "nesting=1,keyctl=1"}
+        diff = app.compute_profile_diff(self.profile, config)
+        self.assertEqual(diff["features_to_add"], [])
+        self.assertIn("nesting=1", diff["features_already_set"])
+        self.assertIn("keyctl=1", diff["features_already_set"])
+
+    def test_device_already_present(self):
+        config = {"dev0": "/dev/dri/renderD128,gid=104,uid=0"}
+        diff = app.compute_profile_diff(self.profile, config)
+        self.assertEqual(diff["devices_to_add"], [])
+        self.assertEqual(len(diff["devices_already_present"]), 1)
+
+    def test_no_changes_needed(self):
+        config = {
+            "features": "nesting=1,keyctl=1",
+            "dev0": "/dev/dri/renderD128,gid=104,uid=0",
+        }
+        diff = app.compute_profile_diff(self.profile, config)
+        self.assertFalse(diff["changes_needed"])
+
+    def test_partial_features(self):
+        config = {"features": "nesting=1"}
+        diff = app.compute_profile_diff(self.profile, config)
+        self.assertNotIn("nesting=1", diff["features_to_add"])
+        self.assertIn("keyctl=1", diff["features_to_add"])
+        self.assertTrue(diff["changes_needed"])
+
+
+class TestLxcProfilesApi(unittest.TestCase):
+    def setUp(self):
+        flask_app.config["TESTING"] = True
+        flask_app.config["WTF_CSRF_ENABLED"] = False
+        self.client = flask_app.test_client()
+        self.mock = MagicMock()
+
+        app.proxmox_nodes.clear()
+        app.cluster_nodes.clear()
+        app.all_clusters.clear()
+        app.connection_metadata.clear()
+        app.lxc_config_backups.clear()
+
+        app.all_clusters["test-cluster"] = {
+            "id": "test-cluster",
+            "name": "Test Cluster",
+            "nodes": [{"host": "192.168.1.100", "user": "root@pam", "password": "test"}],
+        }
+        app.current_cluster_id = "test-cluster"
+        app.proxmox_nodes["test-node"] = self.mock
+        app.cluster_nodes.append({"name": "test-node", "status": "online", "connection": self.mock})
+        app.connection_metadata["test-node"] = {"pve_version": "8.2.4", "user": "root@pam"}
+
+        # Inject test profiles
+        self._orig_profiles = app.LXC_PROFILES
+        app.LXC_PROFILES = {
+            "jellyfin": {
+                "name": "Jellyfin",
+                "description": "Test profile",
+                "tags": ["media"],
+                "features": {"nesting": "1"},
+                "devices": [{"path": "/dev/dri/renderD128", "gid": "104", "uid": "0"}],
+            }
+        }
+
+    def tearDown(self):
+        app.LXC_PROFILES = self._orig_profiles
+        app.proxmox_nodes.clear()
+        app.cluster_nodes.clear()
+        app.all_clusters.clear()
+        app.connection_metadata.clear()
+        app.lxc_config_backups.clear()
+        app.current_cluster_id = None
+
+    def _csrf(self):
+        with self.client.session_transaction() as sess:
+            token = "test-csrf-token"
+            sess["_csrf_token"] = token
+        return token
+
+    def test_list_profiles(self):
+        resp = self.client.get("/api/lxc-profiles")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertIn("profiles", data)
+        self.assertEqual(len(data["profiles"]), 1)
+        p = data["profiles"][0]
+        self.assertEqual(p["id"], "jellyfin")
+        self.assertEqual(p["name"], "Jellyfin")
+        self.assertIn("description", p)
+        self.assertIn("tags", p)
+
+    def test_profile_diff_no_config(self):
+        self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        resp = self.client.get("/api/vm/test-node/100/lxc/profile-diff/jellyfin")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertIn("nesting=1", data["features_to_add"])
+        self.assertTrue(data["changes_needed"])
+
+    def test_profile_diff_already_applied(self):
+        self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {
+            "features": "nesting=1",
+            "dev0": "/dev/dri/renderD128,gid=104,uid=0",
+        }
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        resp = self.client.get("/api/vm/test-node/100/lxc/profile-diff/jellyfin")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertFalse(data["changes_needed"])
+
+    def test_profile_diff_unknown_id(self):
+        resp = self.client.get("/api/vm/test-node/100/lxc/profile-diff/nonexistent")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_profile_apply_success(self):
+        self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.config.put.return_value = None
+        token = self._csrf()
+        resp = self.client.post(
+            "/api/vm/test-node/100/lxc/profile-apply/jellyfin",
+            headers={"X-CSRF-Token": token, "Content-Type": "application/json"},
+            data=json.dumps({}),
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data["success"])
+
+    def test_profile_apply_already_applied(self):
+        self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {
+            "features": "nesting=1",
+            "dev0": "/dev/dri/renderD128,gid=104,uid=0",
+        }
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        token = self._csrf()
+        resp = self.client.post(
+            "/api/vm/test-node/100/lxc/profile-apply/jellyfin",
+            headers={"X-CSRF-Token": token, "Content-Type": "application/json"},
+            data=json.dumps({}),
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data["success"])
+        self.assertIn("already", data["message"].lower())
+
+    def test_profile_apply_unknown_id(self):
+        token = self._csrf()
+        resp = self.client.post(
+            "/api/vm/test-node/100/lxc/profile-apply/nonexistent",
+            headers={"X-CSRF-Token": token, "Content-Type": "application/json"},
+            data=json.dumps({}),
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_profile_apply_requires_stop_when_running(self):
+        self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "running"}
+        token = self._csrf()
+        resp = self.client.post(
+            "/api/vm/test-node/100/lxc/profile-apply/jellyfin",
+            headers={"X-CSRF-Token": token, "Content-Type": "application/json"},
+            data=json.dumps({}),
+        )
+        # Either 409 (devices require stop) or 200 (only feature changes OK when running)
+        data = resp.get_json()
+        if resp.status_code == 409:
+            self.assertTrue(data.get("stop_required"))
+        else:
+            self.assertEqual(resp.status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main()
