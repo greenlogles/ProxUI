@@ -3,1992 +3,824 @@
 {% block title %}ISOs & Templates - Proxmox Manager{% endblock %}
 
 {% block content %}
-<div class="row">
+<div x-data="isosManager()">
+
+  <div class="row">
     <div class="col-12">
-        <h1><i class="bi bi-disc"></i> ISOs & Templates</h1>
-        <p class="text-muted">Manage ISO images, VM templates, and container templates across all cluster nodes.</p>
+      <h1><i class="bi bi-disc"></i> ISOs & Templates</h1>
+      <p class="text-muted">Manage ISO images, VM templates, and container templates across all cluster nodes.</p>
     </div>
-</div>
+  </div>
 
-<!-- Node Tabs -->
-<ul class="nav nav-tabs mb-4" id="nodeTab" role="tablist">
-    <!-- Node tabs will be populated here -->
-</ul>
+  <!-- Loading state -->
+  <div x-show="loading" class="text-center py-5">
+    <div class="spinner-border text-primary" role="status"></div>
+    <div class="mt-2 text-muted">Loading nodes...</div>
+  </div>
 
-<div class="tab-content" id="nodeTabContent">
-    <!-- Node content will be populated here -->
-</div>
+  <!-- No nodes available -->
+  <div x-show="!loading && nodes.length === 0" class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle"></i> No online nodes available.
+  </div>
 
-<!-- Download ISO Modal -->
-<div class="modal fade" id="downloadModal" tabindex="-1">
+  <!-- Node Tabs -->
+  <ul class="nav nav-tabs mb-4" id="nodeTab" role="tablist" x-show="!loading && nodes.length > 0">
+    <template x-for="(node, idx) in nodes" :key="node.name">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" :class="idx === 0 && 'active'"
+                :id="'node-tab-' + node.name"
+                data-bs-toggle="tab"
+                :data-bs-target="'#node-content-' + node.name"
+                type="button" role="tab"
+                :aria-controls="'node-content-' + node.name"
+                :aria-selected="String(idx === 0)">
+          <i class="bi bi-server"></i> <span x-text="node.name"></span>
+        </button>
+      </li>
+    </template>
+  </ul>
+
+  <div class="tab-content" id="nodeTabContent" x-show="!loading && nodes.length > 0">
+    <template x-for="(node, idx) in nodes" :key="node.name">
+      <div class="tab-pane fade"
+           :class="idx === 0 ? 'show active' : ''"
+           :id="'node-content-' + node.name"
+           role="tabpanel"
+           :aria-labelledby="'node-tab-' + node.name">
+        <div class="row">
+
+          <!-- ISO Images -->
+          <div class="col-12 mb-4">
+            <div class="card">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-disc"></i> ISO Images</h5>
+                <button class="btn btn-success btn-sm" @click="openDownload(node.name)">
+                  <i class="bi bi-download"></i> Download from URL
+                </button>
+              </div>
+              <div class="card-body">
+                <div x-show="perNode[node.name] && perNode[node.name].loadingIsos" class="text-center py-3">
+                  <div class="spinner-border spinner-border-sm" role="status"></div>
+                  Loading ISO images...
+                </div>
+                <div x-show="perNode[node.name] && perNode[node.name].isoError"
+                     class="alert alert-danger"
+                     x-text="'Error: ' + (perNode[node.name] && perNode[node.name].isoError)">
+                </div>
+                <div x-show="perNode[node.name] && !perNode[node.name].loadingIsos && !perNode[node.name].isoError && perNode[node.name].isos.length === 0"
+                     class="text-muted">
+                  No ISO images found.
+                </div>
+                <div x-show="perNode[node.name] && !perNode[node.name].loadingIsos && perNode[node.name].isos.length > 0"
+                     class="table-responsive">
+                  <table class="table table-sm">
+                    <thead>
+                      <tr><th>Name</th><th>Storage</th><th>Size</th><th>Format</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="iso in (perNode[node.name] ? perNode[node.name].isos : [])" :key="iso.volid">
+                        <tr>
+                          <td><strong x-text="isoFilename(iso.volid)"></strong></td>
+                          <td><span class="badge bg-secondary" x-text="isoStorage(iso.volid)"></span></td>
+                          <td x-text="isoSizeGB(iso) + ' GB'"></td>
+                          <td x-text="iso.format || 'iso'"></td>
+                          <td>
+                            <button class="btn btn-sm btn-outline-danger"
+                                    @click="deleteIso(node.name, iso.volid)"
+                                    title="Delete ISO">
+                              <i class="bi bi-trash"></i>
+                            </button>
+                          </td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- VM Templates -->
+          <div class="col-12 mb-4">
+            <div class="card">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-pc-display"></i> VM Templates</h5>
+                <button class="btn btn-success btn-sm" @click="openCloud(node.name)">
+                  <i class="bi bi-cloud-download"></i> Create Cloud Template
+                </button>
+              </div>
+              <div class="card-body">
+                <div x-show="perNode[node.name] && perNode[node.name].loadingTemplates" class="text-center py-3">
+                  <div class="spinner-border spinner-border-sm" role="status"></div>
+                  Loading VM templates...
+                </div>
+                <div x-show="perNode[node.name] && perNode[node.name].templateError"
+                     class="alert alert-danger"
+                     x-text="'Error: ' + (perNode[node.name] && perNode[node.name].templateError)">
+                </div>
+                <div x-show="perNode[node.name] && !perNode[node.name].loadingTemplates && !perNode[node.name].templateError && perNode[node.name].vmTemplates.length === 0"
+                     class="text-muted">
+                  No VM templates found.
+                </div>
+                <div x-show="perNode[node.name] && !perNode[node.name].loadingTemplates && perNode[node.name].vmTemplates.length > 0"
+                     class="table-responsive">
+                  <table class="table table-sm">
+                    <thead>
+                      <tr><th>ID</th><th>Name</th><th>Memory</th><th>CPU</th><th>Status</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="vm in (perNode[node.name] ? perNode[node.name].vmTemplates : [])" :key="vm.vmid">
+                        <tr>
+                          <td><strong x-text="vm.vmid"></strong></td>
+                          <td x-text="vm.name || 'Unnamed'"></td>
+                          <td x-text="vmMemGB(vm) + ' GB'"></td>
+                          <td x-text="vmCpuInfo(vm)"></td>
+                          <td><span class="badge bg-info">Template</span></td>
+                          <td>
+                            <div class="btn-group btn-group-sm">
+                              <a :href="'/vm/' + node.name + '/' + vm.vmid + '/clone'"
+                                 class="btn btn-outline-primary" title="Clone">
+                                <i class="bi bi-files"></i>
+                              </a>
+                              <button class="btn btn-outline-danger"
+                                      @click="deleteVmTemplate(node.name, vm.vmid, vm.name || 'Unnamed')"
+                                      title="Delete Template">
+                                <i class="bi bi-trash"></i>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Container Templates -->
+          <div class="col-12 mb-4">
+            <div class="card">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-box"></i> Container Templates</h5>
+                <button class="btn btn-success btn-sm" @click="openLxcImport(node.name)">
+                  <i class="bi bi-download"></i> Import Template
+                </button>
+              </div>
+              <div class="card-body">
+                <div x-show="perNode[node.name] && perNode[node.name].loadingTemplates" class="text-center py-3">
+                  <div class="spinner-border spinner-border-sm" role="status"></div>
+                  Loading container templates...
+                </div>
+                <div x-show="perNode[node.name] && !perNode[node.name].loadingTemplates && !perNode[node.name].templateError && perNode[node.name].lxcTemplates.length === 0"
+                     class="text-muted">
+                  No container templates found.
+                </div>
+                <div x-show="perNode[node.name] && !perNode[node.name].loadingTemplates && perNode[node.name].lxcTemplates.length > 0"
+                     class="table-responsive">
+                  <table class="table table-sm">
+                    <thead>
+                      <tr><th>Template</th><th>Storage</th><th>Size</th><th>Filename</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="t in (perNode[node.name] ? perNode[node.name].lxcTemplates : [])" :key="t.volid">
+                        <tr>
+                          <td><strong x-text="lxcOsInfo(t)"></strong></td>
+                          <td><span class="badge bg-secondary" x-text="isoStorage(t.volid)"></span></td>
+                          <td x-text="lxcSizeGB(t) + ' GB'"></td>
+                          <td><small class="text-muted" x-text="isoFilename(t.volid)"></small></td>
+                          <td>
+                            <div class="btn-group btn-group-sm">
+                              <button class="btn btn-outline-success"
+                                      @click="openCreateCt(node.name, t.volid)"
+                                      title="Create Container">
+                                <i class="bi bi-plus-circle"></i>
+                              </button>
+                              <button class="btn btn-outline-danger"
+                                      @click="deleteLxcTemplate(node.name, t.volid)"
+                                      title="Delete Template">
+                                <i class="bi bi-trash"></i>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div><!-- /row -->
+      </div><!-- /tab-pane -->
+    </template>
+  </div><!-- /tab-content -->
+
+
+  <!-- ── Download ISO Modal ────────────────────────────────────────────── -->
+  <div class="modal fade" tabindex="-1" x-ref="downloadModal">
     <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-download"></i> Download ISO from URL</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <form id="downloadForm">
-                    <div class="mb-3">
-                        <label for="downloadUrl" class="form-label">ISO URL <span class="text-danger">*</span></label>
-                        <input type="url" class="form-control" id="downloadUrl" placeholder="https://example.com/image.iso" required>
-                        <div class="form-text">Enter the direct URL to download the ISO image</div>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <label for="downloadFilename" class="form-label">Filename</label>
-                        <input type="text" class="form-control" id="downloadFilename" placeholder="Auto-detect from URL">
-                        <div class="form-text">Leave empty to auto-detect from URL</div>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <label for="downloadStorage" class="form-label">Storage <span class="text-danger">*</span></label>
-                        <select class="form-select" id="downloadStorage" required>
-                            <option value="">Loading storages...</option>
-                        </select>
-                        <div class="form-text">Select storage that supports ISO content</div>
-                    </div>
-                    
-                    <div id="downloadProgress" class="d-none">
-                        <div class="alert alert-info">
-                            <i class="bi bi-download"></i> Download started. Check the Tasks page for progress.
-                        </div>
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="startDownloadBtn" onclick="startDownload()">
-                    <i class="bi bi-download"></i> Start Download
-                </button>
-            </div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-download"></i> Download ISO from URL</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
         </div>
-    </div>
-</div>
-
-<!-- Create Cloud Template Modal -->
-<div class="modal fade" id="cloudTemplateModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-cloud-download"></i> Create Cloud VM Template</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">ISO URL <span class="text-danger">*</span></label>
+            <input type="url" class="form-control" x-model="dl.url"
+                   @change="dlAutofillFilename()"
+                   placeholder="https://example.com/image.iso">
+            <div class="form-text">Enter the direct URL to download the ISO image</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Filename</label>
+            <input type="text" class="form-control" x-model="dl.filename"
+                   placeholder="Auto-detect from URL">
+            <div class="form-text">Leave empty to auto-detect from URL</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Storage <span class="text-danger">*</span></label>
+            <div x-show="dl.loadingStorages" class="text-muted">
+              <span class="spinner-border spinner-border-sm"></span> Loading storages...
             </div>
-            <div class="modal-body">
-                <form id="cloudTemplateForm">
-                    <!-- Cloud Image Selection -->
-                    <div class="mb-4">
-                        <h6 class="text-primary"><i class="bi bi-image"></i> Cloud Image</h6>
-                        <div class="mb-3">
-                            <label for="cloudImage" class="form-label">Select Image <span class="text-danger">*</span></label>
-                            <select class="form-select" id="cloudImage" required>
-                                <option value="">Loading images...</option>
-                            </select>
-                            <div class="form-text" id="cloudImageDesc"></div>
-                        </div>
-                    </div>
+            <select class="form-select" x-model="dl.storage" x-show="!dl.loadingStorages">
+              <option value="">Select storage...</option>
+              <template x-for="s in dl.storages" :key="s.storage">
+                <option :value="s.storage" x-text="storageLabel(s)"></option>
+              </template>
+            </select>
+            <div class="form-text">Select storage that supports ISO content</div>
+          </div>
 
-                    <!-- VM Configuration -->
-                    <div class="mb-4">
-                        <h6 class="text-primary"><i class="bi bi-gear"></i> VM Configuration</h6>
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <label for="templateName" class="form-label">Template Name</label>
-                                <input type="text" class="form-control" id="templateName" placeholder="Auto-generated from image">
-                            </div>
-                            <div class="col-md-6 mb-3">
-                                <label for="templateVmid" class="form-label">VM ID</label>
-                                <input type="number" class="form-control" id="templateVmid" placeholder="Auto (next available)">
-                                <div id="templateVmid-feedback" class="form-text"></div>
-                            </div>
-                        </div>
-                        <div class="row">
-                            <div class="col-md-4 mb-3">
-                                <label for="templateCores" class="form-label">CPU Cores</label>
-                                <input type="number" class="form-control" id="templateCores" value="2" min="1" max="128">
-                            </div>
-                            <div class="col-md-4 mb-3">
-                                <label for="templateMemory" class="form-label">Memory (MB)</label>
-                                <input type="number" class="form-control" id="templateMemory" value="2048" min="512" step="512">
-                            </div>
-                            <div class="col-md-4 mb-3">
-                                <label for="templateDiskSize" class="form-label">Disk Size</label>
-                                <input type="text" class="form-control" id="templateDiskSize" value="10G" placeholder="10G">
-                            </div>
-                        </div>
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <label for="templateStorage" class="form-label">Storage <span class="text-danger">*</span></label>
-                                <select class="form-select" id="templateStorage" required>
-                                    <option value="">Loading storages...</option>
-                                </select>
-                            </div>
-                            <div class="col-md-6 mb-3">
-                                <label for="templateBridge" class="form-label">Network Bridge</label>
-                                <select class="form-select" id="templateBridge">
-                                    <option value="">Loading bridges...</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Cloud-Init Configuration -->
-                    <div class="mb-4">
-                        <h6 class="text-primary"><i class="bi bi-cloud"></i> Cloud-Init Configuration</h6>
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <label for="ciUser" class="form-label">Default User</label>
-                                <input type="text" class="form-control" id="ciUser" placeholder="e.g., ubuntu, debian">
-                                <div class="form-text">Leave empty to use image default</div>
-                            </div>
-                            <div class="col-md-6 mb-3">
-                                <label for="ciPassword" class="form-label">Password</label>
-                                <input type="password" class="form-control" id="ciPassword" placeholder="Optional">
-                            </div>
-                        </div>
-                        <div class="mb-3">
-                            <label for="ciSshKeys" class="form-label">SSH Public Keys</label>
-                            <textarea class="form-control" id="ciSshKeys" rows="3" placeholder="ssh-rsa AAAA... or ssh-ed25519 AAAA..."></textarea>
-                            <div class="form-text">One key per line. Recommended over password authentication.</div>
-                        </div>
-                        <div class="mb-3">
-                            <label for="ciIpConfig" class="form-label">IP Configuration</label>
-                            <input type="text" class="form-control" id="ciIpConfig" value="ip=dhcp,ip6=auto">
-                            <div class="form-text">Use ip=dhcp for DHCP or ip=x.x.x.x/24,gw=x.x.x.x for static</div>
-                        </div>
-                    </div>
-
-                    <!-- Progress/Result -->
-                    <div id="templateProgress" class="d-none">
-                        <div class="alert alert-info" id="templateProgressMsg">
-                            <i class="bi bi-hourglass-split"></i> Creating template...
-                        </div>
-                    </div>
-                    <div id="templateResult" class="d-none"></div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="createTemplateBtn" onclick="createCloudTemplate()">
-                    <i class="bi bi-plus-circle"></i> Create Template
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Import LXC Template Modal -->
-<div class="modal fade" id="lxcTemplateModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-download"></i> Import Container Template</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <!-- Source Tabs -->
-                <ul class="nav nav-tabs mb-3" id="lxcSourceTabs" role="tablist">
-                    <li class="nav-item" role="presentation">
-                        <button class="nav-link active" id="proxmox-tab" data-bs-toggle="tab" data-bs-target="#proxmox-source" type="button" role="tab">
-                            <i class="bi bi-server"></i> Proxmox Templates
-                        </button>
-                    </li>
-                    <li class="nav-item" role="presentation">
-                        <button class="nav-link" id="url-tab" data-bs-toggle="tab" data-bs-target="#url-source" type="button" role="tab">
-                            <i class="bi bi-link-45deg"></i> URL
-                        </button>
-                    </li>
-                    <li class="nav-item" role="presentation">
-                        <button class="nav-link" id="oci-tab" data-bs-toggle="tab" data-bs-target="#oci-source" type="button" role="tab">
-                            <i class="bi bi-box-seam"></i> OCI Registry
-                        </button>
-                    </li>
-                </ul>
-
-                <div class="tab-content" id="lxcSourceTabContent">
-                    <!-- Proxmox Templates -->
-                    <div class="tab-pane fade show active" id="proxmox-source" role="tabpanel">
-                        <form id="proxmoxTemplateForm">
-                            <div class="mb-3">
-                                <label for="lxcStorage" class="form-label">Storage <span class="text-danger">*</span></label>
-                                <select class="form-select" id="lxcStorage" required>
-                                    <option value="">Loading storages...</option>
-                                </select>
-                                <div class="form-text">Select storage that supports container templates</div>
-                            </div>
-
-                            <div class="mb-3">
-                                <label for="lxcSection" class="form-label">Category</label>
-                                <select class="form-select" id="lxcSection" onchange="filterTemplatesBySection()">
-                                    <option value="">All Categories</option>
-                                </select>
-                            </div>
-
-                            <div class="mb-3">
-                                <label for="lxcTemplate" class="form-label">Template <span class="text-danger">*</span></label>
-                                <select class="form-select" id="lxcTemplate" required>
-                                    <option value="">Loading templates...</option>
-                                </select>
-                                <div class="form-text" id="lxcTemplateDesc"></div>
-                            </div>
-                        </form>
-                    </div>
-
-                    <!-- URL Source -->
-                    <div class="tab-pane fade" id="url-source" role="tabpanel">
-                        <form id="urlTemplateForm">
-                            <div class="mb-3">
-                                <label for="lxcUrlStorage" class="form-label">Storage <span class="text-danger">*</span></label>
-                                <select class="form-select" id="lxcUrlStorage" required>
-                                    <option value="">Loading storages...</option>
-                                </select>
-                            </div>
-
-                            <div class="mb-3">
-                                <label for="lxcUrl" class="form-label">Template URL <span class="text-danger">*</span></label>
-                                <input type="url" class="form-control" id="lxcUrl" placeholder="https://example.com/template.tar.xz" required>
-                                <div class="form-text">Direct URL to a container template (.tar.xz, .tar.gz, or .tar.zst)</div>
-                            </div>
-
-                            <div class="mb-3">
-                                <label for="lxcUrlFilename" class="form-label">Filename</label>
-                                <input type="text" class="form-control" id="lxcUrlFilename" placeholder="Auto-detect from URL">
-                                <div class="form-text">Leave empty to auto-detect from URL</div>
-                            </div>
-                        </form>
-                    </div>
-
-                    <!-- OCI Registry -->
-                    <div class="tab-pane fade" id="oci-source" role="tabpanel">
-                        <form id="ociTemplateForm">
-                            <div class="mb-3">
-                                <label for="lxcOciStorage" class="form-label">Storage <span class="text-danger">*</span></label>
-                                <select class="form-select" id="lxcOciStorage" required>
-                                    <option value="">Loading storages...</option>
-                                </select>
-                            </div>
-
-                            <div class="mb-3">
-                                <label for="lxcOciImage" class="form-label">OCI Image <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" id="lxcOciImage" placeholder="docker.io/library/alpine:latest" required>
-                                <div class="form-text">
-                                    OCI image reference (e.g., docker.io/library/alpine:latest, ghcr.io/user/image:tag)
-                                </div>
-                            </div>
-
-                            <div class="alert alert-info">
-                                <i class="bi bi-info-circle"></i> <strong>Note:</strong> OCI registry support requires Proxmox VE 8.0+. The image will be converted to an LXC template.
-                            </div>
-                        </form>
-                    </div>
+          <!-- Progress feedback -->
+          <div x-show="dl.showProgress" class="mt-3">
+            <template x-if="dl.showProgress && !dl.manualUrl">
+              <div class="alert alert-info">
+                <i class="bi bi-download"></i> Download started. Check the Jobs panel for progress.
+              </div>
+            </template>
+            <template x-if="dl.showProgress && dl.manualUrl">
+              <div class="alert alert-warning">
+                <h6><i class="bi bi-exclamation-triangle"></i> Manual Download Required</h6>
+                <p class="mb-2">This URL requires manual download due to redirects or authentication.</p>
+                <div class="d-flex gap-2">
+                  <button type="button" class="btn btn-sm btn-secondary" @click="copyToClipboard(dl.manualUrl)">
+                    <i class="bi bi-clipboard"></i> Copy URL
+                  </button>
                 </div>
-
-                <!-- Progress/Result -->
-                <div id="lxcImportProgress" class="d-none mt-3">
-                    <div class="alert alert-info">
-                        <i class="bi bi-hourglass-split"></i> <span id="lxcImportProgressMsg">Starting download...</span>
-                    </div>
-                </div>
-                <div id="lxcImportResult" class="d-none mt-3"></div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="importLxcBtn" onclick="importLXCTemplate()">
-                    <i class="bi bi-download"></i> Import Template
-                </button>
-            </div>
+              </div>
+            </template>
+          </div>
         </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary" @click="startDownload()" :disabled="dl.busy">
+            <span x-show="dl.busy" class="spinner-border spinner-border-sm"></span>
+            <span x-show="!dl.busy"><i class="bi bi-download"></i></span>
+            <span x-text="dl.busy ? ' Starting...' : ' Start Download'"></span>
+          </button>
+        </div>
+      </div>
     </div>
-</div>
+  </div>
 
-<!-- Create Container Modal -->
-<div class="modal fade" id="createContainerModal" tabindex="-1">
+
+  <!-- ── Cloud Template Modal ──────────────────────────────────────────── -->
+  <div class="modal fade" tabindex="-1" x-ref="cloudTemplateModal">
     <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-plus-circle"></i> Create Container</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <form id="createContainerForm">
-                    <!-- Template Info -->
-                    <div class="alert alert-info mb-3">
-                        <i class="bi bi-box"></i> Template: <strong id="containerTemplateInfo">-</strong>
-                    </div>
-
-                    <!-- Basic Settings -->
-                    <div class="row mb-3">
-                        <div class="col-md-6">
-                            <label for="containerVmid" class="form-label">Container ID</label>
-                            <input type="number" class="form-control" id="containerVmid" placeholder="Auto (next available)">
-                            <div id="containerVmid-feedback" class="form-text">Leave empty for next available ID</div>
-                        </div>
-                        <div class="col-md-6">
-                            <label for="containerHostname" class="form-label">Hostname <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" id="containerHostname" required pattern="[a-zA-Z0-9\-]+" placeholder="my-container">
-                        </div>
-                    </div>
-
-                    <!-- Resources -->
-                    <div class="row mb-3">
-                        <div class="col-md-4">
-                            <label for="containerCores" class="form-label">CPU Cores</label>
-                            <input type="number" class="form-control" id="containerCores" value="1" min="1" max="128">
-                        </div>
-                        <div class="col-md-4">
-                            <label for="containerMemory" class="form-label">Memory (MB)</label>
-                            <input type="number" class="form-control" id="containerMemory" value="512" min="16" step="128">
-                        </div>
-                        <div class="col-md-4">
-                            <label for="containerSwap" class="form-label">Swap (MB)</label>
-                            <input type="number" class="form-control" id="containerSwap" value="512" min="0" step="128">
-                        </div>
-                    </div>
-
-                    <!-- Storage -->
-                    <div class="row mb-3">
-                        <div class="col-md-6">
-                            <label for="containerStorage" class="form-label">Root Disk Storage <span class="text-danger">*</span></label>
-                            <select class="form-select" id="containerStorage" required>
-                                <option value="">Loading storages...</option>
-                            </select>
-                        </div>
-                        <div class="col-md-6">
-                            <label for="containerDiskSize" class="form-label">Root Disk Size (GB)</label>
-                            <input type="number" class="form-control" id="containerDiskSize" value="8" min="1">
-                        </div>
-                    </div>
-
-                    <!-- Network -->
-                    <div class="row mb-3">
-                        <div class="col-md-6">
-                            <label for="containerBridge" class="form-label">Network Bridge</label>
-                            <select class="form-select" id="containerBridge">
-                                <option value="">Loading bridges...</option>
-                            </select>
-                        </div>
-                        <div class="col-md-6">
-                            <label for="containerIpConfig" class="form-label">IP Configuration</label>
-                            <select class="form-select" id="containerIpConfig" onchange="toggleStaticIp()">
-                                <option value="dhcp">DHCP</option>
-                                <option value="static">Static IP</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <!-- Static IP fields (hidden by default) -->
-                    <div class="row mb-3 d-none" id="staticIpFields">
-                        <div class="col-md-6">
-                            <label for="containerIp" class="form-label">IP Address (CIDR)</label>
-                            <input type="text" class="form-control" id="containerIp" placeholder="192.168.1.100/24">
-                        </div>
-                        <div class="col-md-6">
-                            <label for="containerGateway" class="form-label">Gateway</label>
-                            <input type="text" class="form-control" id="containerGateway" placeholder="192.168.1.1">
-                        </div>
-                    </div>
-
-                    <!-- Password -->
-                    <div class="row mb-3">
-                        <div class="col-md-6">
-                            <label for="containerPassword" class="form-label">Root Password</label>
-                            <input type="password" class="form-control" id="containerPassword" placeholder="Leave empty for no password">
-                        </div>
-                        <div class="col-md-6">
-                            <label for="containerSshKeys" class="form-label">SSH Public Key</label>
-                            <textarea class="form-control" id="containerSshKeys" rows="2" placeholder="ssh-rsa AAAA... or ssh-ed25519 AAAA..."></textarea>
-                        </div>
-                    </div>
-
-                    <!-- Options -->
-                    <div class="row mb-3">
-                        <div class="col-md-6">
-                            <div class="form-check">
-                                <input type="checkbox" class="form-check-input" id="containerStart" checked>
-                                <label class="form-check-label" for="containerStart">Start after created</label>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="form-check">
-                                <input type="checkbox" class="form-check-input" id="containerUnprivileged" checked>
-                                <label class="form-check-label" for="containerUnprivileged">Unprivileged container</label>
-                            </div>
-                        </div>
-                    </div>
-                </form>
-
-                <!-- Progress/Result -->
-                <div id="createContainerProgress" class="d-none">
-                    <div class="alert alert-info">
-                        <i class="bi bi-hourglass-split"></i> <span id="createContainerProgressMsg">Creating container...</span>
-                    </div>
-                </div>
-                <div id="createContainerResult" class="d-none"></div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-success" id="createContainerBtn" onclick="createContainer()">
-                    <i class="bi bi-plus-circle"></i> Create Container
-                </button>
-            </div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-cloud-download"></i> Create Cloud VM Template</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
         </div>
-    </div>
-</div>
+        <div class="modal-body">
 
-<!-- Loading overlay -->
-<div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center"
-     style="background-color: rgba(0,0,0,0.5); z-index: 9999;">
-    <div class="bg-white rounded p-4 text-center">
-        <div class="spinner-border text-primary mb-2" role="status"></div>
-        <div>Loading data...</div>
+          <!-- Cloud Image Selection -->
+          <div class="mb-4">
+            <h6 class="text-primary"><i class="bi bi-image"></i> Cloud Image</h6>
+            <div class="mb-3">
+              <label class="form-label">Select Image <span class="text-danger">*</span></label>
+              <select class="form-select" x-model="cloud.image" @change="onCloudImageChange()">
+                <option value="">Select a cloud image...</option>
+                <template x-for="group in cloudImageGroups" :key="group.label">
+                  <optgroup :label="group.label">
+                    <template x-for="img in group.images" :key="img.id">
+                      <option :value="img.id" x-text="img.name"></option>
+                    </template>
+                  </optgroup>
+                </template>
+              </select>
+              <div class="form-text">
+                <template x-if="cloudSelectedImage">
+                  <span>
+                    <small x-text="cloudSelectedImage.description"></small><br>
+                    <code class="small" x-text="cloudSelectedImage.url"></code>
+                  </span>
+                </template>
+              </div>
+            </div>
+          </div>
+
+          <!-- VM Configuration -->
+          <div class="mb-4">
+            <h6 class="text-primary"><i class="bi bi-gear"></i> VM Configuration</h6>
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label class="form-label">Template Name</label>
+                <input type="text" class="form-control" x-model="cloud.name" placeholder="Auto-generated from image">
+              </div>
+              <div class="col-md-6 mb-3">
+                <label class="form-label">VM ID</label>
+                <input type="number" class="form-control" x-model.number="cloud.vmid"
+                       @input.debounce.300ms="checkVmid('cloud')"
+                       :class="cloud.vmidStatus.valid === true ? 'is-valid' : cloud.vmidStatus.valid === false ? 'is-invalid' : ''"
+                       placeholder="Auto (next available)">
+                <div class="form-text"
+                     :class="cloud.vmidStatus.valid === true ? 'text-success' : cloud.vmidStatus.valid === false ? 'text-danger' : 'text-muted'">
+                  <template x-if="cloud.vmidStatus.checking">
+                    <span><i class="bi bi-arrow-clockwise spin"></i> Checking...</span>
+                  </template>
+                  <template x-if="!cloud.vmidStatus.checking && cloud.vmidStatus.msg">
+                    <span x-text="cloud.vmidStatus.msg"></span>
+                  </template>
+                </div>
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-md-4 mb-3">
+                <label class="form-label">CPU Cores</label>
+                <input type="number" class="form-control" x-model.number="cloud.cores" min="1" max="128">
+              </div>
+              <div class="col-md-4 mb-3">
+                <label class="form-label">Memory (MB)</label>
+                <input type="number" class="form-control" x-model.number="cloud.memory" min="512" step="512">
+              </div>
+              <div class="col-md-4 mb-3">
+                <label class="form-label">Disk Size</label>
+                <input type="text" class="form-control" x-model="cloud.diskSize" placeholder="10G">
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label class="form-label">Storage <span class="text-danger">*</span></label>
+                <select class="form-select" x-model="cloud.storage">
+                  <option value="">Select storage...</option>
+                  <template x-for="s in cloud.storages" :key="s.storage">
+                    <option :value="s.storage" x-text="storageLabel(s)"></option>
+                  </template>
+                </select>
+              </div>
+              <div class="col-md-6 mb-3">
+                <label class="form-label">Network Bridge</label>
+                <select class="form-select" x-model="cloud.bridge">
+                  <template x-for="net in cloud.bridges" :key="net.iface">
+                    <option :value="net.iface" x-text="bridgeLabel(net)"></option>
+                  </template>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cloud-Init -->
+          <div class="mb-4">
+            <h6 class="text-primary"><i class="bi bi-cloud"></i> Cloud-Init Configuration</h6>
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label class="form-label">Default User</label>
+                <input type="text" class="form-control" x-model="cloud.ciUser" placeholder="e.g., ubuntu, debian">
+                <div class="form-text">Leave empty to use image default</div>
+              </div>
+              <div class="col-md-6 mb-3">
+                <label class="form-label">Password</label>
+                <input type="password" class="form-control" x-model="cloud.ciPassword" placeholder="Optional">
+              </div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">SSH Public Keys</label>
+              <textarea class="form-control" x-model="cloud.ciSshKeys" rows="3"
+                        placeholder="ssh-rsa AAAA... or ssh-ed25519 AAAA..."></textarea>
+              <div class="form-text">One key per line. Recommended over password authentication.</div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">IP Configuration</label>
+              <input type="text" class="form-control" x-model="cloud.ciIpConfig">
+              <div class="form-text">Use ip=dhcp for DHCP or ip=x.x.x.x/24,gw=x.x.x.x for static</div>
+            </div>
+          </div>
+
+          <!-- Progress -->
+          <div x-show="cloud.showProgress" class="alert alert-info">
+            <span class="spinner-border spinner-border-sm"></span> Starting background job...
+          </div>
+
+          <!-- Result -->
+          <div x-show="cloud.result">
+            <template x-if="cloud.result && cloud.result.success">
+              <div class="alert alert-info">
+                <i class="bi bi-check-circle"></i> <strong>Job started successfully!</strong><br>
+                <p class="mb-2">Template creation is running in the background.</p>
+                <p class="mb-0">
+                  <strong>Job ID:</strong> <span x-text="cloud.result.job_id"></span><br>
+                  <strong>VMID:</strong> <span x-text="cloud.result.vmid"></span>
+                </p>
+                <hr>
+                <small class="text-muted">Track progress via the Jobs icon in the top navbar.</small>
+              </div>
+            </template>
+            <template x-if="cloud.result && !cloud.result.success">
+              <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle"></i> <strong>Error:</strong>
+                <span x-text="cloud.result.error || 'Unknown error'"></span>
+              </div>
+            </template>
+          </div>
+
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary" @click="createCloudTemplate()" :disabled="cloud.busy">
+            <span x-show="cloud.busy" class="spinner-border spinner-border-sm"></span>
+            <span x-show="!cloud.busy"><i class="bi bi-plus-circle"></i></span>
+            <span x-text="cloud.busy ? ' Creating...' : ' Create Template'"></span>
+          </button>
+        </div>
+      </div>
     </div>
-</div>
+  </div>
+
+
+  <!-- ── LXC Import Modal ──────────────────────────────────────────────── -->
+  <div class="modal fade" tabindex="-1" x-ref="lxcTemplateModal">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-download"></i> Import Container Template</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+
+          <!-- Source tabs -->
+          <ul class="nav nav-tabs mb-3" role="tablist">
+            <li class="nav-item" role="presentation">
+              <button class="nav-link" :class="lxc.sourceTab === 'proxmox' && 'active'"
+                      @click="lxc.sourceTab = 'proxmox'"
+                      data-bs-toggle="tab" data-bs-target="#proxmox-source" type="button" role="tab">
+                <i class="bi bi-server"></i> Proxmox Templates
+              </button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button class="nav-link" :class="lxc.sourceTab === 'url' && 'active'"
+                      @click="lxc.sourceTab = 'url'"
+                      data-bs-toggle="tab" data-bs-target="#url-source" type="button" role="tab">
+                <i class="bi bi-link-45deg"></i> URL
+              </button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button class="nav-link" :class="lxc.sourceTab === 'oci' && 'active'"
+                      @click="lxc.sourceTab = 'oci'"
+                      data-bs-toggle="tab" data-bs-target="#oci-source" type="button" role="tab">
+                <i class="bi bi-box-seam"></i> OCI Registry
+              </button>
+            </li>
+          </ul>
+
+          <div class="tab-content">
+
+            <!-- Proxmox Templates tab -->
+            <div class="tab-pane fade show active" id="proxmox-source" role="tabpanel">
+              <div class="mb-3">
+                <label class="form-label">Storage <span class="text-danger">*</span></label>
+                <select class="form-select" x-model="lxc.lxcStorage">
+                  <option value="">Select storage...</option>
+                  <template x-for="s in lxc.storages" :key="s.storage">
+                    <option :value="s.storage" x-text="storageLabel(s)"></option>
+                  </template>
+                </select>
+                <div class="form-text">Select storage that supports container templates</div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Category</label>
+                <select class="form-select" x-model="lxc.filterSection">
+                  <option value="">All Categories</option>
+                  <template x-for="sec in lxcSections" :key="sec.value">
+                    <option :value="sec.value" x-text="sec.label"></option>
+                  </template>
+                </select>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Template <span class="text-danger">*</span></label>
+                <select class="form-select" x-model="lxc.selectedTemplate" @change="onLxcTemplateChange()">
+                  <option value="">Select template...</option>
+                  <template x-for="group in lxcTemplateGroups" :key="group.label">
+                    <optgroup :label="group.label">
+                      <template x-for="t in group.templates" :key="t.template">
+                        <option :value="t.template" x-text="t.template"></option>
+                      </template>
+                    </optgroup>
+                  </template>
+                </select>
+                <div class="form-text">
+                  <template x-if="lxc.templateData">
+                    <span>
+                      <strong x-text="lxc.templateData.headline"></strong>
+                      <template x-if="lxc.templateData.os">
+                        <span class="badge bg-secondary ms-1" x-text="lxc.templateData.os"></span>
+                      </template>
+                      <template x-if="lxc.templateData.version">
+                        <span class="badge bg-info ms-1" x-text="lxc.templateData.version"></span>
+                      </template>
+                    </span>
+                  </template>
+                </div>
+              </div>
+            </div>
+
+            <!-- URL tab -->
+            <div class="tab-pane fade" id="url-source" role="tabpanel">
+              <div class="mb-3">
+                <label class="form-label">Storage <span class="text-danger">*</span></label>
+                <select class="form-select" x-model="lxc.lxcUrlStorage">
+                  <option value="">Select storage...</option>
+                  <template x-for="s in lxc.storages" :key="s.storage">
+                    <option :value="s.storage" x-text="storageLabel(s)"></option>
+                  </template>
+                </select>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Template URL <span class="text-danger">*</span></label>
+                <input type="url" class="form-control" x-model="lxc.lxcUrl"
+                       @change="lxcUrlAutofill()"
+                       placeholder="https://example.com/template.tar.xz">
+                <div class="form-text">Direct URL to a container template (.tar.xz, .tar.gz, or .tar.zst)</div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Filename</label>
+                <input type="text" class="form-control" x-model="lxc.lxcUrlFilename" placeholder="Auto-detect from URL">
+                <div class="form-text">Leave empty to auto-detect from URL</div>
+              </div>
+            </div>
+
+            <!-- OCI tab -->
+            <div class="tab-pane fade" id="oci-source" role="tabpanel">
+              <div class="mb-3">
+                <label class="form-label">Storage <span class="text-danger">*</span></label>
+                <select class="form-select" x-model="lxc.lxcOciStorage">
+                  <option value="">Select storage...</option>
+                  <template x-for="s in lxc.storages" :key="s.storage">
+                    <option :value="s.storage" x-text="storageLabel(s)"></option>
+                  </template>
+                </select>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">OCI Image <span class="text-danger">*</span></label>
+                <input type="text" class="form-control" x-model="lxc.lxcOciImage"
+                       placeholder="docker.io/library/alpine:latest">
+                <div class="form-text">OCI image reference (e.g., docker.io/library/alpine:latest)</div>
+              </div>
+              <div class="alert alert-info">
+                <i class="bi bi-info-circle"></i> <strong>Note:</strong> OCI registry support requires Proxmox VE 8.0+. The image will be converted to an LXC template.
+              </div>
+            </div>
+
+          </div><!-- /tab-content -->
+
+          <!-- Progress -->
+          <div x-show="lxc.showProgress" class="alert alert-info mt-3">
+            <span class="spinner-border spinner-border-sm"></span>
+            <span x-text="lxc.progressMsg || 'Starting download...'"></span>
+          </div>
+
+          <!-- Result -->
+          <div x-show="lxc.result" class="mt-3">
+            <template x-if="lxc.result && lxc.result.success">
+              <div class="alert alert-info">
+                <i class="bi bi-check-circle"></i> <strong>Download started!</strong><br>
+                <p class="mb-2" x-text="lxc.result.message"></p>
+                <template x-if="lxc.result.job_id">
+                  <p class="mb-0"><strong>Job ID:</strong> <span x-text="lxc.result.job_id"></span></p>
+                </template>
+                <hr>
+                <small class="text-muted">Track progress via the Jobs icon in the top navbar.</small>
+              </div>
+            </template>
+            <template x-if="lxc.result && !lxc.result.success && lxc.result.manual_command">
+              <div class="alert alert-warning">
+                <i class="bi bi-exclamation-triangle"></i> <strong>Manual download required</strong><br>
+                <p x-text="lxc.result.error"></p>
+                <hr>
+                <p class="mb-1"><strong>Run this command on the Proxmox node:</strong></p>
+                <code class="d-block p-2 bg-dark text-light rounded" x-text="lxc.result.manual_command"></code>
+                <button class="btn btn-sm btn-secondary mt-2" @click="copyToClipboard(lxc.result.manual_command)">
+                  <i class="bi bi-clipboard"></i> Copy Command
+                </button>
+              </div>
+            </template>
+            <template x-if="lxc.result && !lxc.result.success && !lxc.result.manual_command">
+              <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle"></i> <strong>Error:</strong>
+                <span x-text="lxc.result.error || 'Unknown error'"></span>
+              </div>
+            </template>
+          </div>
+
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary" @click="importLxcTemplate()" :disabled="lxc.busy">
+            <span x-show="lxc.busy" class="spinner-border spinner-border-sm"></span>
+            <span x-show="!lxc.busy"><i class="bi bi-download"></i></span>
+            <span x-text="lxc.busy ? ' Importing...' : ' Import Template'"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ── Create Container Modal ────────────────────────────────────────── -->
+  <div class="modal fade" tabindex="-1" x-ref="createContainerModal">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-plus-circle"></i> Create Container</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+
+          <!-- Template info -->
+          <div class="alert alert-info mb-3">
+            <i class="bi bi-box"></i> Template: <strong x-text="ct.templateInfo"></strong>
+          </div>
+
+          <!-- Basic Settings -->
+          <div class="row mb-3">
+            <div class="col-md-6">
+              <label class="form-label">Container ID</label>
+              <input type="number" class="form-control" x-model.number="ct.vmid"
+                     @input.debounce.300ms="checkVmid('ct')"
+                     :class="ct.vmidStatus.valid === true ? 'is-valid' : ct.vmidStatus.valid === false ? 'is-invalid' : ''"
+                     placeholder="Auto (next available)">
+              <div class="form-text"
+                   :class="ct.vmidStatus.valid === true ? 'text-success' : ct.vmidStatus.valid === false ? 'text-danger' : 'text-muted'">
+                <template x-if="ct.vmidStatus.checking">
+                  <span><i class="bi bi-arrow-clockwise spin"></i> Checking...</span>
+                </template>
+                <template x-if="!ct.vmidStatus.checking && ct.vmidStatus.msg">
+                  <span x-text="ct.vmidStatus.msg"></span>
+                </template>
+                <template x-if="!ct.vmidStatus.checking && !ct.vmidStatus.msg">
+                  <span>Leave empty for next available ID</span>
+                </template>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Hostname <span class="text-danger">*</span></label>
+              <input type="text" class="form-control" x-model="ct.hostname"
+                     pattern="[a-zA-Z0-9\-]+" placeholder="my-container" required>
+            </div>
+          </div>
+
+          <!-- Resources -->
+          <div class="row mb-3">
+            <div class="col-md-4">
+              <label class="form-label">CPU Cores</label>
+              <input type="number" class="form-control" x-model.number="ct.cores" min="1" max="128">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Memory (MB)</label>
+              <input type="number" class="form-control" x-model.number="ct.memory" min="16" step="128">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Swap (MB)</label>
+              <input type="number" class="form-control" x-model.number="ct.swap" min="0" step="128">
+            </div>
+          </div>
+
+          <!-- Storage -->
+          <div class="row mb-3">
+            <div class="col-md-6">
+              <label class="form-label">Root Disk Storage <span class="text-danger">*</span></label>
+              <select class="form-select" x-model="ct.storage">
+                <option value="">Select storage...</option>
+                <template x-for="s in ct.storages" :key="s.storage">
+                  <option :value="s.storage" x-text="storageLabel(s)"></option>
+                </template>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Root Disk Size (GB)</label>
+              <input type="number" class="form-control" x-model.number="ct.diskSize" min="1">
+            </div>
+          </div>
+
+          <!-- Network -->
+          <div class="row mb-3">
+            <div class="col-md-6">
+              <label class="form-label">Network Bridge</label>
+              <select class="form-select" x-model="ct.bridge">
+                <template x-for="net in ct.bridges" :key="net.iface">
+                  <option :value="net.iface" x-text="bridgeLabel(net)"></option>
+                </template>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">IP Configuration</label>
+              <select class="form-select" x-model="ct.ipConfig">
+                <option value="dhcp">DHCP</option>
+                <option value="static">Static IP</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Static IP fields -->
+          <div class="row mb-3" x-show="ct.ipConfig === 'static'">
+            <div class="col-md-6">
+              <label class="form-label">IP Address (CIDR)</label>
+              <input type="text" class="form-control" x-model="ct.ip" placeholder="192.168.1.100/24">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Gateway</label>
+              <input type="text" class="form-control" x-model="ct.gateway" placeholder="192.168.1.1">
+            </div>
+          </div>
+
+          <!-- Password -->
+          <div class="row mb-3">
+            <div class="col-md-6">
+              <label class="form-label">Root Password</label>
+              <input type="password" class="form-control" x-model="ct.password" placeholder="Leave empty for no password">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">SSH Public Key</label>
+              <textarea class="form-control" x-model="ct.sshKeys" rows="2"
+                        placeholder="ssh-rsa AAAA... or ssh-ed25519 AAAA..."></textarea>
+            </div>
+          </div>
+
+          <!-- Options -->
+          <div class="row mb-3">
+            <div class="col-md-6">
+              <div class="form-check">
+                <input type="checkbox" class="form-check-input" x-model="ct.start" id="ctStart">
+                <label class="form-check-label" for="ctStart">Start after created</label>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="form-check">
+                <input type="checkbox" class="form-check-input" x-model="ct.unprivileged" id="ctUnprivileged">
+                <label class="form-check-label" for="ctUnprivileged">Unprivileged container</label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Progress -->
+          <div x-show="ct.showProgress" class="alert alert-info">
+            <span class="spinner-border spinner-border-sm"></span> Creating container...
+          </div>
+
+          <!-- Result -->
+          <div x-show="ct.result">
+            <template x-if="ct.result && ct.result.success">
+              <div class="alert alert-success">
+                <i class="bi bi-check-circle"></i> <strong>Container created successfully!</strong><br>
+                <p class="mb-0">Container ID: <strong x-text="ct.result.vmid"></strong></p>
+                <hr>
+                <a :href="'/vm/' + ct.node + '/' + ct.result.vmid" class="btn btn-sm btn-primary">
+                  <i class="bi bi-box"></i> Go to Container
+                </a>
+              </div>
+            </template>
+            <template x-if="ct.result && !ct.result.success">
+              <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle"></i> <strong>Error:</strong>
+                <span x-text="ct.result.error || 'Unknown error'"></span>
+              </div>
+            </template>
+          </div>
+
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-success" @click="createContainer()" :disabled="ct.busy">
+            <span x-show="ct.busy" class="spinner-border spinner-border-sm"></span>
+            <span x-show="!ct.busy"><i class="bi bi-plus-circle"></i></span>
+            <span x-text="ct.busy ? ' Creating...' : ' Create Container'"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /x-data -->
 {% endblock %}
 
 {% block scripts %}
-<script>
-let allNodes = [];
-let currentData = {};
-
-document.addEventListener('DOMContentLoaded', function() {
-    loadNodes();
-
-    // VMID validation for template creation
-    const templateVmidInput = document.getElementById('templateVmid');
-    const templateVmidFeedback = document.getElementById('templateVmid-feedback');
-    if (templateVmidInput) {
-        let templateVmidTimeout = null;
-        templateVmidInput.addEventListener('input', function() {
-            clearTimeout(templateVmidTimeout);
-            templateVmidTimeout = setTimeout(() => checkVmidAvailability(this.value, templateVmidInput, templateVmidFeedback), 300);
-        });
-    }
-
-    // VMID validation for container creation
-    const containerVmidInput = document.getElementById('containerVmid');
-    const containerVmidFeedback = document.getElementById('containerVmid-feedback');
-    if (containerVmidInput) {
-        let containerVmidTimeout = null;
-        containerVmidInput.addEventListener('input', function() {
-            clearTimeout(containerVmidTimeout);
-            containerVmidTimeout = setTimeout(() => checkVmidAvailability(this.value, containerVmidInput, containerVmidFeedback, 'Leave empty for next available ID'), 300);
-        });
-    }
-});
-
-// Check if VMID is available
-function checkVmidAvailability(vmid, inputEl, feedbackEl, defaultText = '') {
-    if (!vmid || vmid < 100) {
-        feedbackEl.innerHTML = defaultText;
-        feedbackEl.className = 'form-text';
-        inputEl.classList.remove('is-valid', 'is-invalid');
-        return;
-    }
-
-    feedbackEl.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Checking...';
-    feedbackEl.className = 'form-text text-muted';
-
-    fetch(`/api/cluster/vmid/${vmid}/check`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                feedbackEl.innerHTML = `<i class="bi bi-exclamation-triangle"></i> ${data.error}`;
-                feedbackEl.className = 'form-text text-warning';
-                inputEl.classList.remove('is-valid', 'is-invalid');
-            } else if (data.available) {
-                feedbackEl.innerHTML = '<i class="bi bi-check-circle"></i> ID is available';
-                feedbackEl.className = 'form-text text-success';
-                inputEl.classList.remove('is-invalid');
-                inputEl.classList.add('is-valid');
-            } else {
-                let msg = `<i class="bi bi-x-circle"></i> ${data.reason}`;
-                if (data.name) {
-                    msg += ` (${data.name} on ${data.node})`;
-                }
-                feedbackEl.innerHTML = msg;
-                feedbackEl.className = 'form-text text-danger';
-                inputEl.classList.remove('is-valid');
-                inputEl.classList.add('is-invalid');
-            }
-        })
-        .catch(error => {
-            console.error('Error checking VMID:', error);
-            feedbackEl.innerHTML = defaultText;
-            feedbackEl.className = 'form-text';
-            inputEl.classList.remove('is-valid', 'is-invalid');
-        });
-}
-
-function showLoading() {
-    document.getElementById('loadingOverlay').classList.remove('d-none');
-    document.getElementById('loadingOverlay').classList.add('d-flex');
-}
-
-function hideLoading() {
-    document.getElementById('loadingOverlay').classList.remove('d-flex');
-    document.getElementById('loadingOverlay').classList.add('d-none');
-}
-
-function showNotification(message, type = 'info') {
-    const notification = document.createElement('div');
-    notification.className = `alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show position-fixed`;
-    notification.style.top = '20px';
-    notification.style.right = '20px';
-    notification.style.zIndex = '10000';
-    notification.innerHTML = `
-        ${message}
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    `;
-    
-    document.body.appendChild(notification);
-    
-    // Auto-remove after 5 seconds
-    setTimeout(() => {
-        if (notification.parentNode) {
-            notification.parentNode.removeChild(notification);
-        }
-    }, 5000);
-}
-
-async function loadNodes() {
-    try {
-        showLoading();
-        const response = await fetch('/api/nodes');
-        const nodes = await response.json();
-        
-        if (!Array.isArray(nodes) || nodes.length === 0) {
-            document.getElementById('nodeTabContent').innerHTML = 
-                '<div class="alert alert-warning">No nodes available</div>';
-            hideLoading();
-            return;
-        }
-        
-        allNodes = nodes.filter(node => node.status === 'online');
-        
-        if (allNodes.length === 0) {
-            document.getElementById('nodeTabContent').innerHTML = 
-                '<div class="alert alert-warning">No online nodes available</div>';
-            hideLoading();
-            return;
-        }
-        
-        // Sort nodes alphabetically by name
-        allNodes.sort((a, b) => a.name.localeCompare(b.name));
-        
-        createNodeTabs();
-        await loadAllNodeData();
-        hideLoading();
-        
-    } catch (error) {
-        console.error('Error loading nodes:', error);
-        showNotification('Error loading nodes: ' + error.message, 'error');
-        hideLoading();
-    }
-}
-
-function createNodeTabs() {
-    const tabContainer = document.getElementById('nodeTab');
-    const contentContainer = document.getElementById('nodeTabContent');
-    
-    // Clear existing content
-    tabContainer.innerHTML = '';
-    contentContainer.innerHTML = '';
-    
-    allNodes.forEach((node, index) => {
-        // Create tab
-        const tabId = `node-tab-${node.name}`;
-        const contentId = `node-content-${node.name}`;
-        const isActive = index === 0;
-        
-        const tabItem = document.createElement('li');
-        tabItem.className = 'nav-item';
-        tabItem.innerHTML = `
-            <button class="nav-link ${isActive ? 'active' : ''}" 
-                    id="${tabId}" 
-                    data-bs-toggle="tab" 
-                    data-bs-target="#${contentId}" 
-                    type="button" 
-                    role="tab">
-                <i class="bi bi-server"></i> ${node.name}
-            </button>
-        `;
-        tabContainer.appendChild(tabItem);
-        
-        // Create content
-        const contentItem = document.createElement('div');
-        contentItem.className = `tab-pane fade ${isActive ? 'show active' : ''}`;
-        contentItem.id = contentId;
-        contentItem.innerHTML = `
-            <div class="row">
-                <!-- ISO Images -->
-                <div class="col-12 mb-4">
-                    <div class="card">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0"><i class="bi bi-disc"></i> ISO Images</h5>
-                            <button class="btn btn-success btn-sm" onclick="showDownloadModal('${node.name}')">
-                                <i class="bi bi-download"></i> Download from URL
-                            </button>
-                        </div>
-                        <div class="card-body">
-                            <div id="iso-content-${node.name}">
-                                <div class="text-center">
-                                    <div class="spinner-border spinner-border-sm" role="status"></div>
-                                    Loading ISO images...
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- VM Templates -->
-                <div class="col-12 mb-4">
-                    <div class="card">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0"><i class="bi bi-pc-display"></i> VM Templates</h5>
-                            <button class="btn btn-success btn-sm" onclick="showCloudTemplateModal('${node.name}')">
-                                <i class="bi bi-cloud-download"></i> Create Cloud Template
-                            </button>
-                        </div>
-                        <div class="card-body">
-                            <div id="vm-templates-${node.name}">
-                                <div class="text-center">
-                                    <div class="spinner-border spinner-border-sm" role="status"></div>
-                                    Loading VM templates...
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Container Templates -->
-                <div class="col-12 mb-4">
-                    <div class="card">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0"><i class="bi bi-box"></i> Container Templates</h5>
-                            <button class="btn btn-success btn-sm" onclick="showLXCTemplateModal('${node.name}')">
-                                <i class="bi bi-download"></i> Import Template
-                            </button>
-                        </div>
-                        <div class="card-body">
-                            <div id="lxc-templates-${node.name}">
-                                <div class="text-center">
-                                    <div class="spinner-border spinner-border-sm" role="status"></div>
-                                    Loading container templates...
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
-        contentContainer.appendChild(contentItem);
-    });
-}
-
-async function loadAllNodeData() {
-    const promises = allNodes.map(node => loadNodeData(node.name));
-    await Promise.all(promises);
-}
-
-async function loadNodeData(nodeName) {
-    try {
-        // Load ISO images
-        await loadISOImages(nodeName);
-        
-        // Load VM and LXC templates
-        await loadTemplates(nodeName);
-        
-    } catch (error) {
-        console.error(`Error loading data for node ${nodeName}:`, error);
-        showNotification(`Error loading data for node ${nodeName}: ${error.message}`, 'error');
-    }
-}
-
-async function loadISOImages(nodeName) {
-    try {
-        const response = await fetch(`/api/node/${nodeName}/iso-images`);
-        const data = await response.json();
-        
-        const container = document.getElementById(`iso-content-${nodeName}`);
-        
-        if (data.error) {
-            container.innerHTML = `<div class="alert alert-danger">Error: ${data.error}</div>`;
-            return;
-        }
-        
-        if (!Array.isArray(data) || data.length === 0) {
-            container.innerHTML = '<div class="text-muted">No ISO images found</div>';
-            return;
-        }
-        
-        let html = '<div class="table-responsive"><table class="table table-sm">';
-        html += '<thead><tr><th>Name</th><th>Storage</th><th>Size</th><th>Format</th><th>Actions</th></tr></thead><tbody>';
-
-        data.forEach(iso => {
-            const parts = iso.volid.split('/');
-            const storage = parts[0];
-            const filename = parts[1];
-            const sizeGB = iso.size ? (iso.size / (1024 * 1024 * 1024)).toFixed(2) : 'Unknown';
-
-            html += `
-                <tr>
-                    <td><strong>${escapeHtml(filename)}</strong></td>
-                    <td><span class="badge bg-secondary">${escapeHtml(storage)}</span></td>
-                    <td>${sizeGB} GB</td>
-                    <td>${iso.format || 'iso'}</td>
-                    <td>
-                        <button class="btn btn-sm btn-outline-danger" onclick="deleteISO('${nodeName}', '${escapeForJs(iso.volid)}')" title="Delete ISO">
-                            <i class="bi bi-trash"></i>
-                        </button>
-                    </td>
-                </tr>
-            `;
-        });
-        
-        html += '</tbody></table></div>';
-        container.innerHTML = html;
-        
-    } catch (error) {
-        const container = document.getElementById(`iso-content-${nodeName}`);
-        container.innerHTML = `<div class="alert alert-danger">Error loading ISO images: ${error.message}</div>`;
-    }
-}
-
-async function loadTemplates(nodeName) {
-    try {
-        const response = await fetch(`/api/node/${nodeName}/templates`);
-        const data = await response.json();
-        
-        if (data.error) {
-            document.getElementById(`vm-templates-${nodeName}`).innerHTML = 
-                `<div class="alert alert-danger">Error: ${data.error}</div>`;
-            document.getElementById(`lxc-templates-${nodeName}`).innerHTML = 
-                `<div class="alert alert-danger">Error: ${data.error}</div>`;
-            return;
-        }
-        
-        // Load VM templates
-        const vmContainer = document.getElementById(`vm-templates-${nodeName}`);
-        if (!Array.isArray(data.qemu) || data.qemu.length === 0) {
-            vmContainer.innerHTML = '<div class="text-muted">No VM templates found</div>';
-        } else {
-            let html = '<div class="table-responsive"><table class="table table-sm">';
-            html += '<thead><tr><th>ID</th><th>Name</th><th>Memory</th><th>CPU</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
-
-            data.qemu.forEach(vm => {
-                const memoryGB = vm.maxmem ? (vm.maxmem / (1024 * 1024 * 1024)).toFixed(1) : 'Unknown';
-                const cpuInfo = vm.cpus ? `${vm.cpus} cores` : 'Unknown';
-
-                html += `
-                    <tr>
-                        <td><strong>${vm.vmid}</strong></td>
-                        <td>${escapeHtml(vm.name || 'Unnamed')}</td>
-                        <td>${memoryGB} GB</td>
-                        <td>${cpuInfo}</td>
-                        <td><span class="badge bg-info">Template</span></td>
-                        <td>
-                            <div class="btn-group btn-group-sm">
-                                <a href="/vm/${nodeName}/${vm.vmid}/clone" class="btn btn-outline-primary" title="Clone">
-                                    <i class="bi bi-files"></i>
-                                </a>
-                                <button class="btn btn-outline-danger" onclick="deleteVMTemplate('${nodeName}', '${vm.vmid}', '${escapeForJs(vm.name || 'Unnamed')}')" title="Delete Template">
-                                    <i class="bi bi-trash"></i>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                `;
-            });
-            
-            html += '</tbody></table></div>';
-            vmContainer.innerHTML = html;
-        }
-        
-        // Load LXC templates
-        const lxcContainer = document.getElementById(`lxc-templates-${nodeName}`);
-        if (!Array.isArray(data.lxc) || data.lxc.length === 0) {
-            lxcContainer.innerHTML = '<div class="text-muted">No container templates found</div>';
-        } else {
-            let html = '<div class="table-responsive"><table class="table table-sm">';
-            html += '<thead><tr><th>Template</th><th>Storage</th><th>Size</th><th>Description</th><th>Actions</th></tr></thead><tbody>';
-
-            data.lxc.forEach(template => {
-                const parts = template.volid.split('/');
-                const storage = parts[0];
-                const filename = parts[1];
-                const sizeGB = template.size ? (template.size / (1024 * 1024 * 1024)).toFixed(2) : 'Unknown';
-
-                // Extract OS info from filename
-                const osInfo = filename.replace('.tar.xz', '').replace('.tar.gz', '');
-
-                html += `
-                    <tr>
-                        <td><strong>${escapeHtml(osInfo)}</strong></td>
-                        <td><span class="badge bg-secondary">${escapeHtml(storage)}</span></td>
-                        <td>${sizeGB} GB</td>
-                        <td><small class="text-muted">${escapeHtml(filename)}</small></td>
-                        <td>
-                            <div class="btn-group btn-group-sm">
-                                <button class="btn btn-outline-success" onclick="showCreateContainerModal('${nodeName}', '${escapeForJs(template.volid)}')" title="Create Container">
-                                    <i class="bi bi-plus-circle"></i>
-                                </button>
-                                <button class="btn btn-outline-danger" onclick="deleteLXCTemplate('${nodeName}', '${escapeForJs(template.volid)}')" title="Delete Template">
-                                    <i class="bi bi-trash"></i>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                `;
-            });
-            
-            html += '</tbody></table></div>';
-            lxcContainer.innerHTML = html;
-        }
-        
-    } catch (error) {
-        document.getElementById(`vm-templates-${nodeName}`).innerHTML = 
-            `<div class="alert alert-danger">Error loading VM templates: ${error.message}</div>`;
-        document.getElementById(`lxc-templates-${nodeName}`).innerHTML = 
-            `<div class="alert alert-danger">Error loading LXC templates: ${error.message}</div>`;
-    }
-}
-
-let currentDownloadNode = '';
-
-async function showDownloadModal(nodeName) {
-    currentDownloadNode = nodeName;
-    
-    // Reset form
-    document.getElementById('downloadForm').reset();
-    document.getElementById('downloadProgress').classList.add('d-none');
-    document.getElementById('startDownloadBtn').disabled = false;
-    
-    // Load available storages
-    try {
-        const response = await fetch(`/api/node/${nodeName}/iso-storages`);
-        const storages = await response.json();
-        
-        const storageSelect = document.getElementById('downloadStorage');
-        storageSelect.innerHTML = '<option value="">Select storage...</option>';
-        
-        if (storages.error) {
-            storageSelect.innerHTML = '<option value="">Error loading storages</option>';
-            showNotification('Error loading storages: ' + storages.error, 'error');
-            return;
-        }
-        
-        if (!Array.isArray(storages) || storages.length === 0) {
-            storageSelect.innerHTML = '<option value="">No ISO-compatible storages found</option>';
-            showNotification('No storages that support ISO content found on this node', 'warning');
-            return;
-        }
-        
-        storages.forEach(storage => {
-            const option = document.createElement('option');
-            option.value = storage.storage;
-            option.textContent = `${storage.storage} (${storage.type}) - ${storage.available_gb} GB free`;
-            storageSelect.appendChild(option);
-        });
-        
-        // Show modal
-        const modal = new bootstrap.Modal(document.getElementById('downloadModal'));
-        modal.show();
-        
-    } catch (error) {
-        showNotification('Error loading storages: ' + error.message, 'error');
-    }
-}
-
-async function startDownload() {
-    const url = document.getElementById('downloadUrl').value;
-    const filename = document.getElementById('downloadFilename').value;
-    const storage = document.getElementById('downloadStorage').value;
-    
-    if (!url) {
-        showNotification('Please enter a URL', 'warning');
-        return;
-    }
-    
-    if (!storage) {
-        showNotification('Please select a storage', 'warning');
-        return;
-    }
-    
-    try {
-        // Disable the button and show progress
-        const startBtn = document.getElementById('startDownloadBtn');
-        startBtn.disabled = true;
-        startBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Starting...';
-        
-        const response = await fetch(`/api/node/${currentDownloadNode}/download-iso`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                url: url,
-                storage: storage,
-                filename: filename
-            })
-        });
-        
-        const result = await response.json();
-        
-        if (result.success) {
-            // Show progress message
-            document.getElementById('downloadProgress').classList.remove('d-none');
-            showNotification(result.message, 'success');
-            
-            // Refresh ISO list after a short delay
-            setTimeout(() => {
-                loadISOImages(currentDownloadNode);
-            }, 2000);
-            
-            // Close modal after 3 seconds
-            setTimeout(() => {
-                const modal = bootstrap.Modal.getInstance(document.getElementById('downloadModal'));
-                if (modal) {
-                    modal.hide();
-                }
-            }, 3000);
-            
-        } else {
-            // Check if it's a manual download case
-            if (response.status === 501 && result.manual_instructions) {
-                // Show manual instructions
-                const instructionsHtml = `
-                    <div class="alert alert-warning">
-                        <h6><i class="bi bi-exclamation-triangle"></i> Manual Download Required</h6>
-                        <p>${result.error}</p>
-                        <hr>
-                        <div class="d-flex gap-2 mt-2">
-                            <button type="button" class="btn btn-sm btn-secondary" onclick="copyToClipboard('${url}')">
-                                <i class="bi bi-clipboard"></i> Copy URL
-                            </button>
-                        </div>
-                    </div>
-                `;
-                document.getElementById('downloadProgress').innerHTML = instructionsHtml;
-                document.getElementById('downloadProgress').classList.remove('d-none');
-                showNotification('Manual download required', 'warning');
-            } else {
-                showNotification(result.error || 'Download failed', 'error');
-            }
-            
-            startBtn.disabled = false;
-            startBtn.innerHTML = '<i class="bi bi-download"></i> Start Download';
-        }
-        
-    } catch (error) {
-        showNotification('Network error: ' + error.message, 'error');
-        const startBtn = document.getElementById('startDownloadBtn');
-        startBtn.disabled = false;
-        startBtn.innerHTML = '<i class="bi bi-download"></i> Start Download';
-    }
-}
-
-// Auto-fill filename when URL changes
-document.addEventListener('DOMContentLoaded', function() {
-    const urlInput = document.getElementById('downloadUrl');
-    const filenameInput = document.getElementById('downloadFilename');
-    
-    if (urlInput && filenameInput) {
-        urlInput.addEventListener('input', function() {
-            if (this.value && !filenameInput.value) {
-                const filename = this.value.split('/').pop();
-                if (filename && filename.includes('.')) {
-                    filenameInput.value = filename;
-                }
-            }
-        });
-    }
-});
-
-// Copy to clipboard helper function
-function copyToClipboard(text) {
-    navigator.clipboard.writeText(text).then(function() {
-        showNotification('URL copied to clipboard!', 'success');
-    }, function(err) {
-        // Fallback for older browsers
-        const textArea = document.createElement("textarea");
-        textArea.value = text;
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        try {
-            document.execCommand('copy');
-            showNotification('URL copied to clipboard!', 'success');
-        } catch (err) {
-            showNotification('Failed to copy URL', 'error');
-        }
-        document.body.removeChild(textArea);
-    });
-}
-
-// Cloud Template Creation
-let currentTemplateNode = '';
-let cloudImagesCache = null;
-
-async function showCloudTemplateModal(nodeName) {
-    currentTemplateNode = nodeName;
-
-    // Reset form
-    document.getElementById('cloudTemplateForm').reset();
-    document.getElementById('templateProgress').classList.add('d-none');
-    document.getElementById('templateResult').classList.add('d-none');
-    document.getElementById('createTemplateBtn').disabled = false;
-    document.getElementById('ciIpConfig').value = 'ip=dhcp,ip6=auto';
-    document.getElementById('templateCores').value = '2';
-    document.getElementById('templateMemory').value = '2048';
-    document.getElementById('templateDiskSize').value = '10G';
-
-    // Load cloud images
-    await loadCloudImages();
-
-    // Load storages and bridges in parallel
-    await Promise.all([
-        loadTemplateStorages(nodeName),
-        loadTemplateBridges(nodeName)
-    ]);
-
-    // Show modal
-    const modal = new bootstrap.Modal(document.getElementById('cloudTemplateModal'));
-    modal.show();
-}
-
-async function loadCloudImages() {
-    const select = document.getElementById('cloudImage');
-
-    if (cloudImagesCache) {
-        populateCloudImageSelect(cloudImagesCache);
-        return;
-    }
-
-    try {
-        const response = await fetch('/api/cloud-images');
-        const images = await response.json();
-        cloudImagesCache = images;
-        populateCloudImageSelect(images);
-    } catch (error) {
-        select.innerHTML = '<option value="">Error loading images</option>';
-        showNotification('Error loading cloud images: ' + error.message, 'error');
-    }
-}
-
-function populateCloudImageSelect(images) {
-    const select = document.getElementById('cloudImage');
-    select.innerHTML = '<option value="">Select a cloud image...</option>';
-
-    // Group by distribution
-    const groups = {
-        'Ubuntu': [],
-        'Debian': [],
-        'RHEL-based': [],
-        'BSD': [],
-        'Other': []
-    };
-
-    images.forEach(img => {
-        if (img.id.startsWith('ubuntu')) {
-            groups['Ubuntu'].push(img);
-        } else if (img.id.startsWith('debian')) {
-            groups['Debian'].push(img);
-        } else if (img.id.startsWith('rocky') || img.id.startsWith('alma') || img.id.startsWith('centos')) {
-            groups['RHEL-based'].push(img);
-        } else if (img.id.startsWith('freebsd') || img.id.startsWith('openbsd') || img.id.startsWith('netbsd')) {
-            groups['BSD'].push(img);
-        } else {
-            groups['Other'].push(img);
-        }
-    });
-
-    for (const [groupName, groupImages] of Object.entries(groups)) {
-        if (groupImages.length > 0) {
-            const optgroup = document.createElement('optgroup');
-            optgroup.label = groupName;
-            groupImages.forEach(img => {
-                const option = document.createElement('option');
-                option.value = img.id;
-                option.textContent = img.name;
-                option.dataset.description = img.description;
-                option.dataset.url = img.url;
-                optgroup.appendChild(option);
-            });
-            select.appendChild(optgroup);
-        }
-    }
-
-    // Update description on change
-    select.addEventListener('change', function() {
-        const selected = this.options[this.selectedIndex];
-        const descDiv = document.getElementById('cloudImageDesc');
-        if (selected && selected.dataset.description) {
-            descDiv.innerHTML = `<small>${selected.dataset.description}</small><br><code class="small">${selected.dataset.url || ''}</code>`;
-        } else {
-            descDiv.textContent = '';
-        }
-
-        // Auto-fill template name
-        if (this.value && !document.getElementById('templateName').value) {
-            document.getElementById('templateName').value = this.value + '-template';
-        }
-    });
-}
-
-async function loadTemplateStorages(nodeName) {
-    const select = document.getElementById('templateStorage');
-    select.innerHTML = '<option value="">Loading...</option>';
-
-    try {
-        const response = await fetch(`/api/node/${nodeName}/storages?vm_type=qemu`);
-        const storages = await response.json();
-
-        if (storages.error) {
-            select.innerHTML = '<option value="">Error loading storages</option>';
-            return;
-        }
-
-        select.innerHTML = '<option value="">Select storage...</option>';
-        storages.forEach(storage => {
-            const option = document.createElement('option');
-            option.value = storage.storage;
-            option.textContent = `${storage.storage} (${storage.type}) - ${storage.available_gb || 0} GB free`;
-            select.appendChild(option);
-        });
-
-    } catch (error) {
-        select.innerHTML = '<option value="">Error loading storages</option>';
-    }
-}
-
-async function loadTemplateBridges(nodeName) {
-    const select = document.getElementById('templateBridge');
-    select.innerHTML = '<option value="">Loading...</option>';
-
-    try {
-        const response = await fetch(`/api/node/${nodeName}/networks`);
-        const networks = await response.json();
-
-        if (networks.error) {
-            select.innerHTML = '<option value="vmbr0">vmbr0 (default)</option>';
-            return;
-        }
-
-        select.innerHTML = '';
-        // Add default option first
-        const defaultOption = document.createElement('option');
-        defaultOption.value = 'vmbr0';
-        defaultOption.textContent = 'vmbr0 (default)';
-        select.appendChild(defaultOption);
-
-        networks.forEach(net => {
-            if (net.iface && net.iface !== 'vmbr0') {
-                const option = document.createElement('option');
-                option.value = net.iface;
-                option.textContent = `${net.iface}${net.comments ? ' - ' + net.comments : ''}`;
-                select.appendChild(option);
-            }
-        });
-
-    } catch (error) {
-        select.innerHTML = '<option value="vmbr0">vmbr0 (default)</option>';
-    }
-}
-
-async function createCloudTemplate() {
-    const imageId = document.getElementById('cloudImage').value;
-    const storage = document.getElementById('templateStorage').value;
-
-    if (!imageId) {
-        showNotification('Please select a cloud image', 'warning');
-        return;
-    }
-
-    if (!storage) {
-        showNotification('Please select a storage', 'warning');
-        return;
-    }
-
-    // Gather form data
-    const data = {
-        image_id: imageId,
-        storage: storage,
-        name: document.getElementById('templateName').value || undefined,
-        vmid: document.getElementById('templateVmid').value || undefined,
-        cores: parseInt(document.getElementById('templateCores').value) || 2,
-        memory: parseInt(document.getElementById('templateMemory').value) || 2048,
-        disk_size: document.getElementById('templateDiskSize').value || '10G',
-        bridge: document.getElementById('templateBridge').value || 'vmbr0',
-        ci_user: document.getElementById('ciUser').value || undefined,
-        ci_password: document.getElementById('ciPassword').value || undefined,
-        ci_sshkeys: document.getElementById('ciSshKeys').value || undefined,
-        ip_config: document.getElementById('ciIpConfig').value || 'ip=dhcp,ip6=auto',
-    };
-
-    // Show progress
-    const btn = document.getElementById('createTemplateBtn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Starting...';
-
-    document.getElementById('templateProgress').classList.remove('d-none');
-    document.getElementById('templateResult').classList.add('d-none');
-    document.getElementById('templateProgressMsg').innerHTML = '<i class="bi bi-hourglass-split"></i> Starting background job...';
-
-    try {
-        const response = await fetch(`/api/node/${currentTemplateNode}/create-cloud-template`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
-
-        const result = await response.json();
-
-        if (result.success && result.job_id) {
-            // Job started successfully
-            document.getElementById('templateResult').classList.remove('d-none');
-            document.getElementById('templateProgress').classList.add('d-none');
-            document.getElementById('templateResult').innerHTML = `
-                <div class="alert alert-info">
-                    <i class="bi bi-check-circle"></i> <strong>Job started successfully!</strong><br>
-                    <p class="mb-2">Template creation is running in the background. You can close this dialog.</p>
-                    <p class="mb-0">
-                        <strong>Job ID:</strong> ${result.job_id}<br>
-                        <strong>VMID:</strong> ${result.vmid}
-                    </p>
-                    <hr>
-                    <small class="text-muted">
-                        Track progress via the <i class="bi bi-list-task"></i> Jobs icon in the top navbar.
-                        The template will appear in the list once completed.
-                    </small>
-                </div>
-            `;
-            showNotification('Template creation job started. Check the Jobs dropdown for progress.', 'success');
-
-            // Refresh global jobs dropdown to show the new job
-            loadGlobalJobs();
-
-            // Close modal after a short delay
-            setTimeout(() => {
-                const modal = bootstrap.Modal.getInstance(document.getElementById('cloudTemplateModal'));
-                if (modal) modal.hide();
-            }, 3000);
-
-        } else {
-            // Error starting job
-            document.getElementById('templateProgress').classList.add('d-none');
-            document.getElementById('templateResult').classList.remove('d-none');
-            document.getElementById('templateResult').innerHTML = `
-                <div class="alert alert-danger">
-                    <i class="bi bi-exclamation-triangle"></i> <strong>Error:</strong> ${result.error || 'Unknown error'}
-                </div>
-            `;
-            showNotification('Failed to start template creation: ' + (result.error || 'Unknown error'), 'error');
-        }
-
-    } catch (error) {
-        document.getElementById('templateProgress').classList.add('d-none');
-        document.getElementById('templateResult').classList.remove('d-none');
-        document.getElementById('templateResult').innerHTML = `
-            <div class="alert alert-danger">
-                <i class="bi bi-exclamation-triangle"></i> Network error: ${error.message}
-            </div>
-        `;
-        showNotification('Network error: ' + error.message, 'error');
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-plus-circle"></i> Create Template';
-    }
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-function escapeForJs(text) {
-    return text.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$').replace(/'/g, "\\'");
-}
-
-// Delete ISO image
-async function deleteISO(nodeName, volid) {
-    const filename = volid.split('/').pop();
-    if (!confirm(`Are you sure you want to delete ISO "${filename}"?\n\nThis action cannot be undone.`)) {
-        return;
-    }
-
-    try {
-        showLoading();
-        const response = await fetch(`/api/node/${nodeName}/iso/${encodeURIComponent(volid)}`, {
-            method: 'DELETE'
-        });
-        const result = await response.json();
-
-        if (result.success) {
-            showNotification(`ISO "${filename}" deleted successfully`, 'success');
-            await loadISOImages(nodeName);
-        } else {
-            showNotification(result.error || 'Failed to delete ISO', 'error');
-        }
-    } catch (error) {
-        showNotification('Error deleting ISO: ' + error.message, 'error');
-    } finally {
-        hideLoading();
-    }
-}
-
-// Delete VM template
-async function deleteVMTemplate(nodeName, vmid, name) {
-    if (!confirm(`Are you sure you want to delete VM template "${name}" (ID: ${vmid})?\n\nThis will permanently delete the template and all its disks. This action cannot be undone.`)) {
-        return;
-    }
-
-    try {
-        showLoading();
-        const response = await fetch(`/api/node/${nodeName}/template/${vmid}`, {
-            method: 'DELETE'
-        });
-        const result = await response.json();
-
-        if (result.success) {
-            showNotification(`Template "${name}" deleted successfully`, 'success');
-            await loadTemplates(nodeName);
-        } else {
-            showNotification(result.error || 'Failed to delete template', 'error');
-        }
-    } catch (error) {
-        showNotification('Error deleting template: ' + error.message, 'error');
-    } finally {
-        hideLoading();
-    }
-}
-
-// Delete LXC container template
-async function deleteLXCTemplate(nodeName, volid) {
-    const filename = volid.split('/').pop();
-    if (!confirm(`Are you sure you want to delete container template "${filename}"?\n\nThis action cannot be undone.`)) {
-        return;
-    }
-
-    try {
-        showLoading();
-        const response = await fetch(`/api/node/${nodeName}/lxc-template/${encodeURIComponent(volid)}`, {
-            method: 'DELETE'
-        });
-        const result = await response.json();
-
-        if (result.success) {
-            showNotification(`Container template "${filename}" deleted successfully`, 'success');
-            await loadTemplates(nodeName);
-        } else {
-            showNotification(result.error || 'Failed to delete template', 'error');
-        }
-    } catch (error) {
-        showNotification('Error deleting template: ' + error.message, 'error');
-    } finally {
-        hideLoading();
-    }
-}
-
-// LXC Template Import
-let currentLxcNode = '';
-let availableLxcTemplates = null;
-
-async function showLXCTemplateModal(nodeName) {
-    currentLxcNode = nodeName;
-
-    // Reset forms and state
-    document.getElementById('proxmoxTemplateForm').reset();
-    document.getElementById('urlTemplateForm').reset();
-    document.getElementById('ociTemplateForm').reset();
-    document.getElementById('lxcImportProgress').classList.add('d-none');
-    document.getElementById('lxcImportResult').classList.add('d-none');
-    document.getElementById('importLxcBtn').disabled = false;
-    document.getElementById('lxcTemplateDesc').textContent = '';
-
-    // Reset to first tab
-    const firstTab = document.querySelector('#lxcSourceTabs button[data-bs-target="#proxmox-source"]');
-    if (firstTab) {
-        bootstrap.Tab.getOrCreateInstance(firstTab).show();
-    }
-
-    // Load storages and templates in parallel
-    await Promise.all([
-        loadLxcStorages(nodeName),
-        loadAvailableLxcTemplates(nodeName)
-    ]);
-
-    // Show modal
-    const modal = new bootstrap.Modal(document.getElementById('lxcTemplateModal'));
-    modal.show();
-}
-
-async function loadLxcStorages(nodeName) {
-    const storageSelects = ['lxcStorage', 'lxcUrlStorage', 'lxcOciStorage'];
-
-    // Set loading state for all selects
-    storageSelects.forEach(id => {
-        const select = document.getElementById(id);
-        if (select) {
-            select.innerHTML = '<option value="">Loading...</option>';
-        }
-    });
-
-    try {
-        const response = await fetch(`/api/node/${nodeName}/lxc-storages`);
-        const storages = await response.json();
-
-        if (storages.error) {
-            storageSelects.forEach(id => {
-                const select = document.getElementById(id);
-                if (select) {
-                    select.innerHTML = '<option value="">Error loading storages</option>';
-                }
-            });
-            showNotification('Error loading storages: ' + storages.error, 'error');
-            return;
-        }
-
-        if (!Array.isArray(storages) || storages.length === 0) {
-            storageSelects.forEach(id => {
-                const select = document.getElementById(id);
-                if (select) {
-                    select.innerHTML = '<option value="">No compatible storages found</option>';
-                }
-            });
-            showNotification('No storages that support container templates found', 'warning');
-            return;
-        }
-
-        // Populate all storage selects
-        storageSelects.forEach(id => {
-            const select = document.getElementById(id);
-            if (select) {
-                select.innerHTML = '<option value="">Select storage...</option>';
-                storages.forEach(storage => {
-                    const option = document.createElement('option');
-                    option.value = storage.storage;
-                    option.textContent = `${storage.storage} (${storage.type}) - ${storage.available_gb} GB free`;
-                    select.appendChild(option);
-                });
-            }
-        });
-
-    } catch (error) {
-        storageSelects.forEach(id => {
-            const select = document.getElementById(id);
-            if (select) {
-                select.innerHTML = '<option value="">Error loading storages</option>';
-            }
-        });
-        showNotification('Error loading storages: ' + error.message, 'error');
-    }
-}
-
-async function loadAvailableLxcTemplates(nodeName) {
-    const templateSelect = document.getElementById('lxcTemplate');
-    const sectionSelect = document.getElementById('lxcSection');
-
-    templateSelect.innerHTML = '<option value="">Loading...</option>';
-    sectionSelect.innerHTML = '<option value="">Loading...</option>';
-
-    try {
-        const response = await fetch(`/api/node/${nodeName}/available-lxc-templates`);
-        const data = await response.json();
-
-        if (data.error) {
-            templateSelect.innerHTML = '<option value="">Error loading templates</option>';
-            sectionSelect.innerHTML = '<option value="">All Categories</option>';
-            showNotification('Error loading templates: ' + data.error, 'error');
-            return;
-        }
-
-        availableLxcTemplates = data.templates;
-
-        // Populate section/category dropdown
-        sectionSelect.innerHTML = '<option value="">All Categories</option>';
-        const sections = Object.keys(availableLxcTemplates).sort();
-        sections.forEach(section => {
-            const option = document.createElement('option');
-            option.value = section;
-            // Capitalize first letter
-            option.textContent = section.charAt(0).toUpperCase() + section.slice(1) +
-                ` (${availableLxcTemplates[section].length})`;
-            sectionSelect.appendChild(option);
-        });
-
-        // Populate template dropdown with all templates
-        populateLxcTemplateSelect('');
-
-    } catch (error) {
-        templateSelect.innerHTML = '<option value="">Error loading templates</option>';
-        sectionSelect.innerHTML = '<option value="">All Categories</option>';
-        showNotification('Error loading templates: ' + error.message, 'error');
-    }
-}
-
-function filterTemplatesBySection() {
-    const section = document.getElementById('lxcSection').value;
-    populateLxcTemplateSelect(section);
-}
-
-function populateLxcTemplateSelect(filterSection) {
-    const templateSelect = document.getElementById('lxcTemplate');
-    templateSelect.innerHTML = '<option value="">Select template...</option>';
-
-    if (!availableLxcTemplates) return;
-
-    const sections = filterSection ? [filterSection] : Object.keys(availableLxcTemplates).sort();
-
-    sections.forEach(section => {
-        const templates = availableLxcTemplates[section] || [];
-        if (templates.length === 0) return;
-
-        const optgroup = document.createElement('optgroup');
-        optgroup.label = section.charAt(0).toUpperCase() + section.slice(1);
-
-        templates.forEach(tmpl => {
-            const option = document.createElement('option');
-            option.value = tmpl.template;
-            option.textContent = tmpl.template;
-            option.dataset.headline = tmpl.headline || '';
-            option.dataset.description = tmpl.description || '';
-            option.dataset.os = tmpl.os || '';
-            option.dataset.version = tmpl.version || '';
-            optgroup.appendChild(option);
-        });
-
-        templateSelect.appendChild(optgroup);
-    });
-
-    // Add change event to show description
-    templateSelect.onchange = function() {
-        const selected = this.options[this.selectedIndex];
-        const descDiv = document.getElementById('lxcTemplateDesc');
-        if (selected && selected.dataset.headline) {
-            let desc = `<strong>${escapeHtml(selected.dataset.headline)}</strong>`;
-            if (selected.dataset.os) {
-                desc += ` <span class="badge bg-secondary">${escapeHtml(selected.dataset.os)}</span>`;
-            }
-            if (selected.dataset.version) {
-                desc += ` <span class="badge bg-info">${escapeHtml(selected.dataset.version)}</span>`;
-            }
-            descDiv.innerHTML = desc;
-        } else {
-            descDiv.innerHTML = '';
-        }
-    };
-}
-
-async function importLXCTemplate() {
-    // Determine which tab is active
-    const activeTab = document.querySelector('#lxcSourceTabs .nav-link.active');
-    const sourceType = activeTab.id.replace('-tab', '');
-
-    let storage, requestData;
-
-    if (sourceType === 'proxmox') {
-        storage = document.getElementById('lxcStorage').value;
-        const template = document.getElementById('lxcTemplate').value;
-
-        if (!storage) {
-            showNotification('Please select a storage', 'warning');
-            return;
-        }
-        if (!template) {
-            showNotification('Please select a template', 'warning');
-            return;
-        }
-
-        requestData = {
-            storage: storage,
-            source_type: 'proxmox',
-            template: template
-        };
-
-    } else if (sourceType === 'url') {
-        storage = document.getElementById('lxcUrlStorage').value;
-        const url = document.getElementById('lxcUrl').value;
-        const filename = document.getElementById('lxcUrlFilename').value;
-
-        if (!storage) {
-            showNotification('Please select a storage', 'warning');
-            return;
-        }
-        if (!url) {
-            showNotification('Please enter a URL', 'warning');
-            return;
-        }
-
-        requestData = {
-            storage: storage,
-            source_type: 'url',
-            url: url,
-            filename: filename || undefined
-        };
-
-    } else if (sourceType === 'oci') {
-        storage = document.getElementById('lxcOciStorage').value;
-        const image = document.getElementById('lxcOciImage').value;
-
-        if (!storage) {
-            showNotification('Please select a storage', 'warning');
-            return;
-        }
-        if (!image) {
-            showNotification('Please enter an OCI image reference', 'warning');
-            return;
-        }
-
-        requestData = {
-            storage: storage,
-            source_type: 'oci',
-            image: image
-        };
-
-    } else {
-        showNotification('Unknown source type', 'error');
-        return;
-    }
-
-    // Show progress
-    const btn = document.getElementById('importLxcBtn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Importing...';
-
-    document.getElementById('lxcImportProgress').classList.remove('d-none');
-    document.getElementById('lxcImportResult').classList.add('d-none');
-    document.getElementById('lxcImportProgressMsg').textContent = 'Starting download...';
-
-    try {
-        const response = await fetch(`/api/node/${currentLxcNode}/download-lxc-template`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestData)
-        });
-
-        const result = await response.json();
-
-        document.getElementById('lxcImportProgress').classList.add('d-none');
-        document.getElementById('lxcImportResult').classList.remove('d-none');
-
-        if (result.success) {
-            document.getElementById('lxcImportResult').innerHTML = `
-                <div class="alert alert-info">
-                    <i class="bi bi-check-circle"></i> <strong>Download started!</strong><br>
-                    <p class="mb-2">${escapeHtml(result.message)}</p>
-                    ${result.job_id ? `<p class="mb-0"><strong>Job ID:</strong> ${escapeHtml(result.job_id)}</p>` : ''}
-                    <hr>
-                    <small class="text-muted">
-                        Track progress via the <i class="bi bi-list-task"></i> Jobs icon in the top navbar.
-                        The template will appear in the list once completed.
-                    </small>
-                </div>
-            `;
-            showNotification(result.message, 'success');
-
-            // Refresh global jobs dropdown to show the new job
-            if (typeof loadGlobalJobs === 'function') {
-                loadGlobalJobs();
-            }
-
-            // Close modal after a few seconds
-            setTimeout(() => {
-                const modal = bootstrap.Modal.getInstance(document.getElementById('lxcTemplateModal'));
-                if (modal) modal.hide();
-            }, 3000);
-
-            // Refresh templates list after longer delay to allow download to complete
-            setTimeout(() => {
-                loadTemplates(currentLxcNode);
-            }, 5000);
-
-        } else {
-            // Check for manual command (OCI not supported)
-            if (result.manual_command) {
-                document.getElementById('lxcImportResult').innerHTML = `
-                    <div class="alert alert-warning">
-                        <i class="bi bi-exclamation-triangle"></i> <strong>Manual download required</strong><br>
-                        <p>${escapeHtml(result.error)}</p>
-                        <hr>
-                        <p class="mb-1"><strong>Run this command on the Proxmox node:</strong></p>
-                        <code class="d-block p-2 bg-dark text-light rounded">${escapeHtml(result.manual_command)}</code>
-                        <button class="btn btn-sm btn-secondary mt-2" onclick="copyToClipboard('${escapeForJs(result.manual_command)}')">
-                            <i class="bi bi-clipboard"></i> Copy Command
-                        </button>
-                    </div>
-                `;
-            } else {
-                document.getElementById('lxcImportResult').innerHTML = `
-                    <div class="alert alert-danger">
-                        <i class="bi bi-exclamation-triangle"></i> <strong>Error:</strong> ${escapeHtml(result.error || 'Unknown error')}
-                    </div>
-                `;
-                showNotification(result.error || 'Import failed', 'error');
-            }
-        }
-
-    } catch (error) {
-        document.getElementById('lxcImportProgress').classList.add('d-none');
-        document.getElementById('lxcImportResult').classList.remove('d-none');
-        document.getElementById('lxcImportResult').innerHTML = `
-            <div class="alert alert-danger">
-                <i class="bi bi-exclamation-triangle"></i> Network error: ${escapeHtml(error.message)}
-            </div>
-        `;
-        showNotification('Network error: ' + error.message, 'error');
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-download"></i> Import Template';
-    }
-}
-
-// Auto-fill filename when URL changes for LXC template
-document.addEventListener('DOMContentLoaded', function() {
-    const urlInput = document.getElementById('lxcUrl');
-    const filenameInput = document.getElementById('lxcUrlFilename');
-
-    if (urlInput && filenameInput) {
-        urlInput.addEventListener('input', function() {
-            if (this.value && !filenameInput.value) {
-                const url = this.value;
-                const filename = url.split('/').pop().split('?')[0];
-                if (filename && (filename.endsWith('.tar.xz') || filename.endsWith('.tar.gz') || filename.endsWith('.tar.zst'))) {
-                    filenameInput.value = filename;
-                }
-            }
-        });
-    }
-});
-
-// Create Container from Template
-let currentCreateNode = '';
-let currentCreateTemplate = '';
-
-async function showCreateContainerModal(nodeName, templateVolid) {
-    currentCreateNode = nodeName;
-    currentCreateTemplate = templateVolid;
-
-    // Reset form
-    document.getElementById('createContainerForm').reset();
-    document.getElementById('createContainerProgress').classList.add('d-none');
-    document.getElementById('createContainerResult').classList.add('d-none');
-    document.getElementById('createContainerBtn').disabled = false;
-    document.getElementById('staticIpFields').classList.add('d-none');
-    document.getElementById('containerUnprivileged').checked = true;
-    document.getElementById('containerStart').checked = true;
-    document.getElementById('containerCores').value = '1';
-    document.getElementById('containerMemory').value = '512';
-    document.getElementById('containerSwap').value = '512';
-    document.getElementById('containerDiskSize').value = '8';
-
-    // Show template info
-    const filename = templateVolid.split('/').pop();
-    document.getElementById('containerTemplateInfo').textContent = filename;
-
-    // Auto-generate hostname from template name
-    const baseName = filename.replace('.tar.xz', '').replace('.tar.gz', '').replace('.tar.zst', '').replace('.tar', '');
-    const safeName = baseName.replace(/[^a-zA-Z0-9\-]/g, '-').toLowerCase().substring(0, 20);
-    document.getElementById('containerHostname').value = safeName;
-
-    // Load storages and bridges in parallel
-    await Promise.all([
-        loadContainerStorages(nodeName),
-        loadContainerBridges(nodeName)
-    ]);
-
-    // Show modal
-    const modal = new bootstrap.Modal(document.getElementById('createContainerModal'));
-    modal.show();
-}
-
-async function loadContainerStorages(nodeName) {
-    const select = document.getElementById('containerStorage');
-    select.innerHTML = '<option value="">Loading...</option>';
-
-    try {
-        const response = await fetch(`/api/node/${nodeName}/storages?vm_type=lxc`);
-        const storages = await response.json();
-
-        if (storages.error) {
-            select.innerHTML = '<option value="">Error loading storages</option>';
-            return;
-        }
-
-        select.innerHTML = '<option value="">Select storage...</option>';
-        storages.forEach(storage => {
-            const option = document.createElement('option');
-            option.value = storage.storage;
-            option.textContent = `${storage.storage} (${storage.type}) - ${storage.available_gb || 0} GB free`;
-            select.appendChild(option);
-        });
-    } catch (error) {
-        select.innerHTML = '<option value="">Error loading storages</option>';
-    }
-}
-
-async function loadContainerBridges(nodeName) {
-    const select = document.getElementById('containerBridge');
-    select.innerHTML = '<option value="">Loading...</option>';
-
-    try {
-        const response = await fetch(`/api/node/${nodeName}/networks`);
-        const networks = await response.json();
-
-        if (networks.error) {
-            select.innerHTML = '<option value="vmbr0">vmbr0 (default)</option>';
-            return;
-        }
-
-        select.innerHTML = '';
-        // Add default option first
-        const defaultOption = document.createElement('option');
-        defaultOption.value = 'vmbr0';
-        defaultOption.textContent = 'vmbr0 (default)';
-        select.appendChild(defaultOption);
-
-        networks.forEach(net => {
-            if (net.iface && net.iface !== 'vmbr0') {
-                const option = document.createElement('option');
-                option.value = net.iface;
-                option.textContent = `${net.iface}${net.comments ? ' - ' + net.comments : ''}`;
-                select.appendChild(option);
-            }
-        });
-    } catch (error) {
-        select.innerHTML = '<option value="vmbr0">vmbr0 (default)</option>';
-    }
-}
-
-function toggleStaticIp() {
-    const ipConfig = document.getElementById('containerIpConfig').value;
-    const staticFields = document.getElementById('staticIpFields');
-    if (ipConfig === 'static') {
-        staticFields.classList.remove('d-none');
-    } else {
-        staticFields.classList.add('d-none');
-    }
-}
-
-async function createContainer() {
-    const hostname = document.getElementById('containerHostname').value.trim();
-    const storage = document.getElementById('containerStorage').value;
-
-    if (!hostname) {
-        showNotification('Please enter a hostname', 'warning');
-        return;
-    }
-    if (!storage) {
-        showNotification('Please select a storage', 'warning');
-        return;
-    }
-
-    // Build request data
-    const data = {
-        ostemplate: currentCreateTemplate,
-        hostname: hostname,
-        storage: storage,
-        rootfs_size: parseInt(document.getElementById('containerDiskSize').value) || 8,
-        cores: parseInt(document.getElementById('containerCores').value) || 1,
-        memory: parseInt(document.getElementById('containerMemory').value) || 512,
-        swap: parseInt(document.getElementById('containerSwap').value) || 512,
-        unprivileged: document.getElementById('containerUnprivileged').checked,
-        start: document.getElementById('containerStart').checked
-    };
-
-    // Optional VMID
-    const vmid = document.getElementById('containerVmid').value;
-    if (vmid) {
-        data.vmid = parseInt(vmid);
-    }
-
-    // Network configuration
-    const bridge = document.getElementById('containerBridge').value || 'vmbr0';
-    const ipConfig = document.getElementById('containerIpConfig').value;
-    if (ipConfig === 'dhcp') {
-        data.net0 = `name=eth0,bridge=${bridge},ip=dhcp`;
-    } else {
-        const ip = document.getElementById('containerIp').value.trim();
-        const gw = document.getElementById('containerGateway').value.trim();
-        if (ip) {
-            data.net0 = `name=eth0,bridge=${bridge},ip=${ip}${gw ? ',gw=' + gw : ''}`;
-        } else {
-            data.net0 = `name=eth0,bridge=${bridge},ip=dhcp`;
-        }
-    }
-
-    // Password
-    const password = document.getElementById('containerPassword').value;
-    if (password) {
-        data.password = password;
-    }
-
-    // SSH keys
-    const sshKeys = document.getElementById('containerSshKeys').value.trim();
-    if (sshKeys) {
-        data.ssh_public_keys = sshKeys;
-    }
-
-    // Show progress
-    const btn = document.getElementById('createContainerBtn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Creating...';
-
-    document.getElementById('createContainerProgress').classList.remove('d-none');
-    document.getElementById('createContainerResult').classList.add('d-none');
-    document.getElementById('createContainerProgressMsg').textContent = 'Creating container...';
-
-    try {
-        const response = await fetch(`/api/node/${currentCreateNode}/lxc`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
-
-        const result = await response.json();
-
-        document.getElementById('createContainerProgress').classList.add('d-none');
-        document.getElementById('createContainerResult').classList.remove('d-none');
-
-        if (result.success) {
-            document.getElementById('createContainerResult').innerHTML = `
-                <div class="alert alert-success">
-                    <i class="bi bi-check-circle"></i> <strong>Container created successfully!</strong><br>
-                    <p class="mb-0">Container ID: <strong>${result.vmid}</strong></p>
-                    <hr>
-                    <a href="/vm/${currentCreateNode}/${result.vmid}" class="btn btn-sm btn-primary">
-                        <i class="bi bi-box"></i> Go to Container
-                    </a>
-                </div>
-            `;
-            showNotification(`Container ${result.vmid} created successfully!`, 'success');
-
-            // Close modal after a few seconds
-            setTimeout(() => {
-                const modal = bootstrap.Modal.getInstance(document.getElementById('createContainerModal'));
-                if (modal) modal.hide();
-            }, 3000);
-
-        } else {
-            document.getElementById('createContainerResult').innerHTML = `
-                <div class="alert alert-danger">
-                    <i class="bi bi-exclamation-triangle"></i> <strong>Error:</strong> ${escapeHtml(result.error || 'Unknown error')}
-                </div>
-            `;
-            showNotification(result.error || 'Failed to create container', 'error');
-        }
-
-    } catch (error) {
-        document.getElementById('createContainerProgress').classList.add('d-none');
-        document.getElementById('createContainerResult').classList.remove('d-none');
-        document.getElementById('createContainerResult').innerHTML = `
-            <div class="alert alert-danger">
-                <i class="bi bi-exclamation-triangle"></i> Network error: ${escapeHtml(error.message)}
-            </div>
-        `;
-        showNotification('Network error: ' + error.message, 'error');
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-plus-circle"></i> Create Container';
-    }
-}
+<script type="module">
+  import { isosManager } from "{{ url_for('static', filename='js/isos.js') }}";
+  function register() { window.Alpine.data('isosManager', isosManager); }
+  if (window.Alpine) register();
+  else document.addEventListener('alpine:init', register);
 </script>
 {% endblock %}

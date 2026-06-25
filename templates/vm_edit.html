@@ -34,18 +34,15 @@
     color: #495057;
 }
 
-/* Mobile-friendly touch targets */
 @media (max-width: 768px) {
     .boot-device-item {
         min-height: 70px;
         padding: 16px 12px;
     }
-    
     .boot-device-item .drag-handle {
         min-width: 32px;
         font-size: 1.4em;
     }
-    
     .fallback-controls .btn {
         padding: 8px 12px;
         font-size: 1.1em;
@@ -81,7 +78,6 @@
     box-shadow: 0 8px 16px rgba(0,0,0,0.2);
 }
 
-/* Fallback controls styling */
 .fallback-controls {
     display: flex;
     flex-direction: column;
@@ -102,7 +98,6 @@
     opacity: 0.3;
 }
 
-/* Touch-friendly improvements */
 .boot-device-item .form-check-input {
     transform: scale(1.2);
     margin-right: 8px;
@@ -113,7 +108,6 @@
     padding: 6px 10px;
 }
 
-/* Animation for reordering */
 @keyframes reorder {
     0% { transform: translateX(-10px); opacity: 0.8; }
     100% { transform: translateX(0); opacity: 1; }
@@ -150,6 +144,8 @@
 </div>
 {% endif %}
 
+<div x-data="vmEditor('{{ node }}', '{{ vm.vmid }}', '{{ vm_type|default('qemu') }}')">
+
 <div class="row justify-content-center">
     <div class="col-md-8">
         <div class="card">
@@ -162,11 +158,10 @@
                     {% if vm_type == 'lxc' %}
                     <div class="mb-4">
                         <h6 class="text-primary mb-3"><i class="bi bi-gear"></i> General Settings</h6>
-
                         <div class="mb-3">
                             <label for="hostname" class="form-label">Hostname</label>
                             <input type="text" class="form-control" id="hostname" name="hostname"
-                                   value="{{ config.hostname or '' }}" pattern="[a-zA-Z0-9\-]+">
+                                   x-model="hostname" pattern="[a-zA-Z0-9\-]+">
                             <div class="form-text">Container hostname (alphanumeric and hyphens only)</div>
                         </div>
                     </div>
@@ -179,7 +174,7 @@
                         {% if vm_type != 'lxc' %}
                         <div class="mb-3">
                             <label for="cpu_type" class="form-label">CPU Type</label>
-                            <select class="form-select" id="cpu_type" name="cpu_type">
+                            <select class="form-select" id="cpu_type" name="cpu_type" x-model="cpuType">
                                 <option value="host">Host (Recommended)</option>
                                 <option value="kvm64">KVM64</option>
                                 <option value="qemu64">QEMU64</option>
@@ -193,19 +188,19 @@
                             <div class="col-md-6 mb-3">
                                 <label for="sockets" class="form-label">Sockets</label>
                                 <input type="number" class="form-control" id="sockets" name="sockets"
-                                       min="1" max="4" value="{{ config.sockets or 1 }}">
+                                       min="1" max="4" x-model.number="sockets">
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label for="cores" class="form-label">Cores</label>
                                 <input type="number" class="form-control" id="cores" name="cores"
-                                       min="1" max="128" value="{{ config.cores or 1 }}">
+                                       min="1" max="128" x-model.number="cores">
                             </div>
                         </div>
                         {% else %}
                         <div class="mb-3">
                             <label for="cores" class="form-label">CPU Cores</label>
                             <input type="number" class="form-control" id="cores" name="cores"
-                                   min="1" max="128" value="{{ config.cores or 1 }}">
+                                   min="1" max="128" x-model.number="cores">
                         </div>
                         {% endif %}
                     </div>
@@ -213,18 +208,17 @@
                     <!-- Memory Configuration -->
                     <div class="mb-4">
                         <h6 class="text-primary mb-3"><i class="bi bi-memory"></i> Memory Configuration</h6>
-
                         <div class="row">
                             <div class="col-md-6 mb-3">
                                 <label for="memory" class="form-label">Memory (MB)</label>
                                 <input type="number" class="form-control" id="memory" name="memory"
-                                       min="64" max="4194304" step="64" value="{{ config.memory or 512 }}">
+                                       min="64" max="4194304" step="64" x-model.number="memory">
                             </div>
                             {% if vm_type == 'lxc' %}
                             <div class="col-md-6 mb-3">
                                 <label for="swap" class="form-label">Swap (MB)</label>
                                 <input type="number" class="form-control" id="swap" name="swap"
-                                       min="0" max="4194304" step="64" value="{{ config.swap or 512 }}">
+                                       min="0" max="4194304" step="64" x-model.number="swap">
                             </div>
                             {% endif %}
                         </div>
@@ -237,7 +231,7 @@
 
                         <div class="mb-3">
                             <label for="vga_type" class="form-label">Display Type</label>
-                            <select class="form-select" id="vga_type" name="vga_type">
+                            <select class="form-select" id="vga_type" name="vga_type" x-model="vgaType">
                                 <option value="std">Standard VGA (std)</option>
                                 <option value="cirrus">Cirrus Logic (cirrus)</option>
                                 <option value="vmware">VMware Compatible (vmware)</option>
@@ -255,10 +249,10 @@
                             </div>
                         </div>
 
-                        <div class="mb-3" id="vgaMemoryContainer">
+                        <div class="mb-3" x-show="vgaTypeNeedsMemory(vgaType)">
                             <label for="vga_memory" class="form-label">VGA Memory (MB)</label>
                             <input type="number" class="form-control" id="vga_memory" name="vga_memory"
-                                   min="4" max="512" step="4" value="16">
+                                   min="4" max="512" step="4" x-model.number="vgaMemory">
                             <div class="form-text">Video memory in MB (4-512). Default is 16MB. Higher values useful for higher resolutions.</div>
                         </div>
                     </div>
@@ -267,10 +261,36 @@
                     <!-- Disk Configuration -->
                     <div class="mb-4">
                         <h6 class="text-primary mb-3"><i class="bi bi-hdd"></i> Disk Configuration</h6>
-                        
-                        <div id="diskInterfaces">
-                            <!-- Disk interfaces will be loaded here -->
-                        </div>
+
+                        <template x-for="disk in disks" :key="disk.key">
+                            <div class="card mb-2">
+                                <div class="card-body py-2">
+                                    <div class="row align-items-center">
+                                        <div class="col-md-2">
+                                            <strong x-text="disk.displayName"></strong><br>
+                                            <small class="text-muted" x-text="disk.displayType"></small>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label class="form-label small mb-1">Current Size</label>
+                                            <div><strong x-text="disk.size"></strong></div>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label small mb-1">Resize to (GB)</label>
+                                            <input type="number" class="form-control form-control-sm"
+                                                   :min="disk.sizeGB" step="1" x-model.number="disk.resizeTo">
+                                            <small class="text-muted">Can only expand</small>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <button type="button" class="btn btn-sm btn-outline-primary"
+                                                    @click="resizeDisk(disk.key)">
+                                                <i class="bi bi-arrows-expand"></i> Resize
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+                        <div x-show="disks.length === 0 && !loading" class="text-muted">No disks configured</div>
                     </div>
 
                     <!-- ISO/CD-ROM Configuration (QEMU VMs only) -->
@@ -278,22 +298,70 @@
                     <div class="mb-4">
                         <div class="d-flex justify-content-between align-items-center mb-3">
                             <h6 class="text-primary mb-0"><i class="bi bi-disc"></i> ISO/CD-ROM Images</h6>
-                            <button type="button" class="btn btn-sm btn-success" id="attachIsoBtn">
+                            <button type="button" class="btn btn-sm btn-success" @click="openAttachIso()">
                                 <i class="bi bi-plus-circle"></i> Attach ISO
                             </button>
                         </div>
 
-                        <div id="isoInterfaces">
-                            <!-- ISO interfaces will be loaded here -->
-                        </div>
+                        <template x-for="iso in isos" :key="iso.key">
+                            <div class="card mb-2">
+                                <div class="card-body py-2">
+                                    <div class="row align-items-center">
+                                        <div class="col-md-2">
+                                            <strong x-text="iso.key"></strong><br>
+                                            <small class="text-muted">CD-ROM</small>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <div class="d-flex align-items-center">
+                                                <i class="bi bi-disc me-2"></i>
+                                                <div>
+                                                    <div><strong x-text="iso.isoName || 'Unknown ISO'"></strong></div>
+                                                    <small class="text-muted" x-text="iso.isoPath"></small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <button type="button" class="btn btn-sm btn-outline-danger"
+                                                    @click="detachIso(iso.key)">
+                                                <i class="bi bi-eject"></i> Detach
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+                        <div x-show="isos.length === 0 && !loading" class="text-muted">No ISO images attached</div>
                     </div>
 
                     <!-- Cloud-init Drive -->
-                    <div class="mb-4" id="cloudinitSection" style="display: none;">
+                    <div class="mb-4" x-show="!!cloudinit">
                         <h6 class="text-primary mb-3"><i class="bi bi-cloud-arrow-up"></i> Cloud-init Drive</h6>
-                        <div id="cloudinitDrive">
-                            <!-- Cloud-init drive will be loaded here -->
-                        </div>
+                        <template x-if="cloudinit">
+                            <div class="card mb-2 border-info">
+                                <div class="card-body py-2">
+                                    <div class="row align-items-center">
+                                        <div class="col-md-3">
+                                            <strong x-text="cloudinit.key"></strong><br>
+                                            <small class="text-info">Cloud-init</small>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="d-flex align-items-center">
+                                                <i class="bi bi-cloud-arrow-up me-2 text-info"></i>
+                                                <div>
+                                                    <div><strong>Cloud-init Configuration Drive</strong></div>
+                                                    <small class="text-muted">Storage: <span x-text="cloudinit.storage"></span></small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <small class="text-muted">
+                                                <i class="bi bi-info-circle"></i> Provides cloud-init data to the VM
+                                            </small>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
                     </div>
                     {% endif %}
 
@@ -301,14 +369,95 @@
                     <div class="mb-4">
                         <div class="d-flex justify-content-between align-items-center mb-3">
                             <h6 class="text-primary mb-0"><i class="bi bi-diagram-3"></i> Network Interfaces</h6>
-                            <button type="button" class="btn btn-sm btn-success" id="addNetworkBtn">
+                            <button type="button" class="btn btn-sm btn-success" @click="openAddNetwork()">
                                 <i class="bi bi-plus-circle"></i> Add Interface
                             </button>
                         </div>
-                        
-                        <div id="networkInterfaces">
-                            <!-- Network interfaces will be loaded here -->
-                        </div>
+
+                        <template x-for="iface in networks" :key="iface.key">
+                            <div class="card mb-2">
+                                <div class="card-body py-2">
+                                    <!-- LXC network card -->
+                                    <template x-if="vmType === 'lxc'">
+                                        <div class="row align-items-center mb-2">
+                                            <div class="col-md-2">
+                                                <strong x-text="iface.key"></strong><br>
+                                                <small class="text-muted" x-text="iface.name"></small>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label class="form-label small mb-1">Bridge</label>
+                                                <select class="form-select form-select-sm"
+                                                        x-model="iface.bridge"
+                                                        @change="onNetworkBridgeChange(iface)">
+                                                    <template x-for="b in availableBridges" :key="b.iface">
+                                                        <option :value="b.iface" x-text="b.iface"></option>
+                                                    </template>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-2">
+                                                <label class="form-label small mb-1">IP Config</label>
+                                                <select class="form-select form-select-sm"
+                                                        x-model="iface.ipConfig"
+                                                        @change="onNetworkBridgeChange(iface)">
+                                                    <option value="dhcp">DHCP</option>
+                                                    <option value="static">Static</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-4" x-show="iface.ipConfig === 'static'">
+                                                <div class="row">
+                                                    <div class="col-6">
+                                                        <label class="form-label small mb-1">IP/CIDR</label>
+                                                        <input type="text" class="form-control form-control-sm"
+                                                               x-model="iface.ipAddress"
+                                                               placeholder="192.168.1.100/24">
+                                                    </div>
+                                                    <div class="col-6">
+                                                        <label class="form-label small mb-1">Gateway</label>
+                                                        <input type="text" class="form-control form-control-sm"
+                                                               x-model="iface.gateway"
+                                                               placeholder="192.168.1.1">
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-1">
+                                                <button type="button" class="btn btn-sm btn-outline-danger"
+                                                        @click="removeNetwork(iface.key)">
+                                                    <i class="bi bi-trash"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </template>
+                                    <!-- QEMU network card -->
+                                    <template x-if="vmType !== 'lxc'">
+                                        <div class="row align-items-center">
+                                            <div class="col-md-3">
+                                                <strong x-text="iface.key"></strong><br>
+                                                <small class="text-muted" x-text="iface.model"></small>
+                                            </div>
+                                            <div class="col-md-4">
+                                                <select class="form-select form-select-sm"
+                                                        x-model="iface.bridge"
+                                                        @change="onNetworkBridgeChange(iface)">
+                                                    <template x-for="b in availableBridges" :key="b.iface">
+                                                        <option :value="b.iface" x-text="b.iface"></option>
+                                                    </template>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <small class="text-muted" x-text="iface.mac ? iface.mac.substring(0,17) : 'Auto MAC'"></small>
+                                            </div>
+                                            <div class="col-md-2">
+                                                <button type="button" class="btn btn-sm btn-outline-danger"
+                                                        @click="removeNetwork(iface.key)">
+                                                    <i class="bi bi-trash"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                        <div x-show="networks.length === 0 && !loading" class="text-muted">No network interfaces configured</div>
                     </div>
 
                     <!-- Boot Options -->
@@ -317,14 +466,56 @@
 
                         {% if vm_type != 'lxc' %}
                         <div class="mb-3">
-                            <label for="bootOrder" class="form-label">Boot Order</label>
+                            <label class="form-label">Boot Order</label>
                             <div class="card">
                                 <div class="card-header bg-light">
                                     <small class="text-muted">Drag and drop to reorder boot devices</small>
                                 </div>
                                 <div class="card-body p-2">
-                                    <div id="bootOrderList" class="list-group list-group-flush">
-                                        <!-- Boot order items will be loaded here -->
+                                    <div x-ref="bootList" class="list-group list-group-flush">
+                                        <template x-if="bootDevices.length === 0">
+                                            <div class="boot-order-placeholder">
+                                                <span>No bootable devices available</span>
+                                            </div>
+                                        </template>
+                                        <template x-for="(device, index) in bootDevices" :key="device.id">
+                                            <div class="list-group-item boot-device-item"
+                                                 :class="!device.enabled && 'text-muted'">
+                                                <div class="d-flex align-items-center">
+                                                    <div class="drag-handle me-3" x-show="supportsDrag">
+                                                        <i class="bi bi-grip-vertical"></i>
+                                                    </div>
+                                                    <div class="fallback-controls ms-0 me-2" x-show="!supportsDrag">
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary"
+                                                                @click="moveBoot(device.id, 'up')"
+                                                                :disabled="index === 0">
+                                                            <i class="bi bi-arrow-up"></i>
+                                                        </button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary"
+                                                                @click="moveBoot(device.id, 'down')"
+                                                                :disabled="index === bootDevices.length - 1">
+                                                            <i class="bi bi-arrow-down"></i>
+                                                        </button>
+                                                    </div>
+                                                    <div class="form-check me-3">
+                                                        <input class="form-check-input" type="checkbox"
+                                                               :id="'boot_' + device.id"
+                                                               x-model="device.enabled"
+                                                               @change="saveBootOrder()">
+                                                    </div>
+                                                    <div class="device-icon me-3">
+                                                        <i class="bi fs-5" :class="device.icon"></i>
+                                                    </div>
+                                                    <div class="flex-grow-1">
+                                                        <div class="fw-semibold" x-text="device.name"></div>
+                                                        <small class="text-muted">Priority: <span x-text="index + 1"></span></small>
+                                                    </div>
+                                                    <div class="boot-priority-badge">
+                                                        <span class="badge bg-secondary" x-text="index + 1"></span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </template>
                                     </div>
                                 </div>
                             </div>
@@ -336,7 +527,8 @@
                         {% endif %}
 
                         <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="autostart" name="autostart">
+                            <input class="form-check-input" type="checkbox" id="autostart" name="autostart"
+                                   x-model="autostart">
                             <label class="form-check-label" for="autostart">
                                 Auto-start {{ 'Container' if vm_type == 'lxc' else 'VM' }} on node boot
                             </label>
@@ -345,14 +537,16 @@
                     </div>
 
                     <div class="d-grid gap-2 d-md-flex justify-content-md-end">
-                        <button type="button" class="btn btn-secondary" onclick="window.history.back()">
+                        <button type="button" class="btn btn-secondary" @click="window.history.back()">
                             <i class="bi bi-x-circle"></i> Cancel
                         </button>
-                        <button type="button" class="btn btn-primary" id="saveBtn">
-                            <i class="bi bi-check-circle"></i> Save
+                        <button type="button" class="btn btn-primary" @click="save(false)" :disabled="saving">
+                            <span x-show="saving" class="spinner-border spinner-border-sm me-1" role="status"></span>
+                            <i class="bi bi-check-circle" x-show="!saving"></i> Save
                         </button>
-                        <button type="button" class="btn btn-success" id="saveCloseBtn">
-                            <i class="bi bi-check2-square"></i> Save and Close
+                        <button type="button" class="btn btn-success" @click="save(true)" :disabled="saving">
+                            <span x-show="saving" class="spinner-border spinner-border-sm me-1" role="status"></span>
+                            <i class="bi bi-check2-square" x-show="!saving"></i> Save and Close
                         </button>
                     </div>
                 </form>
@@ -362,1585 +556,103 @@
 </div>
 
 <!-- Loading overlay -->
-<div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center" 
-     style="background-color: rgba(0,0,0,0.5); z-index: 9999;">
+<div class="position-fixed top-0 start-0 w-100 h-100 align-items-center justify-content-center"
+     style="background-color: rgba(0,0,0,0.5); z-index: 9999;"
+     x-show="saving"
+     x-cloak>
     <div class="bg-white rounded p-4 text-center">
         <div class="spinner-border text-primary mb-2" role="status"></div>
         <div>Updating configuration...</div>
     </div>
 </div>
+
+<!-- Add Network Modal -->
+<div class="modal fade" x-ref="addNetworkModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add Network Interface</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">Network Bridge</label>
+                    <select class="form-select" x-model="newNet.bridge">
+                        <option value="">Select bridge...</option>
+                        <template x-for="b in availableBridges" :key="b.iface">
+                            <option :value="b.iface" x-text="b.iface"></option>
+                        </template>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Network Model</label>
+                    <select class="form-select" x-model="newNet.model">
+                        <option value="virtio">VirtIO (Recommended)</option>
+                        <option value="e1000">Intel E1000</option>
+                        <option value="rtl8139">Realtek RTL8139</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" @click="addNetwork()">Add Interface</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if vm_type|default('qemu') == 'qemu' %}
+<!-- Attach ISO Modal -->
+<div class="modal fade" x-ref="attachIsoModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Attach ISO Image</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">ISO Image</label>
+                    <select class="form-select" x-model="attachSel.iso">
+                        <option value="">Select ISO image...</option>
+                        <template x-for="iso in availableIsos" :key="iso.volid">
+                            <option :value="iso.volid" x-text="iso.volid.split('/').pop()"></option>
+                        </template>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Interface</label>
+                    <select class="form-select" x-model="attachSel.iface">
+                        <option value="ide2">ide2 (Recommended)</option>
+                        <option value="ide0">ide0</option>
+                        <option value="ide1">ide1</option>
+                        <option value="ide3">ide3</option>
+                    </select>
+                    <div class="form-text">CD-ROM drives use IDE interfaces</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" @click="attachIso()">Attach ISO</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+</div>{# end x-data="vmEditor" #}
 {% endblock %}
 
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
-<script>
-const node = '{{ node }}';
-const vmid = '{{ vm.vmid }}';
-const vmType = '{{ vm_type|default("qemu") }}';
-
-// Global functions for network management
-function addNetworkInterface() {
-    const bridge = document.getElementById('newBridge').value;
-    const model = document.getElementById('newModel').value;
-    
-    if (!bridge) {
-        showNotification('Please select a network bridge', 'warning');
-        return;
-    }
-    
-    // Find next available interface number
-    fetch(`/api/vm/${node}/${vmid}/config`)
-        .then(response => response.json())
-        .then(data => {
-            let nextId = 0;
-            while (data[`net${nextId}`]) {
-                nextId++;
-            }
-            
-            const newConfig = `${model},bridge=${bridge}`;
-            const updateData = {};
-            updateData[`net${nextId}`] = newConfig;
-            
-            return fetch(`/api/vm/${node}/${vmid}/config`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(updateData)
-            });
-        })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(result => {
-            console.log('API Response:', result); // Debug log
-            if (result.success) {
-                showNotification('Network interface added successfully', 'success');
-                loadNetworkInterfaces(); // Reload interface list
-                
-                // Close modal
-                const modal = bootstrap.Modal.getInstance(document.getElementById('addNetworkModal'));
-                if (modal) {
-                    modal.hide();
-                }
-            } else {
-                showNotification(result.error || 'Failed to add network interface', 'error');
-            }
-        })
-        .catch(error => {
-            console.error('Error adding network interface:', error);
-            showNotification('Network error while adding interface: ' + error.message, 'error');
-        });
-}
-
-function removeNetworkInterface(interfaceKey) {
-    if (!confirm(`Are you sure you want to remove network interface ${interfaceKey}?`)) {
-        return;
-    }
-    
-    // Remove interface by setting it to empty string
-    const updateData = {};
-    updateData[interfaceKey] = '';
-    
-    fetch(`/api/vm/${node}/${vmid}/config`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updateData)
-    })
-    .then(response => response.json())
-    .then(result => {
-        if (result.success) {
-            showNotification(`Network interface ${interfaceKey} removed`, 'success');
-            loadNetworkInterfaces(); // Reload interface list
-        } else {
-            showNotification(result.error || 'Failed to remove interface', 'error');
-        }
-    })
-    .catch(error => {
-        showNotification('Network error while removing interface', 'error');
-    });
-}
-
-function showNotification(message, type = 'info') {
-    const notification = document.createElement('div');
-    notification.className = `alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show position-fixed`;
-    notification.style.top = '20px';
-    notification.style.right = '20px';
-    notification.style.zIndex = '10000';
-    notification.innerHTML = `
-        ${message}
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    `;
-    
-    document.body.appendChild(notification);
-    
-    // Auto-remove after 5 seconds
-    setTimeout(() => {
-        if (notification.parentNode) {
-            notification.parentNode.removeChild(notification);
-        }
-    }, 5000);
-}
-
-function loadNetworkInterfaces() {
-    fetch(`/api/vm/${node}/${vmid}/config`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                console.error('Error loading network interfaces:', data.error);
-                return;
-            }
-            
-            const container = document.getElementById('networkInterfaces');
-            if (!container) return;
-            
-            container.innerHTML = '';
-            
-            // Parse network interfaces from config
-            const interfaces = [];
-            for (const [key, value] of Object.entries(data)) {
-                if (key.startsWith('net') && key.match(/^net\d+$/)) {
-                    interfaces.push({
-                        key: key,
-                        config: value
-                    });
-                }
-            }
-            
-            // Sort interfaces by number
-            interfaces.sort((a, b) => {
-                const aNum = parseInt(a.key.replace('net', ''));
-                const bNum = parseInt(b.key.replace('net', ''));
-                return aNum - bNum;
-            });
-            
-            if (interfaces.length === 0) {
-                container.innerHTML = '<div class="text-muted">No network interfaces configured</div>';
-            } else {
-                interfaces.forEach(iface => {
-                    container.appendChild(createNetworkInterfaceCard(iface));
-                });
-            }
-        })
-        .catch(error => {
-            console.error('Error loading network interfaces:', error);
-        });
-}
-
-function createNetworkInterfaceCard(iface) {
-    const div = document.createElement('div');
-    div.className = 'card mb-2';
-
-    // Parse interface config
-    const parts = iface.config.split(',');
-    let model = 'virtio';
-    let bridge = 'unknown';
-    let macAddr = '';
-    let ipConfig = 'dhcp';
-    let ipAddress = '';
-    let gateway = '';
-    let name = 'eth0';
-
-    for (const part of parts) {
-        if (part.includes('=')) {
-            const [key, value] = part.split('=', 2);
-            if (key === 'bridge') {
-                bridge = value;
-            } else if (key === 'ip') {
-                if (value === 'dhcp') {
-                    ipConfig = 'dhcp';
-                } else {
-                    ipConfig = 'static';
-                    ipAddress = value;
-                }
-            } else if (key === 'gw') {
-                gateway = value;
-            } else if (key === 'name') {
-                name = value;
-            } else if (key.match(/^(virtio|e1000|rtl8139)$/)) {
-                model = key;
-                macAddr = value;
-            }
-        } else if (part.match(/^(virtio|e1000|rtl8139)$/)) {
-            model = part;
-        }
-    }
-
-    if (vmType === 'lxc') {
-        // LXC container network card with IP configuration
-        div.innerHTML = `
-            <div class="card-body py-2">
-                <div class="row align-items-center mb-2">
-                    <div class="col-md-2">
-                        <strong>${iface.key}</strong><br>
-                        <small class="text-muted">${name}</small>
-                    </div>
-                    <div class="col-md-3">
-                        <label class="form-label small mb-1">Bridge</label>
-                        <select class="form-select form-select-sm bridge-select" data-interface="${iface.key}">
-                            <option value="">Loading...</option>
-                        </select>
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small mb-1">IP Config</label>
-                        <select class="form-select form-select-sm ip-config-select" data-interface="${iface.key}" onchange="toggleLxcIpFields(this)">
-                            <option value="dhcp" ${ipConfig === 'dhcp' ? 'selected' : ''}>DHCP</option>
-                            <option value="static" ${ipConfig === 'static' ? 'selected' : ''}>Static</option>
-                        </select>
-                    </div>
-                    <div class="col-md-4 lxc-static-ip" ${ipConfig !== 'static' ? 'style="display:none;"' : ''}>
-                        <div class="row">
-                            <div class="col-6">
-                                <label class="form-label small mb-1">IP/CIDR</label>
-                                <input type="text" class="form-control form-control-sm ip-address-input"
-                                       data-interface="${iface.key}" value="${ipAddress}" placeholder="192.168.1.100/24">
-                            </div>
-                            <div class="col-6">
-                                <label class="form-label small mb-1">Gateway</label>
-                                <input type="text" class="form-control form-control-sm gateway-input"
-                                       data-interface="${iface.key}" value="${gateway}" placeholder="192.168.1.1">
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-1">
-                        <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeNetworkInterface('${iface.key}')">
-                            <i class="bi bi-trash"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>
-        `;
-    } else {
-        // QEMU VM network card
-        div.innerHTML = `
-            <div class="card-body py-2">
-                <div class="row align-items-center">
-                    <div class="col-md-3">
-                        <strong>${iface.key}</strong><br>
-                        <small class="text-muted">${model}</small>
-                    </div>
-                    <div class="col-md-4">
-                        <select class="form-select form-select-sm bridge-select" data-interface="${iface.key}">
-                            <option value="">Loading bridges...</option>
-                        </select>
-                    </div>
-                    <div class="col-md-3">
-                        <small class="text-muted">${macAddr ? macAddr.substring(0, 17) : 'Auto MAC'}</small>
-                    </div>
-                    <div class="col-md-2">
-                        <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeNetworkInterface('${iface.key}')">
-                            <i class="bi bi-trash"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>
-        `;
-    }
-
-    // Populate bridge select with current value
-    const bridgeSelect = div.querySelector('.bridge-select');
-    setTimeout(() => {
-        populateBridgeSelect(bridgeSelect, bridge);
-    }, 100);
-
-    return div;
-}
-
-function toggleLxcIpFields(selectElement) {
-    const card = selectElement.closest('.card');
-    const staticIpDiv = card.querySelector('.lxc-static-ip');
-    if (staticIpDiv) {
-        staticIpDiv.style.display = selectElement.value === 'static' ? '' : 'none';
-    }
-}
-
-function saveLxcNetworkConfig(interfaceKey) {
-    const card = document.querySelector(`[data-interface="${interfaceKey}"]`).closest('.card');
-    const bridgeSelect = card.querySelector('.bridge-select');
-    const ipConfigSelect = card.querySelector('.ip-config-select');
-    const ipAddressInput = card.querySelector('.ip-address-input');
-    const gatewayInput = card.querySelector('.gateway-input');
-
-    const bridge = bridgeSelect.value;
-    const ipConfig = ipConfigSelect.value;
-    const ipAddress = ipAddressInput ? ipAddressInput.value : '';
-    const gateway = gatewayInput ? gatewayInput.value : '';
-
-    // Build LXC network config string
-    let netConfig = `name=eth0,bridge=${bridge}`;
-    if (ipConfig === 'dhcp') {
-        netConfig += ',ip=dhcp';
-    } else if (ipConfig === 'static' && ipAddress) {
-        netConfig += `,ip=${ipAddress}`;
-        if (gateway) {
-            netConfig += `,gw=${gateway}`;
-        }
-    }
-
-    const updateData = {};
-    updateData[interfaceKey] = netConfig;
-
-    fetch(`/api/vm/${node}/${vmid}/config`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updateData)
-    })
-    .then(response => response.json())
-    .then(result => {
-        if (result.success) {
-            showNotification(`Network interface ${interfaceKey} updated`, 'success');
-        } else {
-            showNotification(result.error || 'Failed to update interface', 'error');
-            loadNetworkInterfaces();
-        }
-    })
-    .catch(error => {
-        showNotification('Network error while updating interface', 'error');
-        loadNetworkInterfaces();
-    });
-}
-
-function populateBridgeSelect(selectElement, currentBridge) {
-    if (!window.availableBridges) {
-        setTimeout(() => populateBridgeSelect(selectElement, currentBridge), 100);
-        return;
-    }
-
-    selectElement.innerHTML = '<option value="">Select bridge...</option>';
-
-    window.availableBridges.forEach(bridge => {
-        const option = document.createElement('option');
-        option.value = bridge.iface;
-        option.textContent = bridge.iface;
-        if (bridge.iface === currentBridge) {
-            option.selected = true;
-        }
-        selectElement.appendChild(option);
-    });
-
-    // Add change listener
-    selectElement.addEventListener('change', function() {
-        if (vmType === 'lxc') {
-            saveLxcNetworkConfig(this.dataset.interface);
-        } else {
-            updateNetworkInterface(this.dataset.interface, this.value);
-        }
-    });
-}
-
-function updateNetworkInterface(interfaceKey, newBridge) {
-    if (!newBridge) return;
-    
-    // Get current interface config to preserve other settings
-    fetch(`/api/vm/${node}/${vmid}/config`)
-        .then(response => response.json())
-        .then(data => {
-            const currentConfig = data[interfaceKey];
-            if (!currentConfig) return;
-            
-            // Parse current config and update bridge
-            const parts = currentConfig.split(',');
-            let bridgeFound = false;
-            
-            for (let i = 0; i < parts.length; i++) {
-                if (parts[i].startsWith('bridge=')) {
-                    parts[i] = `bridge=${newBridge}`;
-                    bridgeFound = true;
-                }
-            }
-            
-            if (!bridgeFound) {
-                parts.push(`bridge=${newBridge}`);
-            }
-            
-            const newConfig = parts.join(',');
-            
-            // Update via API
-            const updateData = {};
-            updateData[interfaceKey] = newConfig;
-            
-            fetch(`/api/vm/${node}/${vmid}/config`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(updateData)
-            })
-            .then(response => response.json())
-            .then(result => {
-                if (result.success) {
-                    showNotification(`Network interface ${interfaceKey} updated`, 'success');
-                } else {
-                    showNotification(result.error || 'Failed to update interface', 'error');
-                    loadNetworkInterfaces(); // Reload to revert changes
-                }
-            })
-            .catch(error => {
-                showNotification('Network error while updating interface', 'error');
-                loadNetworkInterfaces(); // Reload to revert changes
-            });
-        });
-}
-
-function loadAvailableBridges() {
-    fetch(`/api/node/${node}/networks`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                console.error('Error loading network bridges:', data.error);
-                return;
-            }
-            
-            window.availableBridges = data.filter(net => net.type === 'bridge');
-        })
-        .catch(error => {
-            console.error('Error loading network bridges:', error);
-            window.availableBridges = [];
-        });
-}
-
-function showAddNetworkModal() {
-    if (!window.availableBridges || window.availableBridges.length === 0) {
-        showNotification('No network bridges available', 'warning');
-        return;
-    }
-    
-    const bridgeOptions = window.availableBridges.map(bridge => 
-        `<option value="${bridge.iface}">${bridge.iface}</option>`
-    ).join('');
-    
-    const modalHtml = `
-        <div class="modal fade" id="addNetworkModal" tabindex="-1">
-            <div class="modal-dialog">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title">Add Network Interface</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                    </div>
-                    <div class="modal-body">
-                        <div class="mb-3">
-                            <label for="newBridge" class="form-label">Network Bridge</label>
-                            <select class="form-select" id="newBridge">
-                                <option value="">Select bridge...</option>
-                                ${bridgeOptions}
-                            </select>
-                        </div>
-                        <div class="mb-3">
-                            <label for="newModel" class="form-label">Network Model</label>
-                            <select class="form-select" id="newModel">
-                                <option value="virtio">VirtIO (Recommended)</option>
-                                <option value="e1000">Intel E1000</option>
-                                <option value="rtl8139">Realtek RTL8139</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                        <button type="button" class="btn btn-primary" id="addNetworkSubmitBtn">Add Interface</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
-    
-    // Remove existing modal if any
-    const existingModal = document.getElementById('addNetworkModal');
-    if (existingModal) {
-        existingModal.remove();
-    }
-    
-    // Add modal to body
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
-    
-    // Show modal
-    const modal = new bootstrap.Modal(document.getElementById('addNetworkModal'));
-    modal.show();
-    
-    // Add event listener to submit button
-    document.getElementById('addNetworkSubmitBtn').addEventListener('click', addNetworkInterface);
-}
-
-function loadDiskInterfaces() {
-    fetch(`/api/vm/${node}/${vmid}/config`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                console.error('Error loading disk interfaces:', data.error);
-                return;
-            }
-
-            const container = document.getElementById('diskInterfaces');
-            if (!container) return;
-
-            container.innerHTML = '';
-
-            // Parse disk interfaces from config
-            const disks = [];
-
-            if (vmType === 'lxc') {
-                // LXC uses rootfs and mp0, mp1, etc. for mount points
-                if (data.rootfs) {
-                    disks.push({
-                        key: 'rootfs',
-                        config: data.rootfs,
-                        isRootfs: true
-                    });
-                }
-                // Also check for additional mount points
-                for (const [key, value] of Object.entries(data)) {
-                    if (key.match(/^mp\d+$/)) {
-                        disks.push({
-                            key: key,
-                            config: value
-                        });
-                    }
-                }
-            } else {
-                // QEMU VM disks
-                for (const [key, value] of Object.entries(data)) {
-                    if ((key.startsWith('scsi') || key.startsWith('virtio') || key.startsWith('ide') || key.startsWith('sata')) && key.match(/^(scsi|virtio|ide|sata)\d+$/)) {
-                        // Skip ISO images and cloud-init disks
-                        if (value.includes('.iso') || value.includes('media=cdrom') || value.includes('cloudinit')) {
-                            continue;
-                        }
-                        disks.push({
-                            key: key,
-                            config: value
-                        });
-                    }
-                }
-
-                // Sort disks by type and number
-                disks.sort((a, b) => {
-                    const aType = a.key.replace(/\d+$/, '');
-                    const bType = b.key.replace(/\d+$/, '');
-                    if (aType !== bType) return aType.localeCompare(bType);
-                    const aNum = parseInt(a.key.replace(/^[a-z]+/, ''));
-                    const bNum = parseInt(b.key.replace(/^[a-z]+/, ''));
-                    return aNum - bNum;
-                });
-            }
-
-            if (disks.length === 0) {
-                container.innerHTML = '<div class="text-muted">No disks configured</div>';
-            } else {
-                disks.forEach(disk => {
-                    container.appendChild(createDiskInterfaceCard(disk));
-                });
-            }
-        })
-        .catch(error => {
-            console.error('Error loading disk interfaces:', error);
-        });
-}
-
-function createDiskInterfaceCard(disk) {
-    const div = document.createElement('div');
-    div.className = 'card mb-2';
-
-    // Parse disk config (e.g., "local-lvm:vm-123-disk-0,size=32G" or "local-lvm:8" for LXC)
-    const parts = disk.config.split(',');
-    let storage = '';
-    let size = '';
-    let format = '';
-
-    // First part usually contains storage:volume or storage:size
-    const firstPart = parts[0];
-    if (firstPart.includes(':')) {
-        const colonParts = firstPart.split(':');
-        storage = colonParts[0];
-        // For LXC rootfs, the size might be directly after colon (e.g., "local-lvm:8")
-        if (vmType === 'lxc' && colonParts[1] && !colonParts[1].includes('-')) {
-            size = colonParts[1] + 'G';
-        }
-    }
-
-    for (const part of parts) {
-        if (part.startsWith('size=')) {
-            size = part.replace('size=', '');
-        } else if (part.startsWith('format=')) {
-            format = part.replace('format=', '');
-        }
-    }
-
-    // Convert size to GB for display
-    let sizeGB = size;
-    if (size.endsWith('G')) {
-        sizeGB = parseInt(size.replace('G', ''));
-    } else if (size.endsWith('M')) {
-        sizeGB = Math.round(parseInt(size.replace('M', '')) / 1024 * 10) / 10;
-    } else if (size && !isNaN(parseInt(size))) {
-        sizeGB = parseInt(size);
-        size = size + 'G';
-    }
-
-    const displayName = disk.isRootfs ? 'Root Filesystem' : disk.key;
-    const displayType = disk.isRootfs ? 'rootfs' : (disk.key.match(/^mp\d+$/) ? 'Mount Point' : storage);
-
-    div.innerHTML = `
-        <div class="card-body py-2">
-            <div class="row align-items-center">
-                <div class="col-md-2">
-                    <strong>${displayName}</strong><br>
-                    <small class="text-muted">${displayType}</small>
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label small mb-1">Current Size</label>
-                    <div><strong>${size || 'Unknown'}</strong></div>
-                </div>
-                <div class="col-md-4">
-                    <label for="resize_${disk.key}" class="form-label small mb-1">Resize to (GB)</label>
-                    <input type="number" class="form-control form-control-sm"
-                           id="resize_${disk.key}"
-                           min="${sizeGB || 1}"
-                           value="${sizeGB || ''}"
-                           step="1">
-                    <small class="text-muted">Can only expand</small>
-                </div>
-                <div class="col-md-3">
-                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="resizeDisk('${disk.key}')">
-                        <i class="bi bi-arrows-expand"></i> Resize
-                    </button>
-                </div>
-            </div>
-        </div>
-    `;
-
-    return div;
-}
-
-function resizeDisk(diskKey) {
-    const newSizeInput = document.getElementById(`resize_${diskKey}`);
-    const newSize = parseInt(newSizeInput.value);
-    
-    if (!newSize || newSize <= 0) {
-        showNotification('Please enter a valid size', 'warning');
-        return;
-    }
-    
-    if (!confirm(`Resize disk ${diskKey} to ${newSize}GB? This action cannot be undone.`)) {
-        return;
-    }
-    
-    // Use dedicated disk resize API endpoint
-    fetch(`/api/vm/${node}/${vmid}/resize-disk`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            disk: diskKey,
-            size: newSize
-        })
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        return response.json();
-    })
-    .then(result => {
-        console.log('Resize result:', result);
-        if (result.success) {
-            showNotification(`Disk ${diskKey} resized to ${newSize}GB successfully`, 'success');
-            loadDiskInterfaces(); // Reload disk list
-        } else {
-            showNotification(result.error || 'Failed to resize disk', 'error');
-        }
-    })
-    .catch(error => {
-        console.error('Error resizing disk:', error);
-        showNotification('Network error while resizing disk: ' + error.message, 'error');
-    });
-}
-
-function loadIsoInterfaces() {
-    fetch(`/api/vm/${node}/${vmid}/config`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                console.error('Error loading ISO interfaces:', data.error);
-                return;
-            }
-            
-            const container = document.getElementById('isoInterfaces');
-            if (!container) return;
-            
-            container.innerHTML = '';
-            
-            // Parse ISO interfaces from config (ide0, ide1, ide2, ide3)
-            const isos = [];
-            for (const [key, value] of Object.entries(data)) {
-                if (key.startsWith('ide') && key.match(/^ide\d+$/) && 
-                    (value.includes('.iso') || value.includes('media=cdrom'))) {
-                    isos.push({
-                        key: key,
-                        config: value
-                    });
-                }
-            }
-            
-            // Sort ISO interfaces by number
-            isos.sort((a, b) => {
-                const aNum = parseInt(a.key.replace('ide', ''));
-                const bNum = parseInt(b.key.replace('ide', ''));
-                return aNum - bNum;
-            });
-            
-            if (isos.length === 0) {
-                container.innerHTML = '<div class="text-muted">No ISO images attached</div>';
-            } else {
-                isos.forEach(iso => {
-                    container.appendChild(createIsoInterfaceCard(iso));
-                });
-            }
-        })
-        .catch(error => {
-            console.error('Error loading ISO interfaces:', error);
-        });
-}
-
-function createIsoInterfaceCard(iso) {
-    const div = document.createElement('div');
-    div.className = 'card mb-2';
-    
-    // Parse ISO config (e.g., "local:iso/ubuntu-20.04.iso,media=cdrom")
-    const parts = iso.config.split(',');
-    let isoPath = '';
-    let isoName = '';
-    
-    for (const part of parts) {
-        if (part.includes(':') && (part.includes('.iso') || part.includes('media=cdrom'))) {
-            isoPath = part;
-            // Extract just the filename
-            const pathParts = part.split('/');
-            isoName = pathParts[pathParts.length - 1];
-            if (isoName.includes(',')) {
-                isoName = isoName.split(',')[0];
-            }
-            break;
-        }
-    }
-    
-    div.innerHTML = `
-        <div class="card-body py-2">
-            <div class="row align-items-center">
-                <div class="col-md-2">
-                    <strong>${iso.key}</strong><br>
-                    <small class="text-muted">CD-ROM</small>
-                </div>
-                <div class="col-md-7">
-                    <div class="d-flex align-items-center">
-                        <i class="bi bi-disc me-2"></i>
-                        <div>
-                            <div><strong>${isoName || 'Unknown ISO'}</strong></div>
-                            <small class="text-muted">${isoPath}</small>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="detachIso('${iso.key}')">
-                        <i class="bi bi-eject"></i> Detach
-                    </button>
-                </div>
-            </div>
-        </div>
-    `;
-    
-    return div;
-}
-
-function loadCloudinitDrive() {
-    fetch(`/api/vm/${node}/${vmid}/config`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                console.error('Error loading cloud-init drive:', data.error);
-                return;
-            }
-
-            const section = document.getElementById('cloudinitSection');
-            const container = document.getElementById('cloudinitDrive');
-            if (!section || !container) return;
-
-            // Find cloud-init drive
-            let cloudinitDrive = null;
-            for (const [key, value] of Object.entries(data)) {
-                if ((key.startsWith('scsi') || key.startsWith('ide') || key.startsWith('sata') || key.startsWith('virtio')) &&
-                    key.match(/^(scsi|ide|sata|virtio)\d+$/) &&
-                    value.toLowerCase().includes('cloudinit')) {
-                    cloudinitDrive = { key: key, config: value };
-                    break;
-                }
-            }
-
-            if (cloudinitDrive) {
-                section.style.display = 'block';
-                container.innerHTML = '';
-                container.appendChild(createCloudinitCard(cloudinitDrive));
-            } else {
-                section.style.display = 'none';
-            }
-        })
-        .catch(error => {
-            console.error('Error loading cloud-init drive:', error);
-        });
-}
-
-function createCloudinitCard(cloudinit) {
-    const div = document.createElement('div');
-    div.className = 'card mb-2 border-info';
-
-    // Parse config (e.g., "local-lvm:vm-100-cloudinit,media=cdrom")
-    const parts = cloudinit.config.split(',');
-    let storage = '';
-    if (parts[0] && parts[0].includes(':')) {
-        storage = parts[0].split(':')[0];
-    }
-
-    div.innerHTML = `
-        <div class="card-body py-2">
-            <div class="row align-items-center">
-                <div class="col-md-3">
-                    <strong>${cloudinit.key}</strong><br>
-                    <small class="text-info">Cloud-init</small>
-                </div>
-                <div class="col-md-6">
-                    <div class="d-flex align-items-center">
-                        <i class="bi bi-cloud-arrow-up me-2 text-info"></i>
-                        <div>
-                            <div><strong>Cloud-init Configuration Drive</strong></div>
-                            <small class="text-muted">Storage: ${storage}</small>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <small class="text-muted">
-                        <i class="bi bi-info-circle"></i> Provides cloud-init data to the VM
-                    </small>
-                </div>
-            </div>
-        </div>
-    `;
-
-    return div;
-}
-
-function showAttachIsoModal() {
-    // Load available ISO images first
-    fetch(`/api/node/${node}/iso-images`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                showNotification('Error loading ISO images: ' + data.error, 'error');
-                return;
-            }
-            
-            if (data.length === 0) {
-                showNotification('No ISO images available on this node', 'warning');
-                return;
-            }
-            
-            const isoOptions = data.map(iso => {
-                const filename = iso.volid.split('/').pop();
-                return `<option value="${iso.volid}">${filename}</option>`;
-            }).join('');
-            
-            const modalHtml = `
-                <div class="modal fade" id="attachIsoModal" tabindex="-1">
-                    <div class="modal-dialog">
-                        <div class="modal-content">
-                            <div class="modal-header">
-                                <h5 class="modal-title">Attach ISO Image</h5>
-                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                            </div>
-                            <div class="modal-body">
-                                <div class="mb-3">
-                                    <label for="isoSelect" class="form-label">ISO Image</label>
-                                    <select class="form-select" id="isoSelect">
-                                        <option value="">Select ISO image...</option>
-                                        ${isoOptions}
-                                    </select>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="isoInterface" class="form-label">Interface</label>
-                                    <select class="form-select" id="isoInterface">
-                                        <option value="ide2">ide2 (Recommended)</option>
-                                        <option value="ide0">ide0</option>
-                                        <option value="ide1">ide1</option>
-                                        <option value="ide3">ide3</option>
-                                    </select>
-                                    <div class="form-text">CD-ROM drives use IDE interfaces</div>
-                                </div>
-                            </div>
-                            <div class="modal-footer">
-                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                                <button type="button" class="btn btn-primary" id="attachIsoSubmitBtn">Attach ISO</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-            
-            // Remove existing modal if any
-            const existingModal = document.getElementById('attachIsoModal');
-            if (existingModal) {
-                existingModal.remove();
-            }
-            
-            // Add modal to body
-            document.body.insertAdjacentHTML('beforeend', modalHtml);
-            
-            // Show modal
-            const modal = new bootstrap.Modal(document.getElementById('attachIsoModal'));
-            modal.show();
-            
-            // Add event listener to submit button
-            document.getElementById('attachIsoSubmitBtn').addEventListener('click', attachIso);
-        })
-        .catch(error => {
-            console.error('Error loading ISO images:', error);
-            showNotification('Network error while loading ISO images', 'error');
-        });
-}
-
-function attachIso() {
-    const isoSelect = document.getElementById('isoSelect');
-    const interfaceSelect = document.getElementById('isoInterface');
-    
-    const isoImage = isoSelect.value;
-    const interface = interfaceSelect.value;
-    
-    if (!isoImage) {
-        showNotification('Please select an ISO image', 'warning');
-        return;
-    }
-    
-    fetch(`/api/vm/${node}/${vmid}/iso/attach`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            iso_image: isoImage,
-            interface: interface
-        })
-    })
-    .then(response => response.json())
-    .then(result => {
-        if (result.success) {
-            showNotification(result.message, 'success');
-            loadIsoInterfaces(); // Reload ISO list
-            
-            // Close modal
-            const modal = bootstrap.Modal.getInstance(document.getElementById('attachIsoModal'));
-            if (modal) {
-                modal.hide();
-            }
-        } else {
-            showNotification(result.error || 'Failed to attach ISO', 'error');
-        }
-    })
-    .catch(error => {
-        console.error('Error attaching ISO:', error);
-        showNotification('Network error while attaching ISO: ' + error.message, 'error');
-    });
-}
-
-function detachIso(interface) {
-    if (!confirm(`Are you sure you want to detach the ISO from ${interface}?`)) {
-        return;
-    }
-    
-    fetch(`/api/vm/${node}/${vmid}/iso/detach`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            interface: interface
-        })
-    })
-    .then(response => response.json())
-    .then(result => {
-        if (result.success) {
-            showNotification(result.message, 'success');
-            loadIsoInterfaces(); // Reload ISO list
-        } else {
-            showNotification(result.error || 'Failed to detach ISO', 'error');
-        }
-    })
-    .catch(error => {
-        console.error('Error detaching ISO:', error);
-        showNotification('Network error while detaching ISO: ' + error.message, 'error');
-    });
-}
-
-function loadBootOrder() {
-    if (vmType !== 'qemu') {
-        // Hide boot order section for LXC containers
-        const bootSection = document.querySelector('.mb-4:has(#bootOrderList)');
-        if (bootSection) {
-            bootSection.style.display = 'none';
-        }
-        return;
-    }
-    
-    fetch(`/api/vm/${node}/${vmid}/config`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                console.error('Error loading boot order:', data.error);
-                return;
-            }
-            
-            const container = document.getElementById('bootOrderList');
-            if (!container) return;
-            
-            // Parse current boot configuration
-            const bootDevices = parseBootOrder(data, data.boot);
-            
-            // Render boot order items
-            renderBootOrder(bootDevices);
-            
-            // Initialize drag and drop with delay to ensure Sortable is loaded
-            setTimeout(initBootOrderSorting, 100);
-        })
-        .catch(error => {
-            console.error('Error loading boot order:', error);
-        });
-}
-
-function parseBootOrder(config, bootConfig) {
-    const devices = [];
-    
-    // Available device types with icons and labels
-    const deviceTypes = {
-        'disk': { icon: 'bi-hdd', label: 'Hard Disk', priority: 1 },
-        'cdrom': { icon: 'bi-disc', label: 'CD/DVD-ROM', priority: 2 },
-        'network': { icon: 'bi-ethernet', label: 'Network (PXE)', priority: 3 }
-    };
-    
-    // Find actual devices in the config
-    const availableDevices = [];
-    
-    // Find disk devices (excluding cloud-init and ISOs)
-    for (const [key, value] of Object.entries(config)) {
-        if ((key.startsWith('scsi') || key.startsWith('virtio') || key.startsWith('ide') || key.startsWith('sata')) &&
-            key.match(/^(scsi|virtio|ide|sata)\d+$/) &&
-            !value.includes('media=cdrom') && !value.includes('.iso') && !value.toLowerCase().includes('cloudinit')) {
-            availableDevices.push({
-                id: key,
-                type: 'disk',
-                name: `${key.toUpperCase()} (Disk)`,
-                ...deviceTypes.disk
-            });
-        }
-        // Find CD-ROM devices
-        else if ((key.startsWith('ide') && key.match(/^ide\d+$/)) && 
-                (value.includes('media=cdrom') || value.includes('.iso'))) {
-            availableDevices.push({
-                id: key,
-                type: 'cdrom',
-                name: `${key.toUpperCase()} (CD-ROM)`,
-                ...deviceTypes.cdrom
-            });
-        }
-    }
-    
-    // Always add network boot option
-    availableDevices.push({
-        id: 'net',
-        type: 'network',
-        name: 'Network Boot (PXE)',
-        ...deviceTypes.network
-    });
-    
-    // Parse current boot order
-    let orderedDevices = [];
-    
-    if (bootConfig && bootConfig.startsWith('order=')) {
-        // New format: "order=scsi0;ide2;net"
-        const orderList = bootConfig.replace('order=', '').split(';');
-        orderList.forEach(deviceId => {
-            const device = availableDevices.find(d => d.id === deviceId);
-            if (device) {
-                orderedDevices.push(device);
-            }
-        });
-        
-        // Add remaining devices not in boot order
-        availableDevices.forEach(device => {
-            if (!orderedDevices.find(d => d.id === device.id)) {
-                orderedDevices.push({...device, enabled: false});
-            }
-        });
-    } else {
-        // Legacy format or default
-        availableDevices.sort((a, b) => a.priority - b.priority);
-        orderedDevices = availableDevices;
-    }
-    
-    return orderedDevices;
-}
-
-function renderBootOrder(devices) {
-    const container = document.getElementById('bootOrderList');
-    if (!container) return;
-    
-    container.innerHTML = '';
-    
-    if (devices.length === 0) {
-        container.innerHTML = `
-            <div class="boot-order-placeholder">
-                <span>No bootable devices available</span>
-            </div>
-        `;
-        return;
-    }
-    
-    devices.forEach((device, index) => {
-        const isEnabled = device.enabled !== false;
-        const item = document.createElement('div');
-        item.className = `list-group-item boot-device-item ${isEnabled ? '' : 'text-muted'}`;
-        item.dataset.deviceId = device.id;
-        
-        item.innerHTML = `
-            <div class="d-flex align-items-center">
-                <div class="drag-handle me-3">
-                    <i class="bi bi-grip-vertical"></i>
-                </div>
-                <div class="form-check me-3">
-                    <input class="form-check-input" type="checkbox" 
-                           id="boot_${device.id}" 
-                           ${isEnabled ? 'checked' : ''}
-                           onchange="toggleBootDevice('${device.id}', this.checked)">
-                </div>
-                <div class="device-icon me-3">
-                    <i class="bi ${device.icon} fs-5"></i>
-                </div>
-                <div class="flex-grow-1">
-                    <div class="fw-semibold">${device.name}</div>
-                    <small class="text-muted">Priority: ${index + 1}</small>
-                </div>
-                <div class="boot-priority-badge">
-                    <span class="badge bg-secondary">${index + 1}</span>
-                </div>
-            </div>
-        `;
-        
-        container.appendChild(item);
-    });
-}
-
-function initBootOrderSorting() {
-    const container = document.getElementById('bootOrderList');
-    if (!container) return;
-    
-    // Check if we're on a mobile device
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
-                    window.innerWidth < 768;
-    
-    // Check if Sortable is available
-    if (typeof Sortable === 'undefined') {
-        console.warn('Sortable library not loaded, adding fallback buttons');
-        addFallbackButtons();
-        return;
-    }
-    
-    // Use fallback buttons for very small screens or touch-only devices
-    if (isMobile && window.innerWidth < 576) {
-        console.log('Using fallback buttons for small mobile screen');
-        addFallbackButtons();
-        return;
-    }
-    
-    try {
-        const sortableInstance = new Sortable(container, {
-            handle: '.drag-handle',
-            ghostClass: 'sortable-ghost',
-            chosenClass: 'sortable-chosen',
-            animation: 150,
-            // Mobile-friendly options
-            touchStartThreshold: 3,
-            delay: isMobile ? 200 : 0, // Longer delay for mobile
-            delayOnTouchStart: true,
-            forceFallback: false,
-            fallbackOnBody: true,
-            swapThreshold: 0.65,
-            dragoverBubble: false,
-            removeCloneOnHide: true,
-            onEnd: function(evt) {
-                updateBootOrderPriorities();
-                saveBootOrder();
-            },
-            onStart: function(evt) {
-                // Add visual feedback
-                evt.item.classList.add('sortable-drag');
-                document.body.style.overflow = 'hidden'; // Prevent scrolling during drag
-            },
-            onUnchoose: function(evt) {
-                // Reset visual feedback
-                evt.item.classList.remove('sortable-drag');
-                evt.item.style.transform = '';
-                evt.item.style.zIndex = '';
-                document.body.style.overflow = '';
-            },
-            onMove: function(evt, originalEvent) {
-                // Provide haptic feedback on mobile if available
-                if (navigator.vibrate && isMobile) {
-                    navigator.vibrate(10);
-                }
-                return true;
-            }
-        });
-        
-        // Test if drag and drop actually works after a short delay
-        setTimeout(() => {
-            if (!testDragDropSupport()) {
-                console.warn('Drag and drop not working properly, switching to fallback');
-                sortableInstance.destroy();
-                addFallbackButtons();
-            }
-        }, 1000);
-        
-    } catch (error) {
-        console.warn('Failed to initialize Sortable:', error);
-        addFallbackButtons();
-    }
-}
-
-function testDragDropSupport() {
-    // Simple test to see if drag and drop events are supported
-    const testDiv = document.createElement('div');
-    return (
-        ('draggable' in testDiv) || 
-        ('ondragstart' in testDiv && 'ondrop' in testDiv)
-    );
-}
-
-function addFallbackButtons() {
-    const container = document.getElementById('bootOrderList');
-    if (!container) return;
-    
-    // Add up/down buttons for each item
-    const items = container.querySelectorAll('.boot-device-item');
-    items.forEach((item, index) => {
-        const buttonsDiv = document.createElement('div');
-        buttonsDiv.className = 'fallback-controls ms-2';
-        buttonsDiv.innerHTML = `
-            <button type="button" class="btn btn-sm btn-outline-secondary me-1" 
-                    onclick="moveBootDevice('${item.dataset.deviceId}', 'up')"
-                    ${index === 0 ? 'disabled' : ''}>
-                <i class="bi bi-arrow-up"></i>
-            </button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" 
-                    onclick="moveBootDevice('${item.dataset.deviceId}', 'down')"
-                    ${index === items.length - 1 ? 'disabled' : ''}>
-                <i class="bi bi-arrow-down"></i>
-            </button>
-        `;
-        
-        // Replace drag handle with buttons
-        const dragHandle = item.querySelector('.drag-handle');
-        if (dragHandle) {
-            dragHandle.replaceWith(buttonsDiv);
-        }
-    });
-}
-
-function moveBootDevice(deviceId, direction) {
-    const container = document.getElementById('bootOrderList');
-    if (!container) return;
-    
-    const item = container.querySelector(`[data-device-id="${deviceId}"]`);
-    if (!item) return;
-    
-    // Add animation class
-    item.classList.add('reordered');
-    
-    if (direction === 'up') {
-        const prevItem = item.previousElementSibling;
-        if (prevItem) {
-            container.insertBefore(item, prevItem);
-        }
-    } else if (direction === 'down') {
-        const nextItem = item.nextElementSibling;
-        if (nextItem) {
-            container.insertBefore(nextItem, item);
-        }
-    }
-    
-    updateBootOrderPriorities();
-    saveBootOrder();
-    
-    // Remove animation class
-    setTimeout(() => {
-        item.classList.remove('reordered');
-    }, 300);
-    
-    // Refresh fallback buttons
-    setTimeout(() => {
-        container.querySelectorAll('.fallback-controls').forEach(el => el.remove());
-        addFallbackButtons();
-    }, 100);
-}
-
-function updateBootOrderPriorities() {
-    const container = document.getElementById('bootOrderList');
-    if (!container) return;
-    
-    const items = container.querySelectorAll('.boot-device-item');
-    items.forEach((item, index) => {
-        const priorityBadge = item.querySelector('.boot-priority-badge .badge');
-        const priorityText = item.querySelector('small');
-        
-        if (priorityBadge) {
-            priorityBadge.textContent = index + 1;
-        }
-        if (priorityText) {
-            priorityText.textContent = `Priority: ${index + 1}`;
-        }
-    });
-}
-
-function toggleBootDevice(deviceId, enabled) {
-    const item = document.querySelector(`[data-device-id="${deviceId}"]`);
-    if (!item) return;
-    
-    if (enabled) {
-        item.classList.remove('text-muted');
-    } else {
-        item.classList.add('text-muted');
-    }
-    
-    saveBootOrder();
-}
-
-function saveBootOrder() {
-    const container = document.getElementById('bootOrderList');
-    if (!container) return;
-    
-    const items = container.querySelectorAll('.boot-device-item');
-    const bootDevices = [];
-    
-    items.forEach(item => {
-        const checkbox = item.querySelector('input[type="checkbox"]');
-        if (checkbox && checkbox.checked) {
-            bootDevices.push(item.dataset.deviceId);
-        }
-    });
-    
-    // Send to API
-    fetch(`/api/vm/${node}/${vmid}/boot-order`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            boot_devices: bootDevices
-        })
-    })
-    .then(response => response.json())
-    .then(result => {
-        if (result.success) {
-            showNotification('Boot order updated successfully', 'success');
-        } else {
-            showNotification(result.error || 'Failed to update boot order', 'error');
-            loadBootOrder(); // Reload on error
-        }
-    })
-    .catch(error => {
-        console.error('Error saving boot order:', error);
-        showNotification('Network error while updating boot order', 'error');
-        loadBootOrder(); // Reload on error
-    });
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    // Load current configuration
-    loadVMConfiguration();
-    loadNetworkInterfaces();
-    loadDiskInterfaces();
-    loadBootOrder();
-    
-    // Only load ISO interfaces and cloud-init for QEMU VMs
-    if (vmType === 'qemu') {
-        loadIsoInterfaces();
-        loadCloudinitDrive();
-    }
-
-    loadAvailableBridges();
-    
-    // Form event listeners
-    document.getElementById('saveBtn').addEventListener('click', () => saveConfiguration(false));
-    document.getElementById('saveCloseBtn').addEventListener('click', () => saveConfiguration(true));
-    document.getElementById('addNetworkBtn').addEventListener('click', showAddNetworkModal);
-    
-    // Only add ISO button listener for QEMU VMs
-    if (vmType === 'qemu') {
-        document.getElementById('attachIsoBtn').addEventListener('click', showAttachIsoModal);
-
-        // VGA type change listener
-        const vgaSelect = document.getElementById('vga_type');
-        if (vgaSelect) {
-            vgaSelect.addEventListener('change', function() {
-                updateVgaMemoryVisibility(this.value);
-            });
-        }
-    }
-    
-    function loadVMConfiguration() {
-        fetch(`/api/vm/${node}/${vmid}/config`)
-            .then(response => response.json())
-            .then(data => {
-                if (data.error) {
-                    showNotification('Error loading VM configuration: ' + data.error, 'error');
-                    return;
-                }
-
-                // Populate common form fields
-                document.getElementById('autostart').checked = (data.onboot === 1);
-
-                if (vmType === 'lxc') {
-                    // LXC-specific fields
-                    const hostnameInput = document.getElementById('hostname');
-                    if (hostnameInput && data.hostname) {
-                        hostnameInput.value = data.hostname;
-                    }
-
-                    const swapInput = document.getElementById('swap');
-                    if (swapInput && data.swap !== undefined) {
-                        swapInput.value = data.swap;
-                    }
-                } else {
-                    // QEMU-specific fields
-                    if (data.cpu) {
-                        const cpuTypeSelect = document.getElementById('cpu_type');
-                        if (cpuTypeSelect) {
-                            cpuTypeSelect.value = data.cpu;
-                        }
-                    }
-
-                    // Load display configuration (QEMU only)
-                    const vgaSelect = document.getElementById('vga_type');
-                    const vgaMemoryInput = document.getElementById('vga_memory');
-                    if (vgaSelect && data.vga) {
-                        // Parse vga setting - can be "type" or "type,memory=XX"
-                        const vgaParts = data.vga.split(',');
-                        const vgaType = vgaParts[0];
-                        vgaSelect.value = vgaType;
-
-                        // Extract memory if present
-                        if (vgaMemoryInput) {
-                            const memoryPart = vgaParts.find(p => p.startsWith('memory='));
-                            if (memoryPart) {
-                                vgaMemoryInput.value = memoryPart.replace('memory=', '');
-                            }
-                        }
-
-                        updateVgaMemoryVisibility(vgaType);
-                    }
-                }
-            })
-            .catch(error => {
-                console.error('Error loading VM configuration:', error);
-                showNotification('Failed to load VM configuration', 'error');
-            });
-    }
-
-    function updateVgaMemoryVisibility(vgaType) {
-        const vgaMemoryContainer = document.getElementById('vgaMemoryContainer');
-        if (vgaMemoryContainer) {
-            // Hide memory option for serial and none types
-            if (vgaType === 'serial0' || vgaType === 'none') {
-                vgaMemoryContainer.style.display = 'none';
-            } else {
-                vgaMemoryContainer.style.display = 'block';
-            }
-        }
-    }
-    
-    
-    
-    function saveConfiguration(redirectAfterSave = false) {
-        // Show loading overlay
-        document.getElementById('loadingOverlay').classList.remove('d-none');
-        document.getElementById('loadingOverlay').classList.add('d-flex');
-
-        // Collect form data - common fields
-        const formData = {
-            cores: parseInt(document.getElementById('cores').value),
-            memory: parseInt(document.getElementById('memory').value),
-            onboot: document.getElementById('autostart').checked ? 1 : 0
-        };
-
-        if (vmType === 'lxc') {
-            // LXC-specific fields
-            const hostnameInput = document.getElementById('hostname');
-            if (hostnameInput && hostnameInput.value) {
-                formData.hostname = hostnameInput.value;
-            }
-
-            const swapInput = document.getElementById('swap');
-            if (swapInput) {
-                formData.swap = parseInt(swapInput.value) || 0;
-            }
-        } else {
-            // QEMU-specific fields
-            const cpuTypeSelect = document.getElementById('cpu_type');
-            if (cpuTypeSelect) {
-                formData.cpu = cpuTypeSelect.value;
-            }
-
-            const socketsInput = document.getElementById('sockets');
-            if (socketsInput) {
-                formData.sockets = parseInt(socketsInput.value);
-            }
-        }
-
-        // Add VGA configuration (QEMU VMs only)
-        const vgaSelect = document.getElementById('vga_type');
-        const vgaMemoryInput = document.getElementById('vga_memory');
-        if (vgaSelect) {
-            const vgaType = vgaSelect.value;
-            if (vgaType === 'serial0' || vgaType === 'none') {
-                formData.vga = vgaType;
-            } else if (vgaMemoryInput && vgaMemoryInput.value) {
-                formData.vga = `${vgaType},memory=${vgaMemoryInput.value}`;
-            } else {
-                formData.vga = vgaType;
-            }
-        }
-
-        // Send API request
-        fetch(`/api/vm/${node}/${vmid}/config`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(formData)
-        })
-        .then(response => response.json())
-        .then(data => {
-            // Hide loading overlay
-            document.getElementById('loadingOverlay').classList.remove('d-flex');
-            document.getElementById('loadingOverlay').classList.add('d-none');
-
-            if (data.success) {
-                showNotification('VM configuration updated successfully', 'success');
-
-                if (redirectAfterSave) {
-                    // Redirect back to VM details after brief delay
-                    setTimeout(() => {
-                        window.location.href = `/vm/${node}/${vmid}`;
-                    }, 1000);
-                }
-            } else {
-                showNotification(data.error || 'Failed to update VM configuration', 'error');
-            }
-        })
-        .catch(error => {
-            // Hide loading overlay
-            document.getElementById('loadingOverlay').classList.remove('d-flex');
-            document.getElementById('loadingOverlay').classList.add('d-none');
-            
-            console.error('Error updating VM configuration:', error);
-            showNotification('Network error while updating configuration', 'error');
-        });
-    }
-    
-});
+<script type="module">
+  import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
+  import { vmEditor } from "{{ url_for('static', filename='js/vm-editor.js') }}";
+  window.ProxUtils = ProxUtils;
+  function register() {
+    window.Alpine.data('vmEditor', vmEditor);
+  }
+  if (window.Alpine) register();
+  else document.addEventListener('alpine:init', register);
 </script>
 {% endblock %}
