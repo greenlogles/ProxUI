@@ -1338,10 +1338,18 @@ def serialize_lxc_features(flags_dict):
     return ",".join(parts)
 
 
-def check_lxc_write_permission(proxmox, vmid):
+def check_lxc_write_permission(proxmox, vmid, node=None):
     """Return True if the current connection can write to this container's config."""
+    # root@pam has unconditional superuser access — skip the ACL probe entirely.
+    if node:
+        meta = connection_metadata.get(node) or {}
+        if meta.get("user") == "root@pam":
+            return True
     try:
         perms = proxmox.access.permissions.get(path=f"/vms/{vmid}")
+        # Empty dict: Proxmox returns {} for superusers with implicit access.
+        if not perms:
+            return True
         write_privs = {"VM.Config.Options", "VM.Allocate", "VM.Config.Disk", "VM.Config.Network"}
         return any(perms.get(p) for p in write_privs)
     except Exception:
@@ -5343,7 +5351,7 @@ def api_lxc_features(node, vmid):
 
         if request.method == "GET":
             features_str = config.get("features", "")
-            can_write = check_lxc_write_permission(proxmox, vmid)
+            can_write = check_lxc_write_permission(proxmox, vmid, node)
             backup_key = f"{node}:{vmid}"
             backup = lxc_config_backups.get(backup_key)
             return jsonify(
@@ -5469,7 +5477,7 @@ def api_lxc_devices(node, vmid):
                     if "lxc.cgroup2.devices.allow" in raw or "lxc.mount.entry" in raw:
                         legacy.append({"key": key, "raw": raw})
 
-            can_write = check_lxc_write_permission(proxmox, vmid)
+            can_write = check_lxc_write_permission(proxmox, vmid, node)
             return jsonify(
                 {
                     "devices": devices,
@@ -5622,7 +5630,7 @@ def api_lxc_mounts(node, vmid):
                     parsed = parse_lxc_mp(config[key])
                     parsed["key"] = key
                     mounts.append(parsed)
-            can_write = check_lxc_write_permission(proxmox, vmid)
+            can_write = check_lxc_write_permission(proxmox, vmid, node)
             return jsonify({"mounts": mounts, "running": is_running, "can_write": can_write})
 
         # POST — add a bind mount
@@ -5707,7 +5715,7 @@ def api_lxc_idmap(node, vmid):
 
         if request.method == "GET":
             idmaps = collect_lxc_idmaps(config)
-            can_write = check_lxc_write_permission(proxmox, vmid)
+            can_write = check_lxc_write_permission(proxmox, vmid, node)
             backup = lxc_config_backups.get(f"{node}:{vmid}")
             return jsonify(
                 {
