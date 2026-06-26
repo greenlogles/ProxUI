@@ -568,262 +568,59 @@
     </div>
 </div>
 {% if vm_type == 'lxc' %}
-<!-- LXC Advanced / Passthrough -->
+<!-- LXC Advanced Summary (read-only) -->
 <div class="row mt-3">
     <div class="col-12">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
+        <div class="card" x-data="lxcSummary()">
+            <div class="card-header d-flex justify-content-between align-items-center py-2">
                 <h5 class="mb-0"><i class="bi bi-sliders2"></i> Advanced / Passthrough</h5>
-                <div class="d-flex gap-2 align-items-center">
-                    <small class="text-muted fst-italic" id="lxcBackupInfo" style="display:none;"></small>
-                    <button class="btn btn-sm btn-outline-secondary" id="lxcRestoreBtn" style="display:none;"
-                            onclick="restoreLxcConfig()" title="Revert to pre-write snapshot">
-                        <i class="bi bi-arrow-counterclockwise"></i> Restore
-                    </button>
-                    <button class="btn btn-sm btn-outline-primary" onclick="loadLxcFeatures()" title="Refresh">
-                        <i class="bi bi-arrow-clockwise"></i>
-                    </button>
-                </div>
+                <a href="{{ url_for('vm_edit', node=node, vmid=vmid) }}" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-pencil-square"></i> Configure
+                </a>
             </div>
-            <div class="card-body" id="lxcAdvancedBody">
-                <div class="text-center py-3">
-                    <div class="spinner-border spinner-border-sm" role="status"></div>
-                    <span class="ms-2">Loading…</span>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- LXC Profiles Card -->
-<div class="row mt-3">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="bi bi-collection"></i> Apply Config Profile</h5>
-                <button class="btn btn-sm btn-outline-primary" onclick="loadLxcProfiles()" title="Refresh">
-                    <i class="bi bi-arrow-clockwise"></i>
-                </button>
-            </div>
-            <div class="card-body" id="lxcProfilesBody">
-                <div class="text-center py-3">
-                    <div class="spinner-border spinner-border-sm" role="status"></div>
-                    <span class="ms-2">Loading…</span>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- LXC Profile Diff Modal -->
-<div class="modal fade" id="lxcProfileDiffModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="profileDiffTitle"><i class="bi bi-eye"></i> Profile Preview</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body" id="profileDiffBody">
-                <div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div></div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="profileApplyBtn" onclick="applyLxcProfile()">
-                    <i class="bi bi-check2-circle"></i> Apply Profile
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- LXC Feature Preview Modal -->
-<div class="modal fade" id="lxcPreviewModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-eye"></i> Preview Changes</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <p class="text-muted mb-2">The following will be written to the container config:</p>
-                <pre id="lxcDiffPre" class="bg-body-secondary rounded p-3 small mb-2" style="white-space:pre-wrap;"></pre>
-                <div class="alert alert-warning mb-0" id="lxcRunningWarn" style="display:none;">
-                    <i class="bi bi-exclamation-triangle"></i>
-                    <strong>Container is running.</strong> Changes take effect after the next restart.
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="lxcApplyBtn" onclick="applyLxcFeatures()">
-                    <i class="bi bi-check2-circle"></i> Apply
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- LXC Add Device Modal -->
-<div class="modal fade" id="lxcAddDeviceModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-device-hdd"></i> Add Device Passthrough</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="mb-3">
-                    <label class="form-label fw-semibold">Quick Preset</label>
-                    <select class="form-select" onchange="fillDevicePreset(this)">
-                        <option value="">— choose a common device —</option>
-                        <option value="0">renderD128 (QuickSync / VA-API)</option>
-                        <option value="1">card0 (DRI primary)</option>
-                        <option value="2">card1 (DRI secondary)</option>
-                        <option value="3">net/tun (Tailscale)</option>
-                        <option value="4">fuse</option>
-                        <option value="5">kvm</option>
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label for="devPath" class="form-label">Device path <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control font-monospace" id="devPath"
-                           placeholder="/dev/dri/renderD128">
-                </div>
-                <div class="row g-2 mb-2">
-                    <div class="col-6">
-                        <label for="devGid" class="form-label">GID override
-                            <i class="bi bi-info-circle text-muted" title="Debian render group = 104, video group = 44"></i>
-                        </label>
-                        <input type="number" class="form-control" id="devGid" placeholder="104 (render)">
+            <div class="card-body py-2">
+                <template x-if="loading">
+                    <div class="text-muted small"><div class="spinner-border spinner-border-sm me-1" role="status"></div> Loading…</div>
+                </template>
+                <template x-if="!loading && !hasAny">
+                    <div class="text-muted small">No advanced configuration. <a href="{{ url_for('vm_edit', node=node, vmid=vmid) }}">Configure</a></div>
+                </template>
+                <template x-if="!loading && hasAny">
+                    <div class="vstack gap-1">
+                        <template x-if="enabledFlags.length > 0">
+                            <div>
+                                <span class="text-muted small me-2">Flags</span>
+                                <template x-for="f in enabledFlags" :key="f">
+                                    <span class="badge bg-success me-1" x-text="f"></span>
+                                </template>
+                            </div>
+                        </template>
+                        <template x-if="devices.length > 0">
+                            <div>
+                                <span class="text-muted small me-2">Devices</span>
+                                <template x-for="d in devices" :key="d.key">
+                                    <span class="badge bg-secondary me-1" x-text="d.path.split('/').pop()"></span>
+                                </template>
+                            </div>
+                        </template>
+                        <template x-if="mounts.length > 0">
+                            <div>
+                                <span class="text-muted small me-2">Mounts</span>
+                                <template x-for="m in mounts" :key="m.key">
+                                    <span class="badge bg-info text-dark me-1" x-text="m.mp"></span>
+                                </template>
+                            </div>
+                        </template>
+                        <template x-if="idmaps.length > 0">
+                            <div>
+                                <span class="text-muted small me-2">idmap</span>
+                                <template x-for="i in idmaps" :key="i.key">
+                                    <span class="badge bg-warning text-dark me-1" x-text="i.type + ' ' + i.ct_id + '→' + i.host_id"></span>
+                                </template>
+                            </div>
+                        </template>
                     </div>
-                    <div class="col-6">
-                        <label for="devUid" class="form-label">UID override</label>
-                        <input type="number" class="form-control" id="devUid" placeholder="0">
-                    </div>
-                </div>
-                <div class="alert alert-info py-2 small mb-0">
-                    <i class="bi bi-info-circle"></i>
-                    Requires PVE 8.2+ and the container must be <strong>stopped</strong>.
-                    Debian render group GID is typically <strong>104</strong>.
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="addDeviceBtn" onclick="addLxcDevice()">
-                    <i class="bi bi-plus-circle"></i> Add
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- LXC Add idmap Modal -->
-<div class="modal fade" id="lxcAddIdmapModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-person-lock"></i> Add UID/GID Mapping</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="mb-3">
-                    <label class="form-label fw-semibold">Quick preset</label>
-                    <select class="form-select" id="idmapPreset" onchange="fillIdmapPreset(this)">
-                        <option value="">— common patterns —</option>
-                        <option value="full_u">Full UID map (u 0 100000 65536)</option>
-                        <option value="full_g">Full GID map (g 0 100000 65536)</option>
-                        <option value="root_u">Map root only — UID (u 0 0 1)</option>
-                        <option value="root_g">Map root only — GID (g 0 0 1)</option>
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Type</label>
-                    <div class="d-flex gap-3">
-                        <div class="form-check">
-                            <input class="form-check-input" type="radio" name="idmapType" id="idmapTypeU" value="u" checked>
-                            <label class="form-check-label" for="idmapTypeU">UID (u)</label>
-                        </div>
-                        <div class="form-check">
-                            <input class="form-check-input" type="radio" name="idmapType" id="idmapTypeG" value="g">
-                            <label class="form-check-label" for="idmapTypeG">GID (g)</label>
-                        </div>
-                    </div>
-                </div>
-                <div class="row g-2 mb-3">
-                    <div class="col-4">
-                        <label for="idmapCtId" class="form-label">Container start ID</label>
-                        <input type="number" class="form-control" id="idmapCtId" value="0" min="0">
-                    </div>
-                    <div class="col-4">
-                        <label for="idmapHostId" class="form-label">Host start ID</label>
-                        <input type="number" class="form-control" id="idmapHostId" value="100000" min="0">
-                    </div>
-                    <div class="col-4">
-                        <label for="idmapCount" class="form-label">Count</label>
-                        <input type="number" class="form-control" id="idmapCount" value="65536" min="1">
-                    </div>
-                </div>
-                <div class="bg-body-secondary rounded p-2 small font-monospace mb-3" id="idmapPreview">
-                    lxc.idmap = u 0 100000 65536
-                </div>
-                <div class="alert alert-warning py-2 small mb-0">
-                    <i class="bi bi-exclamation-triangle"></i>
-                    For an <strong>unprivileged</strong> container to access a bind-mounted directory,
-                    the host directory must be owned by the mapped UID/GID.
-                    Use <code>chown -R 100000:100000 /host/path</code> as root on the host.
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="addIdmapBtn" onclick="addLxcIdmap()">
-                    <i class="bi bi-plus-circle"></i> Add
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- LXC Add Mount Modal -->
-<div class="modal fade" id="lxcAddMountModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-folder2-open"></i> Add Bind Mount</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="mb-3">
-                    <label for="mpHostPath" class="form-label">Host path <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control font-monospace" id="mpHostPath"
-                           placeholder="/mnt/nvme/data">
-                    <div class="form-text">Absolute path on the Proxmox host.</div>
-                </div>
-                <div class="mb-3">
-                    <label for="mpContainerPath" class="form-label">Container path <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control font-monospace" id="mpContainerPath"
-                           placeholder="/data">
-                    <div class="form-text">Absolute path inside the container.</div>
-                </div>
-                <div class="d-flex gap-4 mb-2">
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="mpReadOnly">
-                        <label class="form-check-label" for="mpReadOnly">Read-only</label>
-                    </div>
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="mpBackup">
-                        <label class="form-check-label" for="mpBackup">Include in backup</label>
-                    </div>
-                </div>
-                <div class="alert alert-info py-2 small mb-0">
-                    <i class="bi bi-info-circle"></i>
-                    Container must be <strong>stopped</strong> before adding mounts.
-                    For unprivileged containers, the host directory owner must match the container UID mapping.
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="addMountBtn" onclick="addLxcMount()">
-                    <i class="bi bi-plus-circle"></i> Add
-                </button>
+                </template>
             </div>
         </div>
     </div>
@@ -1296,581 +1093,37 @@ function deleteVM() {
     });
 }
 
-// ─── LXC Advanced / Passthrough ───────────────────────────────────────────
 {% if vm_type == 'lxc' %}
-(function () {
-    const LXC_FLAGS = [
-        { key: 'nesting', label: 'Nesting', desc: 'Docker-in-LXC, systemd, nested LXC' },
-        { key: 'keyctl',  label: 'Keyctl',  desc: 'Key retention service (needed by some apps)' },
-        { key: 'fuse',    label: 'FUSE',    desc: 'User-space filesystem support' },
-        { key: 'mount',   label: 'Mount',   desc: 'Mount arbitrary filesystems (cifs, nfs…)' },
-        { key: 'mknod',   label: 'Mknod',   desc: 'Allow mknod in unprivileged containers' },
-    ];
-
-    const QUICKSYNC_DEVICES = [
-        { label: 'renderD128 (QuickSync / VA-API)', path: '/dev/dri/renderD128', gid: '104', uid: '0' },
-        { label: 'card0 (DRI primary)',              path: '/dev/dri/card0',      gid: '44',  uid: '0' },
-        { label: 'card1 (DRI secondary)',            path: '/dev/dri/card1',      gid: '44',  uid: '0' },
-        { label: 'net/tun (Tailscale)',              path: '/dev/net/tun',        gid: '',    uid: '' },
-        { label: 'fuse',                             path: '/dev/fuse',           gid: '',    uid: '' },
-        { label: 'kvm',                              path: '/dev/kvm',            gid: '',    uid: '' },
-    ];
-
-    let _currentFeatures = {};
-    let _isRunning = false;
-    let _canWrite = true;
-    let _supportsDevN = true;
-
-    // ── Unified loader ────────────────────────────────────────────────────────
-    function loadAll() {
-        const body = document.getElementById('lxcAdvancedBody');
-        body.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div><span class="ms-2">Loading…</span></div>';
-
-        Promise.all([
-            fetch(`/api/vm/${node}/${vmid}/lxc/features`).then(r => r.json()),
-            fetch(`/api/vm/${node}/${vmid}/lxc/devices`).then(r => r.json()),
-            fetch(`/api/vm/${node}/${vmid}/lxc/mounts`).then(r => r.json()),
-            fetch(`/api/vm/${node}/${vmid}/lxc/idmap`).then(r => r.json()),
-        ])
-        .then(([fData, dData, mData, iData]) => {
-            if (fData.error && dData.error && mData.error && iData.error) {
-                body.innerHTML = `<div class="alert alert-danger">${fData.error}</div>`;
-                return;
-            }
-            _currentFeatures = fData.features || {};
-            _isRunning = fData.running || dData.running || mData.running || iData.running;
-            _canWrite = (fData.can_write !== false) && (dData.can_write !== false);
-            _supportsDevN = dData.pve_supports_dev_n !== false;
-
-            const backupInfo = document.getElementById('lxcBackupInfo');
-            const restoreBtn = document.getElementById('lxcRestoreBtn');
-            if (fData.has_backup && fData.backup_timestamp) {
-                backupInfo.textContent = `Snapshot: ${fData.backup_timestamp}`;
-                backupInfo.style.display = '';
-                restoreBtn.style.display = '';
-            } else {
-                backupInfo.style.display = 'none';
-                restoreBtn.style.display = 'none';
-            }
-
-            let html = '';
-            if (_isRunning) {
-                html += `<div class="alert alert-info py-2 mb-3">
-                    <i class="bi bi-info-circle"></i>
-                    <strong>Container is running.</strong>
-                    Feature flag changes take effect after restart.
-                    Device &amp; mount changes require the container to be stopped first.
-                </div>`;
-            }
-            if (!_canWrite) {
-                html += `<div class="alert alert-warning py-2 mb-3">
-                    <i class="bi bi-lock"></i>
-                    <strong>Read-only connection.</strong> Write actions are disabled.
-                </div>`;
-            }
-
-            html += buildFeaturesHtml();
-            html += '<hr class="my-3">';
-            html += buildDevicesHtml(dData);
-            html += '<hr class="my-3">';
-            html += buildMountsHtml(mData);
-            html += '<hr class="my-3">';
-            html += buildIdmapHtml(iData);
-
-            body.innerHTML = html;
-            // Wire live preview updates for idmap modal fields
-            ['idmapCtId','idmapHostId','idmapCount'].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) el.addEventListener('input', updateIdmapPreview);
-            });
-            document.querySelectorAll('input[name="idmapType"]').forEach(el =>
-                el.addEventListener('change', updateIdmapPreview));
-        })
-        .catch(err => {
-            body.innerHTML = '<div class="alert alert-danger">Failed to load advanced config</div>';
-        });
-        loadLxcProfiles();
-    }
-
-    // kept as an alias so existing callers (restore, apply) still work
-    window.loadLxcFeatures = loadAll;
-
-    // ── Feature flags ─────────────────────────────────────────────────────────
-    function buildFeaturesHtml() {
-        let html = '<h6 class="text-primary mb-3"><i class="bi bi-toggles"></i> Feature Flags</h6>';
-        html += '<div class="row g-2 mb-3">';
-        for (const f of LXC_FLAGS) {
-            const enabled = _currentFeatures[f.key] === '1';
-            const id = `lxcFlag_${f.key}`;
-            html += `<div class="col-sm-6 col-lg-4">
-                <div class="border rounded p-2 d-flex align-items-start gap-2">
-                    <div class="form-check form-switch mt-1">
-                        <input class="form-check-input" type="checkbox" role="switch" id="${id}"
-                               ${enabled ? 'checked' : ''} ${!_canWrite ? 'disabled' : ''}
-                               data-flag="${f.key}">
-                    </div>
-                    <div>
-                        <label class="form-check-label fw-semibold mb-0" for="${id}">${f.label}</label>
-                        <div class="text-muted small">${f.desc}</div>
-                    </div>
-                </div>
-            </div>`;
-        }
-        html += '</div>';
-        if (_canWrite) {
-            html += `<button class="btn btn-primary btn-sm" onclick="previewLxcFeatures()">
-                <i class="bi bi-eye"></i> Preview &amp; Apply
-            </button>`;
-        }
-        return html;
-    }
-
-    // ── Devices ───────────────────────────────────────────────────────────────
-    function buildDevicesHtml(data) {
-        let html = '<h6 class="text-primary mb-2"><i class="bi bi-device-hdd"></i> Devices / Passthrough</h6>';
-
-        if (!data.pve_supports_dev_n) {
-            html += `<div class="alert alert-warning py-2 mb-2">
-                <i class="bi bi-exclamation-triangle"></i>
-                PVE ${data.pve_version || '< 8.2'} detected — the <code>dev[n]</code> API requires PVE 8.2+.
-                Use the idmap / raw config section (Phase 3) for older nodes.
-            </div>`;
-        }
-
-        const devs = (data.devices || []);
-        const legacy = (data.legacy_devices || []);
-
-        if (devs.length === 0 && legacy.length === 0) {
-            html += '<p class="text-muted small mb-2">No device passthrough configured.</p>';
-        } else {
-            html += '<div class="mb-2">';
-            for (const d of devs) {
-                const badge = `<span class="badge bg-secondary me-1">${d.key}</span>`;
-                const gid  = d.gid  ? `<span class="badge bg-outline-secondary border me-1">gid=${d.gid}</span>` : '';
-                const uid  = d.uid  ? `<span class="badge bg-outline-secondary border me-1">uid=${d.uid}</span>` : '';
-                const del  = _canWrite && !_isRunning
-                    ? `<button class="btn btn-sm btn-outline-danger ms-auto" onclick="removeLxcDevice('${d.key}')"><i class="bi bi-trash"></i></button>`
-                    : '';
-                html += `<div class="border rounded p-2 mb-1 d-flex align-items-center gap-2">
-                    ${badge}<code class="flex-grow-1">${d.path}</code>${uid}${gid}${del}
-                </div>`;
-            }
-            for (const l of legacy) {
-                html += `<div class="border rounded p-2 mb-1 d-flex align-items-center gap-2 opacity-75">
-                    <span class="badge bg-warning text-dark me-1">${l.key}</span>
-                    <code class="flex-grow-1 small">${l.raw}</code>
-                    <span class="badge bg-secondary">legacy</span>
-                </div>`;
-            }
-            html += '</div>';
-        }
-
-        if (_canWrite && data.pve_supports_dev_n) {
-            html += `<button class="btn btn-sm btn-outline-primary" onclick="showAddDeviceModal()">
-                <i class="bi bi-plus-circle"></i> Add Device
-            </button>`;
-        }
-        return html;
-    }
-
-    // ── Mounts ────────────────────────────────────────────────────────────────
-    function buildMountsHtml(data) {
-        let html = '<h6 class="text-primary mb-2"><i class="bi bi-folder2-open"></i> Bind Mounts</h6>';
-
-        const mounts = data.mounts || [];
-        if (mounts.length === 0) {
-            html += '<p class="text-muted small mb-2">No bind mounts configured.</p>';
-        } else {
-            html += '<div class="mb-2">';
-            for (const m of mounts) {
-                const badge = `<span class="badge bg-secondary me-1">${m.key}</span>`;
-                const ro    = m.ro === '1' ? '<span class="badge bg-warning text-dark me-1">ro</span>' : '';
-                const del   = _canWrite && !_isRunning
-                    ? `<button class="btn btn-sm btn-outline-danger ms-auto" onclick="removeLxcMount('${m.key}')"><i class="bi bi-trash"></i></button>`
-                    : '';
-                html += `<div class="border rounded p-2 mb-1 d-flex align-items-center gap-2">
-                    ${badge}
-                    <code class="small flex-grow-1">${m.host_path} → ${m.mp}</code>
-                    ${ro}${del}
-                </div>`;
-            }
-            html += '</div>';
-        }
-
-        if (_canWrite) {
-            html += `<button class="btn btn-sm btn-outline-primary" onclick="showAddMountModal()">
-                <i class="bi bi-plus-circle"></i> Add Mount
-            </button>`;
-        }
-        return html;
-    }
-
-    // ── UID/GID idmap ─────────────────────────────────────────────────────────
-    function buildIdmapHtml(data) {
-        let html = '<h6 class="text-primary mb-2"><i class="bi bi-person-lock"></i> UID/GID Mapping (idmap)</h6>';
-
-        const maps = data.idmaps || [];
-        if (maps.length === 0) {
-            html += '<p class="text-muted small mb-2">No idmap entries (container uses default subuid/subgid mapping).</p>';
-        } else {
-            html += '<div class="mb-2">';
-            for (const m of maps) {
-                const typeLabel = m.type === 'u' ? 'UID' : 'GID';
-                const badge = `<span class="badge bg-secondary me-1">${m.key}</span>`;
-                const typebadge = `<span class="badge ${m.type==='u' ? 'bg-info' : 'bg-success'} me-1">${typeLabel}</span>`;
-                const desc = `<code class="small">${m.ct_id}–${m.ct_id + m.count - 1} → ${m.host_id}–${m.host_id + m.count - 1} (${m.count})</code>`;
-                const del = _canWrite && !_isRunning
-                    ? `<button class="btn btn-sm btn-outline-danger ms-auto" onclick="removeLxcIdmap('${m.key}')"><i class="bi bi-trash"></i></button>`
-                    : '';
-                html += `<div class="border rounded p-2 mb-1 d-flex align-items-center gap-2">
-                    ${badge}${typebadge}<span class="flex-grow-1">${desc}</span>${del}
-                </div>`;
-            }
-            html += '</div>';
-        }
-
-        if (_canWrite) {
-            html += `<button class="btn btn-sm btn-outline-primary" onclick="showAddIdmapModal()">
-                <i class="bi bi-plus-circle"></i> Add Mapping
-            </button>`;
-        }
-        return html;
-    }
-
-    const IDMAP_PRESETS = {
-        full_u:  { type: 'u', ct_id: 0, host_id: 100000, count: 65536 },
-        full_g:  { type: 'g', ct_id: 0, host_id: 100000, count: 65536 },
-        root_u:  { type: 'u', ct_id: 0, host_id: 0,      count: 1 },
-        root_g:  { type: 'g', ct_id: 0, host_id: 0,      count: 1 },
+</script>
+<script type="module">
+import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
+window.ProxUtils = window.ProxUtils || ProxUtils;
+function lxcSummary() {
+    const node = '{{ node }}', vmid = '{{ vmid }}';
+    return {
+        features: {}, devices: [], mounts: [], idmaps: [], loading: true,
+        get enabledFlags() { return Object.entries(this.features).filter(([,v])=>v==='1').map(([k])=>k); },
+        get hasAny() { return this.enabledFlags.length>0 || this.devices.length>0 || this.mounts.length>0 || this.idmaps.length>0; },
+        async init() {
+            try {
+                const [fD,dD,mD,iD] = await Promise.all([
+                    window.ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/features`),
+                    window.ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/devices`),
+                    window.ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/mounts`),
+                    window.ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/idmap`),
+                ]);
+                this.features = fD.features || {};
+                this.devices  = [...(dD.devices||[]), ...(dD.legacy_devices||[])];
+                this.mounts   = mD.mounts  || [];
+                this.idmaps   = iD.idmaps  || [];
+            } catch(e) { /* silent */ } finally { this.loading = false; }
+        },
     };
-
-    window.showAddIdmapModal = function () {
-        document.getElementById('idmapPreset').value = '';
-        document.getElementById('idmapCtId').value = '0';
-        document.getElementById('idmapHostId').value = '100000';
-        document.getElementById('idmapCount').value = '65536';
-        document.querySelector('input[name="idmapType"][value="u"]').checked = true;
-        updateIdmapPreview();
-        new bootstrap.Modal(document.getElementById('lxcAddIdmapModal')).show();
-    };
-
-    window.fillIdmapPreset = function (sel) {
-        const p = IDMAP_PRESETS[sel.value];
-        if (!p) return;
-        document.querySelector(`input[name="idmapType"][value="${p.type}"]`).checked = true;
-        document.getElementById('idmapCtId').value = p.ct_id;
-        document.getElementById('idmapHostId').value = p.host_id;
-        document.getElementById('idmapCount').value = p.count;
-        updateIdmapPreview();
-    };
-
-    function updateIdmapPreview() {
-        const type    = (document.querySelector('input[name="idmapType"]:checked') || {}).value || 'u';
-        const ctId    = document.getElementById('idmapCtId')?.value || '0';
-        const hostId  = document.getElementById('idmapHostId')?.value || '100000';
-        const count   = document.getElementById('idmapCount')?.value || '65536';
-        const prev    = document.getElementById('idmapPreview');
-        if (prev) prev.textContent = `lxc.idmap = ${type} ${ctId} ${hostId} ${count}`;
-    }
-
-    window.addLxcIdmap = function () {
-        const type   = (document.querySelector('input[name="idmapType"]:checked') || {}).value;
-        const ct_id  = parseInt(document.getElementById('idmapCtId').value, 10);
-        const host_id = parseInt(document.getElementById('idmapHostId').value, 10);
-        const count  = parseInt(document.getElementById('idmapCount').value, 10);
-        if (!type || isNaN(ct_id) || isNaN(host_id) || isNaN(count)) {
-            alert('All fields are required'); return;
-        }
-        const btn = document.getElementById('addIdmapBtn');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-        fetch(`/api/vm/${node}/${vmid}/lxc/idmap`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ type, ct_id, host_id, count }),
-        })
-        .then(r => r.json())
-        .then(data => {
-            bootstrap.Modal.getInstance(document.getElementById('lxcAddIdmapModal')).hide();
-            _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
-            if (data.success) loadAll();
-        })
-        .catch(() => _flash('danger', 'Network error'))
-        .finally(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-plus-circle"></i> Add'; });
-    };
-
-    window.removeLxcIdmap = function (key) {
-        if (!confirm(`Remove idmap entry ${key}?`)) return;
-        fetch(`/api/vm/${node}/${vmid}/lxc/idmap/${key}`, { method: 'DELETE' })
-        .then(r => r.json())
-        .then(data => { _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error); if (data.success) loadAll(); });
-    };
-
-    // ── Feature preview / apply ───────────────────────────────────────────────
-    window.previewLxcFeatures = function () {
-        const desired = {};
-        document.querySelectorAll('[data-flag]').forEach(el => {
-            desired[el.dataset.flag] = el.checked ? '1' : '0';
-        });
-        const before = Object.entries(_currentFeatures).filter(([,v])=>v==='1').map(([k])=>`${k}=1`).join(',') || '(none)';
-        const after  = Object.entries(desired).filter(([,v])=>v==='1').map(([k])=>`${k}=1`).join(',') || '(none)';
-        document.getElementById('lxcDiffPre').textContent = `features: ${before}\n       → ${after}`;
-        document.getElementById('lxcRunningWarn').style.display = _isRunning ? '' : 'none';
-        window._lxcPendingFeatures = desired;
-        new bootstrap.Modal(document.getElementById('lxcPreviewModal')).show();
-    };
-
-    window.applyLxcFeatures = function () {
-        const btn = document.getElementById('lxcApplyBtn');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Applying…';
-        fetch(`/api/vm/${node}/${vmid}/lxc/features`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ features: window._lxcPendingFeatures }),
-        })
-        .then(r => r.json())
-        .then(data => {
-            bootstrap.Modal.getInstance(document.getElementById('lxcPreviewModal')).hide();
-            _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
-            if (data.success) loadAll();
-        })
-        .catch(() => { bootstrap.Modal.getInstance(document.getElementById('lxcPreviewModal')).hide(); _flash('danger', 'Network error'); })
-        .finally(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-check2-circle"></i> Apply'; });
-    };
-
-    // ── Add device ────────────────────────────────────────────────────────────
-    window.showAddDeviceModal = function () {
-        document.getElementById('devPath').value = '';
-        document.getElementById('devGid').value = '';
-        document.getElementById('devUid').value = '0';
-        const modal = new bootstrap.Modal(document.getElementById('lxcAddDeviceModal'));
-        modal.show();
-    };
-
-    window.fillDevicePreset = function (sel) {
-        const opt = QUICKSYNC_DEVICES[sel.value];
-        if (!opt) return;
-        document.getElementById('devPath').value = opt.path;
-        document.getElementById('devGid').value = opt.gid;
-        document.getElementById('devUid').value = opt.uid;
-    };
-
-    window.addLxcDevice = function () {
-        const path = document.getElementById('devPath').value.trim();
-        const gid  = document.getElementById('devGid').value.trim();
-        const uid  = document.getElementById('devUid').value.trim();
-        if (!path) { alert('Device path is required'); return; }
-
-        const btn = document.getElementById('addDeviceBtn');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-        fetch(`/api/vm/${node}/${vmid}/lxc/devices`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path, gid: gid || undefined, uid: uid || undefined }),
-        })
-        .then(r => r.json())
-        .then(data => {
-            bootstrap.Modal.getInstance(document.getElementById('lxcAddDeviceModal')).hide();
-            _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
-            if (data.success) loadAll();
-        })
-        .catch(() => _flash('danger', 'Network error'))
-        .finally(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-plus-circle"></i> Add'; });
-    };
-
-    window.removeLxcDevice = function (key) {
-        if (!confirm(`Remove device entry ${key}?`)) return;
-        fetch(`/api/vm/${node}/${vmid}/lxc/devices/${key}`, { method: 'DELETE' })
-        .then(r => r.json())
-        .then(data => { _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error); if (data.success) loadAll(); });
-    };
-
-    // ── Add mount ─────────────────────────────────────────────────────────────
-    window.showAddMountModal = function () {
-        document.getElementById('mpHostPath').value = '';
-        document.getElementById('mpContainerPath').value = '';
-        document.getElementById('mpReadOnly').checked = false;
-        document.getElementById('mpBackup').checked = false;
-        new bootstrap.Modal(document.getElementById('lxcAddMountModal')).show();
-    };
-
-    window.addLxcMount = function () {
-        const host_path = document.getElementById('mpHostPath').value.trim();
-        const mp        = document.getElementById('mpContainerPath').value.trim();
-        const ro        = document.getElementById('mpReadOnly').checked;
-        const backup    = document.getElementById('mpBackup').checked;
-        if (!host_path || !mp) { alert('Host path and container path are required'); return; }
-
-        const btn = document.getElementById('addMountBtn');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-        fetch(`/api/vm/${node}/${vmid}/lxc/mounts`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ host_path, mp, ro, backup }),
-        })
-        .then(r => r.json())
-        .then(data => {
-            bootstrap.Modal.getInstance(document.getElementById('lxcAddMountModal')).hide();
-            _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
-            if (data.success) loadAll();
-        })
-        .catch(() => _flash('danger', 'Network error'))
-        .finally(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-plus-circle"></i> Add'; });
-    };
-
-    window.removeLxcMount = function (key) {
-        if (!confirm(`Remove mount ${key}?`)) return;
-        fetch(`/api/vm/${node}/${vmid}/lxc/mounts/${key}`, { method: 'DELETE' })
-        .then(r => r.json())
-        .then(data => { _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error); if (data.success) loadAll(); });
-    };
-
-    // ── Restore ───────────────────────────────────────────────────────────────
-    window.restoreLxcConfig = function () {
-        if (!confirm('Restore the pre-write config snapshot? This will revert all Advanced/Passthrough changes.')) return;
-        fetch(`/api/vm/${node}/${vmid}/lxc/config-restore`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
-        })
-        .then(r => r.json())
-        .then(data => { _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error); if (data.success) loadAll(); });
-    };
-
-    // ── Profiles ──────────────────────────────────────────────────────────────
-    let _profileDiffCache = null;
-
-    window.loadLxcProfiles = function () {
-        const body = document.getElementById('lxcProfilesBody');
-        body.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div><span class="ms-2">Loading…</span></div>';
-        fetch('/api/lxc-profiles')
-            .then(r => r.json())
-            .then(data => {
-                if (!data.profiles || data.profiles.length === 0) {
-                    body.innerHTML = '<p class="text-muted">No profiles found.</p>';
-                    return;
-                }
-                let html = '<div class="row g-3">';
-                for (const p of data.profiles) {
-                    const tagBadges = (p.tags || []).map(t => `<span class="badge bg-secondary me-1">${t}</span>`).join('');
-                    const devCount = (p.devices || []).length;
-                    const featCount = Object.keys(p.features || {}).length;
-                    html += `<div class="col-md-6">
-                        <div class="border rounded p-3 h-100 d-flex flex-column">
-                            <div class="d-flex justify-content-between align-items-start mb-1">
-                                <strong>${p.name}</strong>
-                                <div>${tagBadges}</div>
-                            </div>
-                            <p class="text-muted small flex-grow-1 mb-2">${p.description}</p>
-                            <div class="d-flex gap-2 text-muted small mb-2">
-                                <span><i class="bi bi-toggles"></i> ${featCount} flag(s)</span>
-                                <span><i class="bi bi-device-hdd"></i> ${devCount} device(s)</span>
-                            </div>
-                            <button class="btn btn-sm btn-outline-primary" onclick="previewProfile('${p.id}', '${p.name}')">
-                                <i class="bi bi-eye"></i> Preview &amp; Apply
-                            </button>
-                        </div>
-                    </div>`;
-                }
-                html += '</div>';
-                body.innerHTML = html;
-            })
-            .catch(() => { body.innerHTML = '<div class="alert alert-danger">Failed to load profiles</div>'; });
-    };
-
-    window.previewProfile = function (profileId, profileName) {
-        _profileDiffCache = null;
-        document.getElementById('profileDiffTitle').innerHTML = `<i class="bi bi-eye"></i> ${profileName} — Preview`;
-        document.getElementById('profileDiffBody').innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div></div>';
-        document.getElementById('profileApplyBtn').dataset.profileId = profileId;
-        new bootstrap.Modal(document.getElementById('lxcProfileDiffModal')).show();
-
-        fetch(`/api/vm/${node}/${vmid}/lxc/profile-diff/${profileId}`)
-            .then(r => r.json())
-            .then(diff => {
-                _profileDiffCache = diff;
-                if (diff.error) {
-                    document.getElementById('profileDiffBody').innerHTML = `<div class="alert alert-danger">${diff.error}</div>`;
-                    return;
-                }
-                let html = '';
-                if (!diff.changes_needed) {
-                    html = '<div class="alert alert-success"><i class="bi bi-check-circle"></i> This profile is already fully applied to this container.</div>';
-                    document.getElementById('profileApplyBtn').disabled = true;
-                } else {
-                    document.getElementById('profileApplyBtn').disabled = false;
-                    if (diff.features_to_add.length) {
-                        html += `<div class="mb-3">
-                            <h6 class="text-primary"><i class="bi bi-plus-circle"></i> Features to enable</h6>
-                            <ul class="mb-0">
-                                ${diff.features_to_add.map(f => `<li><code>${f}</code></li>`).join('')}
-                            </ul>
-                        </div>`;
-                    }
-                    if (diff.devices_to_add.length) {
-                        html += `<div class="mb-3">
-                            <h6 class="text-primary"><i class="bi bi-device-hdd"></i> Devices to add</h6>
-                            <ul class="mb-0">
-                                ${diff.devices_to_add.map(d => `<li><code>${d.path}</code>${d.gid ? ` (gid=${d.gid})` : ''}</li>`).join('')}
-                            </ul>
-                        </div>`;
-                    }
-                    if (diff.features_already_set.length || diff.devices_already_present.length) {
-                        html += `<div class="text-muted small">
-                            <i class="bi bi-check2"></i> Already present:
-                            ${[...diff.features_already_set, ...diff.devices_already_present.map(d=>d.path)].join(', ')}
-                        </div>`;
-                    }
-                    if (diff.running && diff.devices_require_stop) {
-                        html += `<div class="alert alert-warning mt-3 mb-0">
-                            <i class="bi bi-exclamation-triangle"></i>
-                            <strong>Container is running.</strong> Device changes require it to be stopped first.
-                        </div>`;
-                        document.getElementById('profileApplyBtn').disabled = true;
-                    } else if (diff.running) {
-                        html += `<div class="alert alert-info mt-3 mb-0">
-                            <i class="bi bi-info-circle"></i> Container is running — feature changes take effect after restart.
-                        </div>`;
-                    }
-                    if (!diff.pve_supports_dev_n && diff.devices_to_add.length) {
-                        html += `<div class="alert alert-warning mt-3 mb-0">
-                            <i class="bi bi-exclamation-triangle"></i> PVE &lt; 8.2 detected — device passthrough not supported via API.
-                        </div>`;
-                        document.getElementById('profileApplyBtn').disabled = true;
-                    }
-                }
-                document.getElementById('profileDiffBody').innerHTML = html;
-            })
-            .catch(() => { document.getElementById('profileDiffBody').innerHTML = '<div class="alert alert-danger">Failed to load diff</div>'; });
-    };
-
-    window.applyLxcProfile = function () {
-        const profileId = document.getElementById('profileApplyBtn').dataset.profileId;
-        const btn = document.getElementById('profileApplyBtn');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Applying…';
-        fetch(`/api/vm/${node}/${vmid}/lxc/profile-apply/${profileId}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
-        })
-        .then(r => r.json())
-        .then(data => {
-            bootstrap.Modal.getInstance(document.getElementById('lxcProfileDiffModal')).hide();
-            _flash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
-            if (data.success) loadAll();
-        })
-        .catch(() => _flash('danger', 'Network error'))
-        .finally(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-check2-circle"></i> Apply Profile'; });
-    };
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
-    function _flash(cls, msg) {
-        const body = document.getElementById('lxcAdvancedBody');
-        body.insertAdjacentHTML('afterbegin',
-            `<div class="alert alert-${cls} alert-dismissible fade show" role="alert">
-                <i class="bi bi-${cls === 'success' ? 'check-circle' : 'exclamation-triangle'}"></i> ${msg}
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            </div>`);
-    }
-
-    document.addEventListener('DOMContentLoaded', loadAll);
-}());
+}
+(function(){ function reg(){ window.Alpine.data('lxcSummary', lxcSummary); }
+  if(window.Alpine) reg(); else document.addEventListener('alpine:init', reg); })();
+</script>
+<script>
 {% endif %}
 </script>
 {% endblock %}

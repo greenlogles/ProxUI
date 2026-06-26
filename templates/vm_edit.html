@@ -362,13 +362,464 @@
 </div>
 
 <!-- Loading overlay -->
-<div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center" 
+<div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center"
      style="background-color: rgba(0,0,0,0.5); z-index: 9999;">
     <div class="bg-white rounded p-4 text-center">
         <div class="spinner-border text-primary mb-2" role="status"></div>
         <div>Updating configuration...</div>
     </div>
 </div>
+
+{% if vm_type == 'lxc' %}
+<div x-data="lxcAdvanced('{{ node }}', '{{ vmid }}')">
+
+<!-- LXC Advanced / Passthrough -->
+<div class="row mt-3">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-sliders2"></i> Advanced / Passthrough</h5>
+                <div class="d-flex gap-2 align-items-center">
+                    <small class="text-muted fst-italic" x-show="hasBackup" x-text="'Snapshot: ' + backupTimestamp"></small>
+                    <button class="btn btn-sm btn-outline-secondary" x-show="hasBackup"
+                            @click="restore()" title="Revert to pre-write snapshot">
+                        <i class="bi bi-arrow-counterclockwise"></i> Restore
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary" @click="refresh()" title="Refresh">
+                        <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <template x-if="loading">
+                    <div class="text-center py-3">
+                        <div class="spinner-border spinner-border-sm" role="status"></div>
+                        <span class="ms-2">Loading…</span>
+                    </div>
+                </template>
+                <template x-if="!loading && errorMsg">
+                    <div class="alert alert-danger" x-text="errorMsg"></div>
+                </template>
+                <div x-show="flash.show" :class="'alert alert-' + flash.cls + ' alert-dismissible fade show'" role="alert">
+                    <i :class="'bi bi-' + (flash.cls === 'success' ? 'check-circle' : 'exclamation-triangle')"></i>
+                    <span x-text="flash.msg"></span>
+                    <button type="button" class="btn-close" @click="flash.show=false"></button>
+                </div>
+                <div x-show="!loading && isRunning" class="alert alert-info py-2 mb-3">
+                    <i class="bi bi-info-circle"></i>
+                    <strong>Container is running.</strong>
+                    Feature flag changes take effect after restart.
+                    Device &amp; mount changes require the container to be stopped first.
+                </div>
+                <div x-show="!loading && !canWrite" class="alert alert-warning py-2 mb-3">
+                    <i class="bi bi-lock"></i>
+                    <strong>Read-only connection.</strong> Write actions are disabled.
+                </div>
+                <div x-show="!loading && !errorMsg">
+                    <!-- Feature Flags -->
+                    <h6 class="text-primary mb-3"><i class="bi bi-toggles"></i> Feature Flags</h6>
+                    <div class="row g-2 mb-3">
+                        <template x-for="f in LXC_FLAGS" :key="f.key">
+                            <div class="col-sm-6 col-lg-4">
+                                <div class="border rounded p-2 d-flex align-items-start gap-2">
+                                    <div class="form-check form-switch mt-1">
+                                        <input class="form-check-input" type="checkbox" role="switch"
+                                               :id="'lxcFlag_' + f.key"
+                                               x-model="desiredFeatures[f.key]"
+                                               :disabled="!canWrite">
+                                    </div>
+                                    <div>
+                                        <label class="form-check-label fw-semibold mb-0" :for="'lxcFlag_' + f.key" x-text="f.label"></label>
+                                        <div class="text-muted small" x-text="f.desc"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                    <button class="btn btn-primary btn-sm" x-show="canWrite" @click="previewFeatures()">
+                        <i class="bi bi-eye"></i> Preview &amp; Apply
+                    </button>
+                    <hr class="my-3">
+                    <!-- Devices -->
+                    <h6 class="text-primary mb-2"><i class="bi bi-device-hdd"></i> Devices / Passthrough</h6>
+                    <div x-show="!supportsDevN" class="alert alert-warning py-2 mb-2">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        PVE <span x-text="pveVersion || '< 8.2'"></span> detected — the <code>dev[n]</code> API requires PVE 8.2+.
+                    </div>
+                    <p x-show="devices.length === 0 && legacyDevices.length === 0" class="text-muted small mb-2">No device passthrough configured.</p>
+                    <div class="mb-2" x-show="devices.length > 0 || legacyDevices.length > 0">
+                        <template x-for="d in devices" :key="d.key">
+                            <div class="border rounded p-2 mb-1 d-flex align-items-center gap-2">
+                                <span class="badge bg-secondary me-1" x-text="d.key"></span>
+                                <code class="flex-grow-1" x-text="d.path"></code>
+                                <span x-show="d.uid" class="badge bg-outline-secondary border me-1" x-text="'uid=' + d.uid"></span>
+                                <span x-show="d.gid" class="badge bg-outline-secondary border me-1" x-text="'gid=' + d.gid"></span>
+                                <button x-show="canWrite && !isRunning" class="btn btn-sm btn-outline-danger ms-auto" @click="removeDevice(d.key)">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </template>
+                        <template x-for="l in legacyDevices" :key="l.key">
+                            <div class="border rounded p-2 mb-1 d-flex align-items-center gap-2 opacity-75">
+                                <span class="badge bg-warning text-dark me-1" x-text="l.key"></span>
+                                <code class="flex-grow-1 small" x-text="l.raw"></code>
+                                <span class="badge bg-secondary">legacy</span>
+                            </div>
+                        </template>
+                    </div>
+                    <button x-show="canWrite && supportsDevN" class="btn btn-sm btn-outline-primary" @click="openAddDevice()">
+                        <i class="bi bi-plus-circle"></i> Add Device
+                    </button>
+                    <hr class="my-3">
+                    <!-- Mounts -->
+                    <h6 class="text-primary mb-2"><i class="bi bi-folder2-open"></i> Bind Mounts</h6>
+                    <p x-show="mounts.length === 0" class="text-muted small mb-2">No bind mounts configured.</p>
+                    <div class="mb-2" x-show="mounts.length > 0">
+                        <template x-for="m in mounts" :key="m.key">
+                            <div class="border rounded p-2 mb-1 d-flex align-items-center gap-2">
+                                <span class="badge bg-secondary me-1" x-text="m.key"></span>
+                                <code class="small flex-grow-1"><span x-text="m.host_path"></span> → <span x-text="m.mp"></span></code>
+                                <span x-show="m.ro === '1'" class="badge bg-warning text-dark me-1">ro</span>
+                                <button x-show="canWrite && !isRunning" class="btn btn-sm btn-outline-danger ms-auto" @click="removeMount(m.key)">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </template>
+                    </div>
+                    <button x-show="canWrite" class="btn btn-sm btn-outline-primary" @click="openAddMount()">
+                        <i class="bi bi-plus-circle"></i> Add Mount
+                    </button>
+                    <hr class="my-3">
+                    <!-- idmap -->
+                    <h6 class="text-primary mb-2"><i class="bi bi-person-lock"></i> UID/GID Mapping (idmap)</h6>
+                    <p x-show="idmaps.length === 0" class="text-muted small mb-2">No idmap entries (container uses default subuid/subgid mapping).</p>
+                    <div class="mb-2" x-show="idmaps.length > 0">
+                        <template x-for="m in idmaps" :key="m.key">
+                            <div class="border rounded p-2 mb-1 d-flex align-items-center gap-2">
+                                <span class="badge bg-secondary me-1" x-text="m.key"></span>
+                                <span class="badge me-1" :class="m.type === 'u' ? 'bg-info' : 'bg-success'" x-text="m.type === 'u' ? 'UID' : 'GID'"></span>
+                                <span class="flex-grow-1"><code class="small" x-text="idmapDesc(m)"></code></span>
+                                <button x-show="canWrite && !isRunning" class="btn btn-sm btn-outline-danger ms-auto" @click="removeIdmap(m.key)">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </template>
+                    </div>
+                    <button x-show="canWrite" class="btn btn-sm btn-outline-primary" @click="openAddIdmap()">
+                        <i class="bi bi-plus-circle"></i> Add Mapping
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Profiles Card -->
+<div class="row mt-3">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-collection"></i> Apply Config Profile</h5>
+                <button class="btn btn-sm btn-outline-primary" @click="loadProfiles()" title="Refresh">
+                    <i class="bi bi-arrow-clockwise"></i>
+                </button>
+            </div>
+            <div class="card-body">
+                <template x-if="loading">
+                    <div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div><span class="ms-2">Loading…</span></div>
+                </template>
+                <template x-if="!loading && profiles.length === 0">
+                    <p class="text-muted">No profiles found.</p>
+                </template>
+                <div class="row g-3" x-show="profiles.length > 0">
+                    <template x-for="p in profiles" :key="p.id">
+                        <div class="col-md-6">
+                            <div class="border rounded p-3 h-100 d-flex flex-column">
+                                <div class="d-flex justify-content-between align-items-start mb-1">
+                                    <strong x-text="p.name"></strong>
+                                    <div>
+                                        <template x-for="t in (p.tags || [])" :key="t">
+                                            <span class="badge bg-secondary me-1" x-text="t"></span>
+                                        </template>
+                                    </div>
+                                </div>
+                                <p class="text-muted small flex-grow-1 mb-2" x-text="p.description"></p>
+                                <div class="d-flex gap-2 text-muted small mb-2">
+                                    <span><i class="bi bi-toggles"></i> <span x-text="Object.keys(p.features || {}).length"></span> flag(s)</span>
+                                    <span><i class="bi bi-device-hdd"></i> <span x-text="(p.devices || []).length"></span> device(s)</span>
+                                </div>
+                                <button class="btn btn-sm btn-outline-primary" @click="openPreviewProfile(p.id, p.name)">
+                                    <i class="bi bi-eye"></i> Preview &amp; Apply
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Profile Diff Modal -->
+<div class="modal fade" tabindex="-1" x-ref="profileDiffModal">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-eye"></i> <span x-text="profileTitle">Profile Preview</span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <template x-if="profileDiff && profileDiff.loading">
+                    <div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div></div>
+                </template>
+                <template x-if="profileDiff && profileDiff.error">
+                    <div class="alert alert-danger" x-text="profileDiff.error"></div>
+                </template>
+                <template x-if="profileDiff && !profileDiff.loading && !profileDiff.error && profileDiff.alreadyApplied">
+                    <div class="alert alert-success"><i class="bi bi-check-circle"></i> This profile is already fully applied to this container.</div>
+                </template>
+                <div x-show="profileDiff && !profileDiff.loading && !profileDiff.error && !profileDiff.alreadyApplied">
+                    <div x-show="profileDiff && profileDiff.featuresToAdd && profileDiff.featuresToAdd.length > 0" class="mb-3">
+                        <h6 class="text-primary"><i class="bi bi-plus-circle"></i> Features to enable</h6>
+                        <ul class="mb-0">
+                            <template x-for="f in (profileDiff ? profileDiff.featuresToAdd : [])" :key="f">
+                                <li><code x-text="f"></code></li>
+                            </template>
+                        </ul>
+                    </div>
+                    <div x-show="profileDiff && profileDiff.devicesToAdd && profileDiff.devicesToAdd.length > 0" class="mb-3">
+                        <h6 class="text-primary"><i class="bi bi-device-hdd"></i> Devices to add</h6>
+                        <ul class="mb-0">
+                            <template x-for="d in (profileDiff ? profileDiff.devicesToAdd : [])" :key="d.path">
+                                <li><code x-text="d.path + (d.gid ? ' (gid=' + d.gid + ')' : '')"></code></li>
+                            </template>
+                        </ul>
+                    </div>
+                    <div x-show="profileDiff && (profileDiff.featuresAlreadySet.length > 0 || profileDiff.devicesAlreadyPresent.length > 0)" class="text-muted small">
+                        <i class="bi bi-check2"></i> Already present:
+                        <span x-text="profileDiff ? [...profileDiff.featuresAlreadySet, ...(profileDiff.devicesAlreadyPresent.map(d=>d.path))].join(', ') : ''"></span>
+                    </div>
+                    <div x-show="profileDiff && profileDiff.running && profileDiff.devicesRequireStop" class="alert alert-warning mt-3 mb-0">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <strong>Container is running.</strong> Device changes require it to be stopped first.
+                    </div>
+                    <div x-show="profileDiff && profileDiff.running && !profileDiff.devicesRequireStop" class="alert alert-info mt-3 mb-0">
+                        <i class="bi bi-info-circle"></i> Container is running — feature changes take effect after restart.
+                    </div>
+                    <div x-show="profileDiff && !profileDiff.supportsDevN && profileDiff.devicesToAdd && profileDiff.devicesToAdd.length > 0" class="alert alert-warning mt-3 mb-0">
+                        <i class="bi bi-exclamation-triangle"></i> PVE &lt; 8.2 detected — device passthrough not supported via API.
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" @click="applyProfile()"
+                        :disabled="profileApplyDisabled || busy.applyProfile">
+                    <span x-show="busy.applyProfile" class="spinner-border spinner-border-sm me-1"></span>
+                    <i x-show="!busy.applyProfile" class="bi bi-check2-circle"></i> Apply Profile
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Feature Preview Modal -->
+<div class="modal fade" tabindex="-1" x-ref="previewModal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-eye"></i> Preview Changes</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted mb-2">The following will be written to the container config:</p>
+                <pre class="bg-body-secondary rounded p-3 small mb-2" style="white-space:pre-wrap;" x-text="previewDiffText"></pre>
+                <div class="alert alert-warning mb-0" x-show="previewRunningWarn">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <strong>Container is running.</strong> Changes take effect after the next restart.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" @click="applyFeatures()" :disabled="busy.applyFeatures">
+                    <span x-show="busy.applyFeatures" class="spinner-border spinner-border-sm me-1"></span>
+                    <i x-show="!busy.applyFeatures" class="bi bi-check2-circle"></i> Apply
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Add Device Modal -->
+<div class="modal fade" tabindex="-1" x-ref="addDeviceModal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-device-hdd"></i> Add Device Passthrough</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Quick Preset</label>
+                    <select class="form-select" x-model="dev.preset" @change="applyDevicePreset()">
+                        <option value="">— choose a common device —</option>
+                        <option value="0">renderD128 (QuickSync / VA-API)</option>
+                        <option value="1">card0 (DRI primary)</option>
+                        <option value="2">card1 (DRI secondary)</option>
+                        <option value="3">net/tun (Tailscale)</option>
+                        <option value="4">fuse</option>
+                        <option value="5">kvm</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Device path <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control font-monospace" x-model="dev.path"
+                           placeholder="/dev/dri/renderD128">
+                </div>
+                <div class="row g-2 mb-2">
+                    <div class="col-6">
+                        <label class="form-label">GID override
+                            <i class="bi bi-info-circle text-muted" title="Debian render group = 104, video group = 44"></i>
+                        </label>
+                        <input type="number" class="form-control" x-model="dev.gid" placeholder="104 (render)">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">UID override</label>
+                        <input type="number" class="form-control" x-model="dev.uid" placeholder="0">
+                    </div>
+                </div>
+                <div class="alert alert-info py-2 small mb-0">
+                    <i class="bi bi-info-circle"></i>
+                    Requires PVE 8.2+ and the container must be <strong>stopped</strong>.
+                    Debian render group GID is typically <strong>104</strong>.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" @click="addDevice()" :disabled="busy.addDevice">
+                    <span x-show="busy.addDevice" class="spinner-border spinner-border-sm me-1"></span>
+                    <i x-show="!busy.addDevice" class="bi bi-plus-circle"></i> Add
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Add idmap Modal -->
+<div class="modal fade" tabindex="-1" x-ref="addIdmapModal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-person-lock"></i> Add UID/GID Mapping</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Quick preset</label>
+                    <select class="form-select" x-model="idmap.preset" @change="applyIdmapPreset()">
+                        <option value="">— common patterns —</option>
+                        <option value="full_u">Full UID map (u 0 100000 65536)</option>
+                        <option value="full_g">Full GID map (g 0 100000 65536)</option>
+                        <option value="root_u">Map root only — UID (u 0 0 1)</option>
+                        <option value="root_g">Map root only — GID (g 0 0 1)</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Type</label>
+                    <div class="d-flex gap-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="idmapType" id="idmapTypeU" value="u" x-model="idmap.type">
+                            <label class="form-check-label" for="idmapTypeU">UID (u)</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="idmapType" id="idmapTypeG" value="g" x-model="idmap.type">
+                            <label class="form-check-label" for="idmapTypeG">GID (g)</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-4">
+                        <label class="form-label">Container start ID</label>
+                        <input type="number" class="form-control" x-model.number="idmap.ct_id" min="0">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label">Host start ID</label>
+                        <input type="number" class="form-control" x-model.number="idmap.host_id" min="0">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label">Count</label>
+                        <input type="number" class="form-control" x-model.number="idmap.count" min="1">
+                    </div>
+                </div>
+                <div class="bg-body-secondary rounded p-2 small font-monospace mb-3" x-text="idmapPreviewText"></div>
+                <div class="alert alert-warning py-2 small mb-0">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    For an <strong>unprivileged</strong> container to access a bind-mounted directory,
+                    the host directory must be owned by the mapped UID/GID.
+                    Use <code>chown -R 100000:100000 /host/path</code> as root on the host.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" @click="addIdmap()" :disabled="busy.addIdmap">
+                    <span x-show="busy.addIdmap" class="spinner-border spinner-border-sm me-1"></span>
+                    <i x-show="!busy.addIdmap" class="bi bi-plus-circle"></i> Add
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Add Mount Modal -->
+<div class="modal fade" tabindex="-1" x-ref="addMountModal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-folder2-open"></i> Add Bind Mount</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">Host path <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control font-monospace" x-model="mount.host_path"
+                           placeholder="/mnt/nvme/data">
+                    <div class="form-text">Absolute path on the Proxmox host.</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Container path <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control font-monospace" x-model="mount.mp"
+                           placeholder="/data">
+                    <div class="form-text">Absolute path inside the container.</div>
+                </div>
+                <div class="d-flex gap-4 mb-2">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="mpReadOnly" x-model="mount.ro">
+                        <label class="form-check-label" for="mpReadOnly">Read-only</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="mpBackup" x-model="mount.backup">
+                        <label class="form-check-label" for="mpBackup">Include in backup</label>
+                    </div>
+                </div>
+                <div class="alert alert-info py-2 small mb-0">
+                    <i class="bi bi-info-circle"></i>
+                    Container must be <strong>stopped</strong> before adding mounts.
+                    For unprivileged containers, the host directory owner must match the container UID mapping.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" @click="addMount()" :disabled="busy.addMount">
+                    <span x-show="busy.addMount" class="spinner-border spinner-border-sm me-1"></span>
+                    <i x-show="!busy.addMount" class="bi bi-plus-circle"></i> Add
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+</div><!-- end lxcAdvanced -->
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
@@ -1943,4 +2394,11 @@ document.addEventListener('DOMContentLoaded', function() {
     
 });
 </script>
+{% if vm_type == 'lxc' %}
+<script type="module">
+  import { lxcAdvanced } from "{{ url_for('static', filename='js/lxc-advanced.js') }}";
+  (function(){ function reg(){ window.Alpine.data('lxcAdvanced', lxcAdvanced); }
+    if(window.Alpine) reg(); else document.addEventListener('alpine:init', reg); })();
+</script>
+{% endif %}
 {% endblock %}
