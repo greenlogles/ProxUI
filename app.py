@@ -1340,19 +1340,24 @@ def serialize_lxc_features(flags_dict):
 
 def check_lxc_write_permission(proxmox, vmid, node=None):
     """Return True if the current connection can write to this container's config."""
-    # root@pam has unconditional superuser access — skip the ACL probe entirely.
+    # root@pam and the Proxmox root user always have unconditional superuser access.
     if node:
         meta = connection_metadata.get(node) or {}
-        if meta.get("user") == "root@pam":
+        user = meta.get("user", "")
+        username = user.split("@")[0]  # strip realm: "root@pam" → "root"
+        print(f"[write_check] node={node} user={user!r} vmid={vmid}")
+        if user == "root@pam" or username == "root":
             return True
     try:
         perms = proxmox.access.permissions.get(path=f"/vms/{vmid}")
+        print(f"[write_check] perms={perms!r}")
         # Empty dict: Proxmox returns {} for superusers with implicit access.
         if not perms:
             return True
         write_privs = {"VM.Config.Options", "VM.Allocate", "VM.Config.Disk", "VM.Config.Network"}
         return any(perms.get(p) for p in write_privs)
-    except Exception:
+    except Exception as e:
+        print(f"[write_check] exception: {e}")
         return True  # Assume write access if permission check is unavailable
 
 
