@@ -1394,9 +1394,11 @@ function createDiskInterfaceCard(disk) {
     let size = '';
     let format = '';
 
-    // First part usually contains storage:volume or storage:size
+    // Bind mount: config starts with '/' (host path), no storage backend
     const firstPart = parts[0];
-    if (firstPart.includes(':')) {
+    const isBindMount = firstPart.startsWith('/');
+
+    if (!isBindMount && firstPart.includes(':')) {
         const colonParts = firstPart.split(':');
         storage = colonParts[0];
         // For LXC rootfs, the size might be directly after colon (e.g., "local-lvm:8")
@@ -1427,7 +1429,30 @@ function createDiskInterfaceCard(disk) {
     const displayName = disk.isRootfs ? 'Root Filesystem' : disk.key;
     const displayType = disk.isRootfs ? 'rootfs' : (disk.key.match(/^mp\d+$/) ? 'Mount Point' : storage);
 
-    div.innerHTML = `
+    // Extract the container mount path for bind mounts
+    let bindMountPath = '';
+    if (isBindMount) {
+        const mpPart = parts.find(p => p.startsWith('mp='));
+        bindMountPath = mpPart ? mpPart.replace('mp=', '') : '';
+    }
+
+    div.innerHTML = isBindMount ? `
+        <div class="card-body py-2">
+            <div class="row align-items-center">
+                <div class="col-md-2">
+                    <strong>${displayName}</strong><br>
+                    <small class="text-muted">Bind Mount</small>
+                </div>
+                <div class="col-md-5">
+                    <label class="form-label small mb-1">Host Path → Container Path</label>
+                    <div class="font-monospace small">${firstPart} → ${bindMountPath || '?'}</div>
+                </div>
+                <div class="col-md-5 text-muted small fst-italic">
+                    Bind mounts are managed in the Advanced / Passthrough section below.
+                </div>
+            </div>
+        </div>
+    ` : `
         <div class="card-body py-2">
             <div class="row align-items-center">
                 <div class="col-md-2">

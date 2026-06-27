@@ -68,7 +68,6 @@
       import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
       window.ProxUtils = ProxUtils;
     </script>
-    <script defer src="{{ url_for('static', filename='js/alpine.min.js') }}"></script>
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
@@ -720,5 +719,6 @@
     </style>
 
     {% block scripts %}{% endblock %}
+    <script defer src="{{ url_for('static', filename='js/alpine.min.js') }}"></script>
 </body>
 </html>
