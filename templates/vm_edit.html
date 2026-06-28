@@ -473,6 +473,11 @@
                     <hr class="my-3">
                     <!-- Mounts -->
                     <h6 class="text-primary mb-2"><i class="bi bi-folder2-open"></i> Bind Mounts</h6>
+                    <div x-show="!isRoot" class="alert alert-warning py-2 mb-2">
+                        <i class="bi bi-lock"></i>
+                        Proxmox restricts adding bind mounts to <strong>root@pam</strong> only.
+                        You can view existing mounts but cannot add new ones with this connection.
+                    </div>
                     <p x-show="mounts.length === 0" class="text-muted small mb-2">No bind mounts configured.</p>
                     <div class="mb-2" x-show="mounts.length > 0">
                         <template x-for="m in mounts" :key="m.key">
@@ -486,7 +491,7 @@
                             </div>
                         </template>
                     </div>
-                    <button x-show="canWrite" class="btn btn-sm btn-outline-primary" @click="openAddMount()">
+                    <button x-show="canWrite && isRoot" class="btn btn-sm btn-outline-primary" @click="openAddMount()">
                         <i class="bi bi-plus-circle"></i> Add Mount
                     </button>
                     <hr class="my-3">

@@ -41,6 +41,7 @@ export function lxcAdvanced(node, vmid) {
 
     isRunning: false,
     canWrite: true,
+    isRoot: true,
     supportsDevN: true,
     pveVersion: '',
     hasBackup: false,
@@ -117,6 +118,7 @@ export function lxcAdvanced(node, vmid) {
 
         this.isRunning = fData.running || dData.running || mData.running || iData.running;
         this.canWrite = (fData.can_write !== false) && (dData.can_write !== false);
+        this.isRoot = mData.is_root !== false;
         this.supportsDevN = dData.pve_supports_dev_n !== false;
         this.pveVersion = dData.pve_version || '';
         this.hasBackup = !!fData.has_backup;
@@ -213,8 +215,8 @@ export function lxcAdvanced(node, vmid) {
         this.closeModal('addDevice');
         this.showFlash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
         if (data.success) this.load();
-      } catch {
-        this.showFlash('danger', 'Network error');
+      } catch(e) {
+        this.showFlash('danger', e.message || 'Request failed');
       } finally {
         this.busy.addDevice = false;
       }
@@ -226,8 +228,8 @@ export function lxcAdvanced(node, vmid) {
         const data = await window.ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/devices/${key}`, { method: 'DELETE' });
         this.showFlash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
         if (data.success) this.load();
-      } catch {
-        this.showFlash('danger', 'Network error');
+      } catch(e) {
+        this.showFlash('danger', e.message || 'Request failed');
       }
     },
 
@@ -257,8 +259,8 @@ export function lxcAdvanced(node, vmid) {
         this.closeModal('addMount');
         this.showFlash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
         if (data.success) this.load();
-      } catch {
-        this.showFlash('danger', 'Network error');
+      } catch(e) {
+        this.showFlash('danger', e.message || 'Request failed');
       } finally {
         this.busy.addMount = false;
       }
@@ -270,8 +272,8 @@ export function lxcAdvanced(node, vmid) {
         const data = await window.ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/mounts/${key}`, { method: 'DELETE' });
         this.showFlash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
         if (data.success) this.load();
-      } catch {
-        this.showFlash('danger', 'Network error');
+      } catch(e) {
+        this.showFlash('danger', e.message || 'Request failed');
       }
     },
 
@@ -306,8 +308,8 @@ export function lxcAdvanced(node, vmid) {
         this.closeModal('addIdmap');
         this.showFlash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
         if (data.success) this.load();
-      } catch {
-        this.showFlash('danger', 'Network error');
+      } catch(e) {
+        this.showFlash('danger', e.message || 'Request failed');
       } finally {
         this.busy.addIdmap = false;
       }
@@ -319,8 +321,8 @@ export function lxcAdvanced(node, vmid) {
         const data = await window.ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/idmap/${key}`, { method: 'DELETE' });
         this.showFlash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
         if (data.success) this.load();
-      } catch {
-        this.showFlash('danger', 'Network error');
+      } catch(e) {
+        this.showFlash('danger', e.message || 'Request failed');
       }
     },
 
@@ -334,8 +336,8 @@ export function lxcAdvanced(node, vmid) {
         });
         this.showFlash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
         if (data.success) this.load();
-      } catch {
-        this.showFlash('danger', 'Network error');
+      } catch(e) {
+        this.showFlash('danger', e.message || 'Request failed');
       }
     },
 
@@ -383,8 +385,8 @@ export function lxcAdvanced(node, vmid) {
         this.closeModal('profileDiff');
         this.showFlash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
         if (data.success) this.load();
-      } catch {
-        this.showFlash('danger', 'Network error');
+      } catch(e) {
+        this.showFlash('danger', e.message || 'Request failed');
       } finally {
         this.busy.applyProfile = false;
       }

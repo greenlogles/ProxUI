@@ -3,6 +3,7 @@ import os
 import pprint
 import re
 import secrets
+import traceback
 import ssl
 import threading
 import time
@@ -1453,6 +1454,26 @@ def _next_key_index(config, prefix):
     while i in used:
         i += 1
     return i
+
+
+def _proxmox_error_response(e):
+    """Convert a proxmoxer/requests exception to (message, http_status)."""
+    traceback.print_exc()
+    err = str(e)
+    if "403" in err or "Forbidden" in err:
+        return err, 403
+    if "400" in err or "Bad Request" in err:
+        return err, 400
+    if "404" in err or "Not Found" in err:
+        return err, 404
+    return err, 500
+
+
+def _check_is_root(node):
+    """Return True if the connection for this node authenticated as root@pam."""
+    meta = connection_metadata.get(node) or {}
+    user = meta.get("user", "")
+    return user == "root@pam" or user.split("@")[0] == "root"
 
 
 def _backup_lxc_config(node, vmid, config):
@@ -5570,7 +5591,8 @@ def api_lxc_devices(node, vmid):
             )
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        msg, status = _proxmox_error_response(e)
+        return jsonify({"error": msg}), status
 
 
 @app.route("/api/vm/<node>/<vmid>/lxc/devices/<key>", methods=["DELETE"])
@@ -5639,7 +5661,8 @@ def api_lxc_mounts(node, vmid):
                     parsed["key"] = key
                     mounts.append(parsed)
             can_write = check_lxc_write_permission(proxmox, vmid, node)
-            return jsonify({"mounts": mounts, "running": is_running, "can_write": can_write})
+            is_root = _check_is_root(node)
+            return jsonify({"mounts": mounts, "running": is_running, "can_write": can_write, "is_root": is_root})
 
         # POST — add a bind mount
         data = request.get_json()
@@ -5669,6 +5692,12 @@ def api_lxc_mounts(node, vmid):
                 "backup": "1" if data.get("backup") else "0",
             }
         )
+        if not _check_is_root(node):
+            return jsonify(
+                {"error": "Proxmox only allows root@pam to add bind mounts via API. "
+                          "Connect as root@pam to use this feature."}
+            ), 403
+
         proxmox.nodes(node).lxc(vmid).config.put(**{f"mp{idx}": mp_value})
         return jsonify(
             {
@@ -5679,7 +5708,8 @@ def api_lxc_mounts(node, vmid):
         )
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        msg, status = _proxmox_error_response(e)
+        return jsonify({"error": msg}), status
 
 
 @app.route("/api/vm/<node>/<vmid>/lxc/mounts/<key>", methods=["DELETE"])

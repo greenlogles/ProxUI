@@ -485,6 +485,7 @@ class TestLxcMountsApi(unittest.TestCase):
             "id": "test-cluster", "name": "Test", "nodes": [{"host": "192.168.1.100", "user": "root@pam", "password": "test"}],
         }
         app.current_cluster_id = "test-cluster"
+        app.connection_metadata["test-node"] = {"pve_version": "9.0.0", "user": "root@pam"}
         self.mock = Mock()
         app.proxmox_nodes["test-node"] = self.mock
         app.cluster_nodes.append({"name": "test-node", "status": "online", "connection": self.mock})
