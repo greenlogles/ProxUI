@@ -1345,19 +1345,22 @@ def check_lxc_write_permission(proxmox, vmid, node=None):
         meta = connection_metadata.get(node) or {}
         user = meta.get("user", "")
         username = user.split("@")[0]  # strip realm: "root@pam" → "root"
-        print(f"[write_check] node={node} user={user!r} vmid={vmid}")
         if user == "root@pam" or username == "root":
             return True
     try:
         perms = proxmox.access.permissions.get(path=f"/vms/{vmid}")
-        print(f"[write_check] perms={perms!r}")
         # Empty dict: Proxmox returns {} for superusers with implicit access.
         if not perms:
             return True
+        # Proxmox nests privileges under the path key:
+        # {'/vms/210': {'VM.Config.Options': 1, ...}}
+        path_key = f"/vms/{vmid}"
+        privs = perms.get(path_key, perms)
+        if not privs:
+            return True
         write_privs = {"VM.Config.Options", "VM.Allocate", "VM.Config.Disk", "VM.Config.Network"}
-        return any(perms.get(p) for p in write_privs)
-    except Exception as e:
-        print(f"[write_check] exception: {e}")
+        return any(privs.get(p) for p in write_privs)
+    except Exception:
         return True  # Assume write access if permission check is unavailable
 
 
