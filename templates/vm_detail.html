@@ -139,20 +139,20 @@
 <div class="row mt-3">
     <!-- Performance Metrics Charts -->
     <div class="col-12 mb-3">
-        <div class="card">
+        <div class="card" x-data="vmMetrics('{{ node }}', '{{ vmid }}')">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0"><i class="bi bi-graph-up"></i> Performance Metrics</h5>
                 <div class="d-flex gap-2 align-items-center">
-                    <select class="form-select form-select-sm" id="timeframeSelect" style="width: auto;">
+                    <select class="form-select form-select-sm" x-model="timeframe" @change="load()" style="width: auto;">
                         <option value="hour">Last Hour</option>
-                        <option value="day" selected>Last Day</option>
+                        <option value="day">Last Day</option>
                         <option value="week">Last Week</option>
                         <option value="month">Last Month</option>
                         <option value="year">Last Year</option>
                     </select>
-                    <small class="text-muted" id="metricsLastUpdate">Loading...</small>
-                    <button class="btn btn-sm btn-outline-primary" id="refreshMetrics" title="Refresh Metrics">
-                        <i class="bi bi-arrow-clockwise"></i>
+                    <small class="text-muted" x-text="lastUpdate">Loading...</small>
+                    <button class="btn btn-sm btn-outline-primary" @click="refresh()" :disabled="loading" title="Refresh Metrics">
+                        <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
                     </button>
                 </div>
             </div>
@@ -162,28 +162,28 @@
                     <div class="col-md-6 mb-3">
                         <h6><i class="bi bi-cpu"></i> CPU Usage (%)</h6>
                         <div style="height: 250px;">
-                            <canvas id="cpuChart"></canvas>
+                            <canvas x-ref="cpu"></canvas>
                         </div>
                     </div>
                     <div class="col-md-6 mb-3">
                         <h6><i class="bi bi-memory"></i> Memory Usage (%)</h6>
                         <div style="height: 250px;">
-                            <canvas id="memoryChart"></canvas>
+                            <canvas x-ref="memory"></canvas>
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="row">
                     <div class="col-md-6 mb-3">
                         <h6><i class="bi bi-diagram-3"></i> Network I/O (MB)</h6>
                         <div style="height: 250px;">
-                            <canvas id="networkChart"></canvas>
+                            <canvas x-ref="network"></canvas>
                         </div>
                     </div>
                     <div class="col-md-6 mb-3">
                         <h6><i class="bi bi-hdd"></i> Disk I/O (MB)</h6>
                         <div style="height: 250px;">
-                            <canvas id="diskChart"></canvas>
+                            <canvas x-ref="disk"></canvas>
                         </div>
                     </div>
                 </div>
@@ -234,19 +234,38 @@
         {% endif %}
 
         <!-- Recent Tasks -->
-        <div class="card">
+        <div class="card" x-data="vmTasks('{{ node }}', '{{ vmid }}')">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0"><i class="bi bi-list-task"></i> Recent Tasks</h5>
-                <button class="btn btn-sm btn-outline-primary" id="refreshTasks" title="Refresh Tasks">
-                    <i class="bi bi-arrow-clockwise"></i>
+                <button class="btn btn-sm btn-outline-primary" @click="refresh()" :disabled="loading" title="Refresh Tasks">
+                    <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
                 </button>
             </div>
-            <div class="card-body" id="tasksContainer">
-                <div class="text-center">
-                    <div class="spinner-border spinner-border-sm" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                    Loading tasks...
+            <div class="card-body p-0" style="max-height:350px;overflow-y:auto;">
+                <template x-if="loading && tasks.length === 0">
+                    <div class="text-center p-4"><div class="spinner-border spinner-border-sm" role="status"></div> Loading tasks...</div>
+                </template>
+                <template x-if="error">
+                    <div class="text-danger p-4"><i class="bi bi-exclamation-triangle"></i> Error loading tasks</div>
+                </template>
+                <template x-if="!loading && !error && tasks.length === 0">
+                    <div class="text-muted p-4"><i class="bi bi-info-circle"></i> No recent tasks</div>
+                </template>
+                <div class="list-group list-group-flush" x-show="tasks.length > 0">
+                    <template x-for="task in tasks" :key="task.upid || (task.node + task.type + task.starttime)">
+                        <div class="list-group-item list-group-item-action">
+                            <div class="d-flex w-100 justify-content-between align-items-start">
+                                <div>
+                                    <h6 class="mb-1" x-text="displayName(task)"></h6>
+                                    <p class="mb-1 text-muted small">Started: <span x-text="task.start_time_formatted || 'Unknown'"></span></p>
+                                    <template x-if="task.end_time_formatted">
+                                        <p class="mb-1 text-muted small">Ended: <span x-text="task.end_time_formatted"></span></p>
+                                    </template>
+                                </div>
+                                <span class="badge" :class="'bg-' + statusClass(task)" x-text="task.status || 'unknown'"></span>
+                            </div>
+                        </div>
+                    </template>
                 </div>
             </div>
         </div>
@@ -405,14 +424,15 @@
                             </small>
                             <div><strong>
                                 {% if key == 'sshkeys' and value.parsed %}
+                                    <div x-data="{ open: false }">
                                     <div class="d-flex justify-content-between align-items-center">
                                         <span>{{ value.parsed|length }} SSH key(s)</span>
-                                        <button class="btn btn-sm btn-outline-secondary" type="button" 
-                                                data-bs-toggle="collapse" 
-                                                data-bs-target="#sshKeysCollapse" 
-                                                aria-expanded="false" 
-                                                aria-controls="sshKeysCollapse">
-                                            <i class="bi bi-chevron-down"></i> View
+                                        <button class="btn btn-sm btn-outline-secondary" type="button"
+                                                data-bs-toggle="collapse"
+                                                data-bs-target="#sshKeysCollapse"
+                                                @click="open=!open">
+                                            <i class="bi" :class="open ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+                                            <span x-text="open ? 'Hide' : 'View'">View</span>
                                         </button>
                                     </div>
                                     <div class="collapse mt-2" id="sshKeysCollapse">
@@ -425,6 +445,7 @@
                                             <small class="font-monospace text-muted">{{ ssh_key.preview }}</small>
                                         </div>
                                         {% endfor %}
+                                    </div>
                                     </div>
                                 {% elif key == 'sshkeys' %}
                                     <span class="text-truncate d-inline-block" style="max-width: 200px;" title="{{ value }}">
@@ -476,7 +497,7 @@
 </div>
 
 <!-- Migration Modal -->
-<div class="modal fade" id="migrateModal" tabindex="-1">
+<div class="modal fade" id="migrateModal" tabindex="-1" x-data="migrateStorages('{{ node }}', '{{ vmid }}', '{{ vm_type }}')">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
@@ -495,8 +516,8 @@
                     {% endif %}
 
                     <div class="mb-3">
-                        <label for="target_node" class="form-label">Target Node</label>
-                        <select class="form-select" id="target_node" name="target_node" required>
+                        <label class="form-label">Target Node</label>
+                        <select class="form-select" name="target_node" x-model="targetNode" @change="loadStorages()" required>
                             <option value="">Select target node...</option>
                             {% for target in available_nodes %}
                             <option value="{{ target }}">{{ target }}</option>
@@ -505,9 +526,12 @@
                     </div>
 
                     <div class="mb-3">
-                        <label for="target_storage" class="form-label">Target Storage (Optional)</label>
-                        <select class="form-select" id="target_storage" name="target_storage">
+                        <label class="form-label">Target Storage (Optional)</label>
+                        <select class="form-select" name="target_storage" x-model="targetStorage">
                             <option value="">Keep current storage locations</option>
+                            <template x-for="s in storages" :key="s.storage">
+                                <option :value="s.storage" x-text="s.storage + ' (' + s.type + ')' + (s.available_gb !== undefined ? ' - ' + s.available_gb + ' GB free' : '')"></option>
+                            </template>
                         </select>
                         <div class="form-text">Leave empty to keep disks on current storage</div>
                     </div>
@@ -524,7 +548,7 @@
 </div>
 
 <!-- Delete Modal -->
-<div class="modal fade" id="deleteModal" tabindex="-1">
+<div class="modal fade" id="deleteModal" tabindex="-1" x-data="vmDelete('{{ node }}', '{{ vmid }}')">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
@@ -548,7 +572,12 @@
                     <li>All snapshots (if any)</li>
                 </ul>
 
-                <div id="deleteStatus" class="mt-3"></div>
+                <div class="mt-3" x-show="statusMsg">
+                    <div :class="'alert alert-' + statusType">
+                        <i :class="'bi bi-' + (statusType === 'success' ? 'check-circle' : statusType === 'info' ? 'info-circle' : 'exclamation-triangle')"></i>
+                        <span x-text="statusMsg"></span>
+                    </div>
+                </div>
 
                 {% if status.status != 'stopped' %}
                 <div class="alert alert-warning">
@@ -559,9 +588,11 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-danger" id="confirmDeleteBtn" onclick="deleteVM()"
-                        {{ 'disabled' if status.status != 'stopped' else '' }}>
-                    <i class="bi bi-trash"></i> Delete {{ 'Container' if vm_type == 'lxc' else 'VM' }}
+                <button type="button" class="btn btn-danger" @click="run()"
+                        :disabled="deleting || {{ 'true' if status.status != 'stopped' else 'false' }}">
+                    <span x-show="deleting" class="spinner-border spinner-border-sm me-1" role="status"></span>
+                    <span x-show="!deleting"><i class="bi bi-trash"></i></span>
+                    Delete {{ 'Container' if vm_type == 'lxc' else 'VM' }}
                 </button>
             </div>
         </div>
@@ -629,501 +660,172 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
-// VM/Container details - declared globally for access in all functions
-const node = '{{ node }}';
-const vmid = '{{ vmid }}';
-const vmType = '{{ vm_type }}';
+<script type="module">
+import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
+window.ProxUtils = ProxUtils;
 
-document.addEventListener('DOMContentLoaded', function() {
-    const targetNodeSelect = document.getElementById('target_node');
-    const targetStorageSelect = document.getElementById('target_storage');
-    const tasksContainer = document.getElementById('tasksContainer');
-    const refreshTasksBtn = document.getElementById('refreshTasks');
-    const refreshMetricsBtn = document.getElementById('refreshMetrics');
-    const metricsLastUpdate = document.getElementById('metricsLastUpdate');
-    const timeframeSelect = document.getElementById('timeframeSelect');
-    
-    // Fetch storage options when target node changes
-    if (targetNodeSelect) {
-        targetNodeSelect.addEventListener('change', function() {
-            const targetNode = this.value;
+const ALLOWED_STATUS = new Set(['primary','secondary','success','danger','warning','info','dark']);
 
-            if (!targetNode) {
-                targetStorageSelect.innerHTML = '<option value="">Keep current storage locations</option>';
-                return;
-            }
+function vmTasks(node, vmid) {
+  return {
+    tasks: [], loading: true, error: '', _timer: null,
+    displayName(t) { return ProxUtils.taskTypeName(t.type); },
+    statusClass(t) { return ALLOWED_STATUS.has(t.status_class) ? t.status_class : 'secondary'; },
+    async load() {
+      this.loading = true; this.error = '';
+      try { this.tasks = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/tasks`); }
+      catch (e) { this.error = e.message; }
+      finally { this.loading = false; }
+    },
+    refresh() { this.load(); },
+    init() {
+      this.load();
+      this._timer = setInterval(() => { if (!document.hidden) this.load(); }, 30000);
+    },
+    destroy() { clearInterval(this._timer); },
+  };
+}
 
-            // Show loading state
-            targetStorageSelect.innerHTML = '<option value="">Loading storages...</option>';
-
-            // Fetch storage for target node - use correct VM type
-            fetch(`/api/node/${targetNode}/storages?vm_type=${vmType}`)
-                .then(response => response.json())
-                .then(data => {
-                    targetStorageSelect.innerHTML = '<option value="">Keep current storage locations</option>';
-                    
-                    if (data.error) {
-                        console.error('Error fetching target storages:', data.error);
-                        return;
-                    }
-                    
-                    data.forEach(storage => {
-                        const option = document.createElement('option');
-                        option.value = storage.storage;
-                        
-                        // Create display text with available space information
-                        let displayText = `${storage.storage} (${storage.type})`;
-                        if (storage.available_gb !== undefined) {
-                            displayText += ` - ${storage.available_gb} GB free`;
-                        }
-                        option.textContent = displayText;
-                        targetStorageSelect.appendChild(option);
-                    });
-                })
-                .catch(error => {
-                    console.error('Error fetching target storages:', error);
-                    targetStorageSelect.innerHTML = '<option value="">Error loading storages</option>';
-                });
-        });
-    }
-    
-    // Fetch and display VM tasks
-    function fetchVmTasks() {
-        fetch(`/api/vm/${node}/${vmid}/tasks`)
-            .then(response => response.json())
-            .then(data => {
-                displayTasks(data);
-            })
-            .catch(error => {
-                console.error('Error fetching VM tasks:', error);
-                tasksContainer.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle"></i> Error loading tasks</div>';
-            });
-    }
-    
-    // Display tasks in the container
-    function displayTasks(tasks) {
-        if (!Array.isArray(tasks)) {
-            tasksContainer.innerHTML = '<div class="text-muted"><i class="bi bi-info-circle"></i> No tasks found</div>';
-            return;
+function vmMetrics(node, vmid) {
+  return {
+    timeframe: 'day', lastUpdate: 'Loading...', loading: false, _timer: null, charts: {},
+    init() {
+      this.buildCharts();
+      this.load();
+      this._timer = setInterval(() => { if (!document.hidden) this.load(); }, 30000);
+    },
+    destroy() {
+      clearInterval(this._timer);
+      Object.values(this.charts).forEach(c => c.destroy());
+    },
+    buildCharts() {
+      const base = {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: true, position: 'bottom' } },
+        scales: { x: { display: true, title: { display: true, text: 'Time' } }, y: { display: true, beginAtZero: true } }
+      };
+      this.charts.cpu = new Chart(this.$refs.cpu.getContext('2d'), {
+        type: 'line',
+        data: { labels: [], datasets: [{ label: 'CPU Usage (%)', data: [], borderColor: 'rgb(54,162,235)', backgroundColor: 'rgba(54,162,235,0.1)', fill: true, tension: 0.1 }] },
+        options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, max: 100, title: { display: true, text: 'CPU Usage (%)' } } } }
+      });
+      this.charts.memory = new Chart(this.$refs.memory.getContext('2d'), {
+        type: 'line',
+        data: { labels: [], datasets: [{ label: 'Memory Usage (%)', data: [], borderColor: 'rgb(255,99,132)', backgroundColor: 'rgba(255,99,132,0.1)', fill: true, tension: 0.1 }] },
+        options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, max: 100, title: { display: true, text: 'Memory Usage (%)' } } } }
+      });
+      this.charts.network = new Chart(this.$refs.network.getContext('2d'), {
+        type: 'line',
+        data: { labels: [], datasets: [
+          { label: 'Network In (MB)', data: [], borderColor: 'rgb(75,192,192)', backgroundColor: 'rgba(75,192,192,0.1)', fill: false, tension: 0.1 },
+          { label: 'Network Out (MB)', data: [], borderColor: 'rgb(255,205,86)', backgroundColor: 'rgba(255,205,86,0.1)', fill: false, tension: 0.1 }
+        ] },
+        options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, title: { display: true, text: 'Network I/O (MB)' } } } }
+      });
+      this.charts.disk = new Chart(this.$refs.disk.getContext('2d'), {
+        type: 'line',
+        data: { labels: [], datasets: [
+          { label: 'Disk Read (MB)', data: [], borderColor: 'rgb(153,102,255)', backgroundColor: 'rgba(153,102,255,0.1)', fill: false, tension: 0.1 },
+          { label: 'Disk Write (MB)', data: [], borderColor: 'rgb(255,159,64)', backgroundColor: 'rgba(255,159,64,0.1)', fill: false, tension: 0.1 }
+        ] },
+        options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, title: { display: true, text: 'Disk I/O (MB)' } } } }
+      });
+    },
+    async load() {
+      this.loading = true;
+      try {
+        const data = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/metrics?timeframe=${this.timeframe}`);
+        if (!data.error) {
+          const h = data.historical;
+          this.charts.cpu.data.labels = h.labels; this.charts.cpu.data.datasets[0].data = h.cpu; this.charts.cpu.update('none');
+          this.charts.memory.data.labels = h.labels; this.charts.memory.data.datasets[0].data = h.memory; this.charts.memory.update('none');
+          this.charts.network.data.labels = h.labels; this.charts.network.data.datasets[0].data = h.network_in; this.charts.network.data.datasets[1].data = h.network_out; this.charts.network.update('none');
+          this.charts.disk.data.labels = h.labels; this.charts.disk.data.datasets[0].data = h.disk_read; this.charts.disk.data.datasets[1].data = h.disk_write; this.charts.disk.update('none');
+          this.lastUpdate = `Last update: ${data.timestamp}`;
         }
-        
-        if (tasks.length === 0) {
-            tasksContainer.innerHTML = '<div class="text-muted"><i class="bi bi-info-circle"></i> No recent tasks</div>';
-            return;
-        }
-        
-        let tasksHtml = '<div class="list-group list-group-flush">';
-        
-        tasks.forEach(task => {
-            const taskType = task.type || 'unknown';
-            const taskStatus = task.status || 'unknown';
-            const startTime = task.start_time_formatted || 'Unknown';
-            const endTime = task.end_time_formatted;
-            const statusClass = task.status_class || 'secondary';
-            
-            // Create task type display name
-            const taskTypeNames = {
-                'qmstart': 'Start VM',
-                'qmstop': 'Stop VM', 
-                'qmshutdown': 'Shutdown VM',
-                'qmreset': 'Reset VM',
-                'qmreboot': 'Reboot VM',
-                'qmigrate': 'Migrate VM',
-                'qmclone': 'Clone VM',
-                'qmcreate': 'Create VM',
-                'qmdestroy': 'Destroy VM',
-                'qmtemplate': 'Create VM template',
-                'vzstart': 'Start Container',
-                'vzstop': 'Stop Container',
-                'vzshutdown': 'Shutdown Container',
-                'vzmigrate': 'Migrate Container',
-                'vzclone': 'Clone Container',
-                'vzcreate': 'Create Container',
-                'vzdestroy': 'Destroy Container',
-                'vzdump': 'Backup Container',
-                'download': 'Download ISO',
-                'aptupdate': 'Update package database',
-                'startall': 'Bulk start VMs and Containers',
-                'stopall': 'Bulk stop VMs and Containers',
-                'srvreload': 'SRV networking - reload',
-                'vncproxy': 'VNC Console',
-                'clusterjoin': 'Add node to cluster',
-                'resize': 'Disk resize'
-        };
-        
-            
-            const displayName = taskTypeNames[taskType] || taskType.toUpperCase();
-            
-            tasksHtml += `
-                <div class="list-group-item list-group-item-action">
-                    <div class="d-flex w-100 justify-content-between align-items-start">
-                        <div>
-                            <h6 class="mb-1">${displayName}</h6>
-                            <p class="mb-1 text-muted small">Started: ${startTime}</p>
-                            ${endTime ? `<p class="mb-1 text-muted small">Ended: ${endTime}</p>` : ''}
-                        </div>
-                        <span class="badge bg-${statusClass}">${taskStatus}</span>
-                    </div>
-                </div>
-            `;
-        });
-        
-        tasksHtml += '</div>';
-        tasksContainer.innerHTML = tasksHtml;
-    }
-    
-    // Refresh tasks button
-    refreshTasksBtn.addEventListener('click', function() {
-        this.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
-        this.disabled = true;
-        fetchVmTasks();
-        setTimeout(() => {
-            this.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
-            this.disabled = false;
-        }, 1000);
-    });
-    
-    // Initial load of tasks
-    fetchVmTasks();
-    
-    // Auto-refresh tasks every 30 seconds
-    setInterval(fetchVmTasks, 30000);
-    
-    // Chart instances
-    let cpuChart, memoryChart, networkChart, diskChart;
-    
-    // Initialize charts
-    function initializeCharts() {
-        const chartOptions = {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: true,
-                    position: 'bottom'
-                }
-            },
-            scales: {
-                x: {
-                    display: true,
-                    title: {
-                        display: true,
-                        text: 'Time'
-                    }
-                },
-                y: {
-                    display: true,
-                    beginAtZero: true
-                }
-            }
-        };
-        
-        // CPU Chart
-        const cpuCtx = document.getElementById('cpuChart').getContext('2d');
-        cpuChart = new Chart(cpuCtx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [{
-                    label: 'CPU Usage (%)',
-                    data: [],
-                    borderColor: 'rgb(54, 162, 235)',
-                    backgroundColor: 'rgba(54, 162, 235, 0.1)',
-                    fill: true,
-                    tension: 0.1
-                }]
-            },
-            options: {
-                ...chartOptions,
-                scales: {
-                    ...chartOptions.scales,
-                    y: {
-                        ...chartOptions.scales.y,
-                        max: 100,
-                        title: {
-                            display: true,
-                            text: 'CPU Usage (%)'
-                        }
-                    }
-                }
-            }
-        });
-        
-        // Memory Chart
-        const memoryCtx = document.getElementById('memoryChart').getContext('2d');
-        memoryChart = new Chart(memoryCtx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [{
-                    label: 'Memory Usage (%)',
-                    data: [],
-                    borderColor: 'rgb(255, 99, 132)',
-                    backgroundColor: 'rgba(255, 99, 132, 0.1)',
-                    fill: true,
-                    tension: 0.1
-                }]
-            },
-            options: {
-                ...chartOptions,
-                scales: {
-                    ...chartOptions.scales,
-                    y: {
-                        ...chartOptions.scales.y,
-                        max: 100,
-                        title: {
-                            display: true,
-                            text: 'Memory Usage (%)'
-                        }
-                    }
-                }
-            }
-        });
-        
-        // Network Chart
-        const networkCtx = document.getElementById('networkChart').getContext('2d');
-        networkChart = new Chart(networkCtx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [{
-                    label: 'Network In (MB)',
-                    data: [],
-                    borderColor: 'rgb(75, 192, 192)',
-                    backgroundColor: 'rgba(75, 192, 192, 0.1)',
-                    fill: false,
-                    tension: 0.1
-                }, {
-                    label: 'Network Out (MB)',
-                    data: [],
-                    borderColor: 'rgb(255, 205, 86)',
-                    backgroundColor: 'rgba(255, 205, 86, 0.1)',
-                    fill: false,
-                    tension: 0.1
-                }]
-            },
-            options: {
-                ...chartOptions,
-                scales: {
-                    ...chartOptions.scales,
-                    y: {
-                        ...chartOptions.scales.y,
-                        title: {
-                            display: true,
-                            text: 'Network I/O (MB)'
-                        }
-                    }
-                }
-            }
-        });
-        
-        // Disk Chart
-        const diskCtx = document.getElementById('diskChart').getContext('2d');
-        diskChart = new Chart(diskCtx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [{
-                    label: 'Disk Read (MB)',
-                    data: [],
-                    borderColor: 'rgb(153, 102, 255)',
-                    backgroundColor: 'rgba(153, 102, 255, 0.1)',
-                    fill: false,
-                    tension: 0.1
-                }, {
-                    label: 'Disk Write (MB)',
-                    data: [],
-                    borderColor: 'rgb(255, 159, 64)',
-                    backgroundColor: 'rgba(255, 159, 64, 0.1)',
-                    fill: false,
-                    tension: 0.1
-                }]
-            },
-            options: {
-                ...chartOptions,
-                scales: {
-                    ...chartOptions.scales,
-                    y: {
-                        ...chartOptions.scales.y,
-                        title: {
-                            display: true,
-                            text: 'Disk I/O (MB)'
-                        }
-                    }
-                }
-            }
-        });
-    }
-    
-    // Fetch and display VM metrics
-    function fetchVmMetrics() {
-        const timeframe = timeframeSelect.value;
-        
-        fetch(`/api/vm/${node}/${vmid}/metrics?timeframe=${timeframe}`)
-            .then(response => response.json())
-            .then(data => {
-                if (data.error) {
-                    console.error('Error fetching VM metrics:', data.error);
-                    return;
-                }
-                
-                updateCharts(data.historical);
-                metricsLastUpdate.textContent = `Last update: ${data.timestamp}`;
-            })
-            .catch(error => {
-                console.error('Error fetching VM metrics:', error);
-            });
-    }
-    
-    // Update charts with new data
-    function updateCharts(historical) {
-        // Update CPU chart
-        cpuChart.data.labels = historical.labels;
-        cpuChart.data.datasets[0].data = historical.cpu;
-        cpuChart.update('none');
-        
-        // Update Memory chart
-        memoryChart.data.labels = historical.labels;
-        memoryChart.data.datasets[0].data = historical.memory;
-        memoryChart.update('none');
-        
-        // Update Network chart
-        networkChart.data.labels = historical.labels;
-        networkChart.data.datasets[0].data = historical.network_in;
-        networkChart.data.datasets[1].data = historical.network_out;
-        networkChart.update('none');
-        
-        // Update Disk chart
-        diskChart.data.labels = historical.labels;
-        diskChart.data.datasets[0].data = historical.disk_read;
-        diskChart.data.datasets[1].data = historical.disk_write;
-        diskChart.update('none');
-    }
-    
-    // Event listeners
-    timeframeSelect.addEventListener('change', fetchVmMetrics);
-    
-    refreshMetricsBtn.addEventListener('click', function() {
-        const originalHtml = this.innerHTML;
-        this.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i>';
-        this.disabled = true;
-        
-        fetchVmMetrics();
-        
-        setTimeout(() => {
-            this.innerHTML = originalHtml;
-            this.disabled = false;
-        }, 1000);
-    });
-    
-    // Initialize charts and load initial data
-    initializeCharts();
-    fetchVmMetrics();
-    
-    // Auto-refresh metrics every 30 seconds
-    setInterval(fetchVmMetrics, 30000);
-    
-    // SSH Keys collapse handler
-    const sshKeysCollapse = document.getElementById('sshKeysCollapse');
-    if (sshKeysCollapse) {
-        const toggleButton = document.querySelector('[data-bs-target="#sshKeysCollapse"]');
-        const chevronIcon = toggleButton?.querySelector('i');
-        
-        sshKeysCollapse.addEventListener('show.bs.collapse', function () {
-            if (chevronIcon) {
-                chevronIcon.classList.remove('bi-chevron-down');
-                chevronIcon.classList.add('bi-chevron-up');
-            }
-            if (toggleButton) {
-                toggleButton.innerHTML = '<i class="bi bi-chevron-up"></i> Hide';
-            }
-        });
-        
-        sshKeysCollapse.addEventListener('hide.bs.collapse', function () {
-            if (chevronIcon) {
-                chevronIcon.classList.remove('bi-chevron-up');
-                chevronIcon.classList.add('bi-chevron-down');
-            }
-            if (toggleButton) {
-                toggleButton.innerHTML = '<i class="bi bi-chevron-down"></i> View';
-            }
-        });
-    }
-});
+      } finally { this.loading = false; }
+    },
+    refresh() { this.load(); },
+  };
+}
 
-// VM Deletion functionality
-function deleteVM() {
-    const deleteBtn = document.getElementById('confirmDeleteBtn');
-    const deleteStatus = document.getElementById('deleteStatus');
-    
-    // Disable button and show loading
-    deleteBtn.disabled = true;
-    deleteBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Deleting...';
-    
-    deleteStatus.innerHTML = '<div class="alert alert-info"><i class="bi bi-info-circle"></i> Deleting VM...</div>';
-    
-    fetch(`/api/vm/${node}/${vmid}/delete`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({})
-    })
-    .then(response => response.json())
-    .then(data => {
+function vmDelete(node, vmid) {
+  return {
+    deleting: false, statusMsg: '', statusType: 'info',
+    async run() {
+      this.deleting = true;
+      this.statusMsg = 'Deleting...';
+      this.statusType = 'info';
+      try {
+        const data = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/delete`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+        });
         if (data.success) {
-            deleteStatus.innerHTML = '<div class="alert alert-success"><i class="bi bi-check-circle"></i> ' + data.message + '</div>';
-            
-            // Redirect to VMs list after 2 seconds
-            setTimeout(() => {
-                window.location.href = '/vms';
-            }, 2000);
+          this.statusMsg = data.message;
+          this.statusType = 'success';
+          setTimeout(() => { window.location.href = '/vms'; }, 2000);
         } else {
-            deleteStatus.innerHTML = '<div class="alert alert-danger"><i class="bi bi-exclamation-triangle"></i> ' + data.error + '</div>';
-            deleteBtn.disabled = false;
-            deleteBtn.innerHTML = '<i class="bi bi-trash"></i> Delete VM';
+          this.statusMsg = data.error || 'Deletion failed';
+          this.statusType = 'danger';
+          this.deleting = false;
         }
-    })
-    .catch(error => {
-        console.error('Error deleting VM:', error);
-        deleteStatus.innerHTML = '<div class="alert alert-danger"><i class="bi bi-exclamation-triangle"></i> Network error while deleting VM</div>';
-        deleteBtn.disabled = false;
-        deleteBtn.innerHTML = '<i class="bi bi-trash"></i> Delete VM';
-    });
+      } catch {
+        this.statusMsg = 'Network error while deleting';
+        this.statusType = 'danger';
+        this.deleting = false;
+      }
+    },
+  };
+}
+
+function migrateStorages(node, vmid, vmType) {
+  return {
+    targetNode: '', targetStorage: '', storages: [],
+    async loadStorages() {
+      if (!this.targetNode) { this.storages = []; return; }
+      try {
+        const data = await ProxUtils.apiJson(`/api/node/${this.targetNode}/storages?vm_type=${vmType}`);
+        this.storages = Array.isArray(data) ? data : [];
+      } catch { this.storages = []; }
+    },
+  };
 }
 
 {% if vm_type == 'lxc' %}
-</script>
-<script type="module">
-import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
-window.ProxUtils = window.ProxUtils || ProxUtils;
 function lxcSummary() {
-    const node = '{{ node }}', vmid = '{{ vmid }}';
-    return {
-        features: {}, devices: [], mounts: [], idmaps: [], loading: true,
-        get enabledFlags() { return Object.entries(this.features).filter(([,v])=>v==='1').map(([k])=>k); },
-        get hasAny() { return this.enabledFlags.length>0 || this.devices.length>0 || this.mounts.length>0 || this.idmaps.length>0; },
-        async init() {
-            try {
-                const [fD,dD,mD,iD] = await Promise.all([
-                    window.ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/features`),
-                    window.ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/devices`),
-                    window.ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/mounts`),
-                    window.ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/idmap`),
-                ]);
-                this.features = fD.features || {};
-                this.devices  = [...(dD.devices||[]), ...(dD.legacy_devices||[])];
-                this.mounts   = mD.mounts  || [];
-                this.idmaps   = iD.idmaps  || [];
-            } catch(e) { /* silent */ } finally { this.loading = false; }
-        },
-    };
+  const node = '{{ node }}', vmid = '{{ vmid }}';
+  return {
+    features: {}, devices: [], mounts: [], idmaps: [], loading: true,
+    get enabledFlags() { return Object.entries(this.features).filter(([,v])=>v==='1').map(([k])=>k); },
+    get hasAny() { return this.enabledFlags.length>0||this.devices.length>0||this.mounts.length>0||this.idmaps.length>0; },
+    async init() {
+      try {
+        const [fD,dD,mD,iD] = await Promise.all([
+          ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/features`),
+          ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/devices`),
+          ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/mounts`),
+          ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/idmap`),
+        ]);
+        this.features = fD.features || {};
+        this.devices  = [...(dD.devices||[]), ...(dD.legacy_devices||[])];
+        this.mounts   = mD.mounts  || [];
+        this.idmaps   = iD.idmaps  || [];
+      } catch(e) { /* silent */ } finally { this.loading = false; }
+    },
+  };
 }
-(function(){ function reg(){ window.Alpine.data('lxcSummary', lxcSummary); }
-  if(window.Alpine) reg(); else document.addEventListener('alpine:init', reg); })();
-</script>
-<script>
 {% endif %}
+
+function register() {
+  window.Alpine.data('vmTasks', vmTasks);
+  window.Alpine.data('vmMetrics', vmMetrics);
+  window.Alpine.data('vmDelete', vmDelete);
+  window.Alpine.data('migrateStorages', migrateStorages);
+  {% if vm_type == 'lxc' %}
+  window.Alpine.data('lxcSummary', lxcSummary);
+  {% endif %}
+}
+if (window.Alpine) register();
+else document.addEventListener('alpine:init', register);
 </script>
 {% endblock %}
