@@ -370,6 +370,75 @@
     </div>
 </div>
 
+<!-- Reset Root Password -->
+<div class="row justify-content-center mt-3"
+     x-data="{
+       pw: '', pw2: '', busy: false, error: '', success: '', rebootRequired: false,
+       async submit() {
+         this.error = ''; this.success = '';
+         if (!this.pw) { this.error = 'Password is required'; return; }
+         if (this.pw !== this.pw2) { this.error = 'Passwords do not match'; return; }
+         if (this.pw.length < 5) { this.error = 'Password must be at least 5 characters'; return; }
+         this.busy = true;
+         try {
+           const data = await window.ProxUtils.apiJson('/api/vm/{{ node }}/{{ vm.vmid }}/reset-password', {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ password: this.pw, vm_type: '{{ vm_type }}' }),
+           });
+           this.success = data.message;
+           this.rebootRequired = !!data.reboot_required;
+           this.pw = ''; this.pw2 = '';
+         } catch(e) {
+           this.error = e.message || 'Request failed';
+         } finally {
+           this.busy = false;
+         }
+       }
+     }">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-key"></i> Reset Root Password</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-3">
+                    {% if vm_type == 'lxc' %}
+                    The container must be <strong>running</strong>. Uses <code>chpasswd</code> via <code>pct exec</code>.
+                    {% else %}
+                    If the VM is running and the QEMU guest agent is active, the password is changed immediately.
+                    Otherwise falls back to <strong>cloud-init <code>cipassword</code></strong> — takes effect on next reboot.
+                    {% endif %}
+                </p>
+                <div class="row g-2 align-items-end">
+                    <div class="col-sm-4">
+                        <label class="form-label">New password</label>
+                        <input type="password" class="form-control" x-model="pw"
+                               @keydown.enter="submit()" autocomplete="new-password">
+                    </div>
+                    <div class="col-sm-4">
+                        <label class="form-label">Confirm password</label>
+                        <input type="password" class="form-control" x-model="pw2"
+                               @keydown.enter="submit()" autocomplete="new-password">
+                    </div>
+                    <div class="col-sm-4">
+                        <button class="btn btn-warning w-100" @click="submit()" :disabled="busy">
+                            <span x-show="busy" class="spinner-border spinner-border-sm me-1"></span>
+                            <i x-show="!busy" class="bi bi-key-fill"></i>
+                            Reset Password
+                        </button>
+                    </div>
+                </div>
+                <div x-show="error" class="alert alert-danger py-2 small mt-2 mb-0" x-text="error"></div>
+                <div x-show="success && !rebootRequired" class="alert alert-success py-2 small mt-2 mb-0" x-text="success"></div>
+                <div x-show="success && rebootRequired" class="alert alert-warning py-2 small mt-2 mb-0">
+                    <i class="bi bi-arrow-clockwise"></i> <span x-text="success"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% if vm_type == 'lxc' %}
 <div x-data="lxcAdvanced('{{ node }}', '{{ vm.vmid }}')">
 
@@ -698,6 +767,7 @@
                     Requires PVE 8.2+ and the container must be <strong>stopped</strong>.
                     Debian render group GID is typically <strong>104</strong>.
                 </div>
+                <div x-show="modalError" class="alert alert-danger py-2 small mt-2 mb-0" x-text="modalError"></div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -763,6 +833,7 @@
                     the host directory must be owned by the mapped UID/GID.
                     Use <code>chown -R 100000:100000 /host/path</code> as root on the host.
                 </div>
+                <div x-show="modalError" class="alert alert-danger py-2 small mt-2 mb-0" x-text="modalError"></div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -811,6 +882,7 @@
                     Container must be <strong>stopped</strong> before adding mounts.
                     For unprivileged containers, the host directory owner must match the container UID mapping.
                 </div>
+                <div x-show="modalError" class="alert alert-danger py-2 small mt-2 mb-0" x-text="modalError"></div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>

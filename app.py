@@ -1457,16 +1457,16 @@ def _next_key_index(config, prefix):
 
 
 def _proxmox_error_response(e):
-    """Convert a proxmoxer/requests exception to (message, http_status)."""
+    """Convert a proxmoxer/requests exception to a JSON Flask response."""
     traceback.print_exc()
     err = str(e)
     if "403" in err or "Forbidden" in err:
-        return err, 403
+        return jsonify({"error": err}), 403
     if "400" in err or "Bad Request" in err:
-        return err, 400
+        return jsonify({"error": err}), 400
     if "404" in err or "Not Found" in err:
-        return err, 404
-    return err, 500
+        return jsonify({"error": err}), 404
+    return jsonify({"error": err}), 500
 
 
 def _check_is_root(node):
@@ -5424,7 +5424,8 @@ def api_lxc_features(node, vmid):
         )
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        traceback.print_exc()
+        return _proxmox_error_response(e)
 
 
 @app.route("/api/vm/<node>/<vmid>/lxc/config-snapshot", methods=["GET"])
@@ -5591,8 +5592,7 @@ def api_lxc_devices(node, vmid):
             )
 
     except Exception as e:
-        msg, status = _proxmox_error_response(e)
-        return jsonify({"error": msg}), status
+        return _proxmox_error_response(e)
 
 
 @app.route("/api/vm/<node>/<vmid>/lxc/devices/<key>", methods=["DELETE"])
@@ -5708,8 +5708,7 @@ def api_lxc_mounts(node, vmid):
         )
 
     except Exception as e:
-        msg, status = _proxmox_error_response(e)
-        return jsonify({"error": msg}), status
+        return _proxmox_error_response(e)
 
 
 @app.route("/api/vm/<node>/<vmid>/lxc/mounts/<key>", methods=["DELETE"])
@@ -5954,6 +5953,54 @@ def api_lxc_profile_apply(node, vmid, profile_id):
 @app.errorhandler(404)
 def not_found(error):
     return render_template("404.html"), 404
+
+
+@app.route("/api/vm/<node>/<vmid>/reset-password", methods=["POST"])
+def api_vm_reset_password(node, vmid):
+    """Reset root password: LXC via pct exec, QEMU via guest agent with cipassword fallback."""
+    data = request.get_json()
+    if not data or not data.get("password"):
+        return jsonify({"error": "Password is required"}), 400
+
+    password = data["password"]
+    vm_type = data.get("vm_type", "qemu")
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        if vm_type == "lxc":
+            status = proxmox.nodes(node).lxc(vmid).status.current.get()
+            if status.get("status") != "running":
+                return jsonify({"error": "Container must be running to reset password"}), 400
+            proxmox.nodes(node).lxc(vmid).exec.post(
+                command=["chpasswd"],
+                stdin=f"root:{password}\n",
+            )
+            return jsonify({"success": True, "message": "Root password updated successfully"})
+        else:
+            # Try guest agent first (immediate effect), fall back to cipassword (next reboot)
+            status = proxmox.nodes(node).qemu(vmid).status.current.get()
+            is_running = status.get("status") == "running"
+            if is_running:
+                try:
+                    proxmox.nodes(node).qemu(vmid).agent.exec.post(
+                        command=["chpasswd"],
+                        **{"input-data": f"root:{password}\n"},
+                    )
+                    return jsonify({"success": True, "message": "Root password updated successfully via guest agent"})
+                except Exception:
+                    pass  # agent not available — fall through to cipassword
+
+            proxmox.nodes(node).qemu(vmid).config.put(cipassword=password)
+            return jsonify({
+                "success": True,
+                "message": "Password set via cloud-init (cipassword). It will apply on next reboot or cloud-init run.",
+                "reboot_required": True,
+            })
+    except Exception as e:
+        return _proxmox_error_response(e)
 
 
 @app.errorhandler(500)

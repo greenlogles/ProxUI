@@ -61,6 +61,7 @@ export function lxcAdvanced(node, vmid) {
     profileTitle: '',
     profileApplyId: null,
 
+    modalError: '',
     busy: { addDevice: false, addIdmap: false, addMount: false, applyFeatures: false, applyProfile: false },
     _modals: {},
 
@@ -177,9 +178,9 @@ export function lxcAdvanced(node, vmid) {
         this.closeModal('preview');
         this.showFlash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
         if (data.success) this.load();
-      } catch {
+      } catch(e) {
         this.closeModal('preview');
-        this.showFlash('danger', 'Network error');
+        this.showFlash('danger', e.message || 'Request failed');
       } finally {
         this.busy.applyFeatures = false;
       }
@@ -189,6 +190,7 @@ export function lxcAdvanced(node, vmid) {
 
     openAddDevice() {
       this.dev = { preset: '', path: '', gid: '', uid: '0' };
+      this.modalError = '';
       this.openModal('addDevice');
     },
 
@@ -201,8 +203,9 @@ export function lxcAdvanced(node, vmid) {
     },
 
     async addDevice() {
-      if (!this.dev.path.trim()) { alert('Device path is required'); return; }
+      if (!this.dev.path.trim()) { this.modalError = 'Device path is required'; return; }
       this.busy.addDevice = true;
+      this.modalError = '';
       try {
         const body = { path: this.dev.path.trim() };
         if (this.dev.gid) body.gid = this.dev.gid;
@@ -213,10 +216,10 @@ export function lxcAdvanced(node, vmid) {
           body: JSON.stringify(body),
         });
         this.closeModal('addDevice');
-        this.showFlash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
-        if (data.success) this.load();
+        this.showFlash('success', data.message);
+        this.load();
       } catch(e) {
-        this.showFlash('danger', e.message || 'Request failed');
+        this.modalError = e.message || 'Request failed';
       } finally {
         this.busy.addDevice = false;
       }
@@ -237,14 +240,16 @@ export function lxcAdvanced(node, vmid) {
 
     openAddMount() {
       this.mount = { host_path: '', mp: '', ro: false, backup: false };
+      this.modalError = '';
       this.openModal('addMount');
     },
 
     async addMount() {
       if (!this.mount.host_path.trim() || !this.mount.mp.trim()) {
-        alert('Host path and container path are required'); return;
+        this.modalError = 'Host path and container path are required'; return;
       }
       this.busy.addMount = true;
+      this.modalError = '';
       try {
         const data = await window.ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/mounts`, {
           method: 'POST',
@@ -257,10 +262,10 @@ export function lxcAdvanced(node, vmid) {
           }),
         });
         this.closeModal('addMount');
-        this.showFlash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
-        if (data.success) this.load();
+        this.showFlash('success', data.message);
+        this.load();
       } catch(e) {
-        this.showFlash('danger', e.message || 'Request failed');
+        this.modalError = e.message || 'Request failed';
       } finally {
         this.busy.addMount = false;
       }
@@ -281,6 +286,7 @@ export function lxcAdvanced(node, vmid) {
 
     openAddIdmap() {
       this.idmap = { preset: '', type: 'u', ct_id: 0, host_id: 100000, count: 65536 };
+      this.modalError = '';
       this.openModal('addIdmap');
     },
 
@@ -296,9 +302,10 @@ export function lxcAdvanced(node, vmid) {
     async addIdmap() {
       const { type, ct_id, host_id, count } = this.idmap;
       if (!type || isNaN(ct_id) || isNaN(host_id) || isNaN(count)) {
-        alert('All fields are required'); return;
+        this.modalError = 'All fields are required'; return;
       }
       this.busy.addIdmap = true;
+      this.modalError = '';
       try {
         const data = await window.ProxUtils.apiJson(`/api/vm/${node}/${vmid}/lxc/idmap`, {
           method: 'POST',
@@ -306,10 +313,10 @@ export function lxcAdvanced(node, vmid) {
           body: JSON.stringify({ type, ct_id: +ct_id, host_id: +host_id, count: +count }),
         });
         this.closeModal('addIdmap');
-        this.showFlash(data.success ? 'success' : 'danger', data.success ? data.message : data.error);
-        if (data.success) this.load();
+        this.showFlash('success', data.message);
+        this.load();
       } catch(e) {
-        this.showFlash('danger', e.message || 'Request failed');
+        this.modalError = e.message || 'Request failed';
       } finally {
         this.busy.addIdmap = false;
       }
