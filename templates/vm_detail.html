@@ -686,61 +686,67 @@ function vmTasks(node, vmid) {
   };
 }
 
+// Chart instances stored outside Alpine's reactive system — Alpine's Proxy
+// corrupts Chart.js internals (this.options.events becomes undefined).
+const _metricsChartStore = new WeakMap();
+
 function vmMetrics(node, vmid) {
+  const base = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: true, position: 'bottom' } },
+    scales: { x: { display: true, title: { display: true, text: 'Time' } }, y: { display: true, beginAtZero: true } }
+  };
   return {
-    timeframe: 'day', lastUpdate: 'Loading...', loading: false, _timer: null, _charts: {},
+    timeframe: 'day', lastUpdate: 'Loading...', loading: false, _timer: null,
     init() {
-      this._buildCharts();
+      const charts = {
+        cpu: new Chart(this.$refs.cpu.getContext('2d'), {
+          type: 'line',
+          data: { labels: [], datasets: [{ label: 'CPU Usage (%)', data: [], borderColor: 'rgb(54,162,235)', backgroundColor: 'rgba(54,162,235,0.1)', fill: true, tension: 0.1 }] },
+          options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, max: 100, title: { display: true, text: 'CPU Usage (%)' } } } }
+        }),
+        memory: new Chart(this.$refs.memory.getContext('2d'), {
+          type: 'line',
+          data: { labels: [], datasets: [{ label: 'Memory Usage (%)', data: [], borderColor: 'rgb(255,99,132)', backgroundColor: 'rgba(255,99,132,0.1)', fill: true, tension: 0.1 }] },
+          options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, max: 100, title: { display: true, text: 'Memory Usage (%)' } } } }
+        }),
+        network: new Chart(this.$refs.network.getContext('2d'), {
+          type: 'line',
+          data: { labels: [], datasets: [
+            { label: 'Network In (MB)', data: [], borderColor: 'rgb(75,192,192)', backgroundColor: 'rgba(75,192,192,0.1)', fill: false, tension: 0.1 },
+            { label: 'Network Out (MB)', data: [], borderColor: 'rgb(255,205,86)', backgroundColor: 'rgba(255,205,86,0.1)', fill: false, tension: 0.1 }
+          ] },
+          options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, title: { display: true, text: 'Network I/O (MB)' } } } }
+        }),
+        disk: new Chart(this.$refs.disk.getContext('2d'), {
+          type: 'line',
+          data: { labels: [], datasets: [
+            { label: 'Disk Read (MB)', data: [], borderColor: 'rgb(153,102,255)', backgroundColor: 'rgba(153,102,255,0.1)', fill: false, tension: 0.1 },
+            { label: 'Disk Write (MB)', data: [], borderColor: 'rgb(255,159,64)', backgroundColor: 'rgba(255,159,64,0.1)', fill: false, tension: 0.1 }
+          ] },
+          options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, title: { display: true, text: 'Disk I/O (MB)' } } } }
+        }),
+      };
+      _metricsChartStore.set(this.$el, charts);
       this.load();
       this._timer = setInterval(() => { if (!document.hidden) this.load(); }, 30000);
     },
     destroy() {
       clearInterval(this._timer);
-      Object.values(this._charts).forEach(c => c.destroy());
-    },
-    _buildCharts() {
-      const base = {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: true, position: 'bottom' } },
-        scales: { x: { display: true, title: { display: true, text: 'Time' } }, y: { display: true, beginAtZero: true } }
-      };
-      this._charts.cpu = new Chart(this.$refs.cpu.getContext('2d'), {
-        type: 'line',
-        data: { labels: [], datasets: [{ label: 'CPU Usage (%)', data: [], borderColor: 'rgb(54,162,235)', backgroundColor: 'rgba(54,162,235,0.1)', fill: true, tension: 0.1 }] },
-        options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, max: 100, title: { display: true, text: 'CPU Usage (%)' } } } }
-      });
-      this._charts.memory = new Chart(this.$refs.memory.getContext('2d'), {
-        type: 'line',
-        data: { labels: [], datasets: [{ label: 'Memory Usage (%)', data: [], borderColor: 'rgb(255,99,132)', backgroundColor: 'rgba(255,99,132,0.1)', fill: true, tension: 0.1 }] },
-        options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, max: 100, title: { display: true, text: 'Memory Usage (%)' } } } }
-      });
-      this._charts.network = new Chart(this.$refs.network.getContext('2d'), {
-        type: 'line',
-        data: { labels: [], datasets: [
-          { label: 'Network In (MB)', data: [], borderColor: 'rgb(75,192,192)', backgroundColor: 'rgba(75,192,192,0.1)', fill: false, tension: 0.1 },
-          { label: 'Network Out (MB)', data: [], borderColor: 'rgb(255,205,86)', backgroundColor: 'rgba(255,205,86,0.1)', fill: false, tension: 0.1 }
-        ] },
-        options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, title: { display: true, text: 'Network I/O (MB)' } } } }
-      });
-      this._charts.disk = new Chart(this.$refs.disk.getContext('2d'), {
-        type: 'line',
-        data: { labels: [], datasets: [
-          { label: 'Disk Read (MB)', data: [], borderColor: 'rgb(153,102,255)', backgroundColor: 'rgba(153,102,255,0.1)', fill: false, tension: 0.1 },
-          { label: 'Disk Write (MB)', data: [], borderColor: 'rgb(255,159,64)', backgroundColor: 'rgba(255,159,64,0.1)', fill: false, tension: 0.1 }
-        ] },
-        options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, title: { display: true, text: 'Disk I/O (MB)' } } } }
-      });
+      const charts = _metricsChartStore.get(this.$el);
+      if (charts) { Object.values(charts).forEach(c => c.destroy()); _metricsChartStore.delete(this.$el); }
     },
     async load() {
       this.loading = true;
       try {
         const data = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/metrics?timeframe=${this.timeframe}`);
-        if (!data.error) {
+        const charts = _metricsChartStore.get(this.$el);
+        if (!data.error && charts) {
           const h = data.historical;
-          this._charts.cpu.data.labels = h.labels; this._charts.cpu.data.datasets[0].data = h.cpu; this._charts.cpu.update('none');
-          this._charts.memory.data.labels = h.labels; this._charts.memory.data.datasets[0].data = h.memory; this._charts.memory.update('none');
-          this._charts.network.data.labels = h.labels; this._charts.network.data.datasets[0].data = h.network_in; this._charts.network.data.datasets[1].data = h.network_out; this._charts.network.update('none');
-          this._charts.disk.data.labels = h.labels; this._charts.disk.data.datasets[0].data = h.disk_read; this._charts.disk.data.datasets[1].data = h.disk_write; this._charts.disk.update('none');
+          charts.cpu.data.labels = h.labels; charts.cpu.data.datasets[0].data = h.cpu; charts.cpu.update('none');
+          charts.memory.data.labels = h.labels; charts.memory.data.datasets[0].data = h.memory; charts.memory.update('none');
+          charts.network.data.labels = h.labels; charts.network.data.datasets[0].data = h.network_in; charts.network.data.datasets[1].data = h.network_out; charts.network.update('none');
+          charts.disk.data.labels = h.labels; charts.disk.data.datasets[0].data = h.disk_read; charts.disk.data.datasets[1].data = h.disk_write; charts.disk.update('none');
           this.lastUpdate = `Last update: ${data.timestamp}`;
         }
       } catch(e) {
