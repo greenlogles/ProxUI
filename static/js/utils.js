@@ -68,6 +68,61 @@ export async function apiJson(url, options = {}) {
   return (await apiFetch(url, options)).json();
 }
 
+/**
+ * Adaptive poller: calls fn() on a base interval when the tab is active,
+ * backs off exponentially when hidden, stops after the 10-minute step,
+ * and immediately refreshes + resets when the tab becomes visible again.
+ *
+ * Backoff when hidden: baseMs → 60s → 2m → 5m → 10m → stop
+ */
+export function createAdaptivePoller(fn, baseMs = 30000) {
+  const hiddenDelays = [60_000, 120_000, 300_000, 600_000];
+  let timerId = null;
+  let hiddenCount = 0;
+  let active = true;
+
+  function scheduleNext() {
+    if (!active) return;
+    const delay = (document.hidden && hiddenCount > 0)
+      ? hiddenDelays[Math.min(hiddenCount - 1, hiddenDelays.length - 1)]
+      : baseMs;
+    timerId = setTimeout(tick, delay);
+  }
+
+  function tick() {
+    timerId = null;
+    if (!active) return;
+    if (document.hidden) {
+      hiddenCount++;
+      if (hiddenCount > hiddenDelays.length) return; // stop; resumes on focus
+    } else {
+      hiddenCount = 0;
+      fn();
+    }
+    scheduleNext();
+  }
+
+  function onVisible() {
+    if (!active || document.hidden) return;
+    clearTimeout(timerId);
+    timerId = null;
+    hiddenCount = 0;
+    fn();
+    scheduleNext();
+  }
+
+  document.addEventListener('visibilitychange', onVisible);
+  scheduleNext();
+
+  return {
+    destroy() {
+      active = false;
+      clearTimeout(timerId);
+      document.removeEventListener('visibilitychange', onVisible);
+    },
+  };
+}
+
 export function notify(message, type = 'info') {
   const cls = type === 'error' ? 'danger' : type;
   const el = document.createElement('div');

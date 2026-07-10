@@ -119,13 +119,11 @@
 
   function tasksPage() {
     return {
-      allTasks: [],
-      filteredTasks: [],
+      allTasks: [], filteredTasks: [], _poller: null,
       filter: 'all',
       limit: 50,
       loading: true,
       error: '',
-      _timer: null,
 
       taskName(task) {
         return ProxUtils.taskTypeName(task.type);
@@ -189,10 +187,10 @@
 
       init() {
         this.load();
-        this._timer = setInterval(() => { if (!document.hidden) this.load(); }, 30000);
+        this._poller = ProxUtils.createAdaptivePoller(() => this.load(), 30000);
       },
 
-      destroy() { clearInterval(this._timer); },
+      destroy() { this._poller?.destroy(); },
     };
   }
 

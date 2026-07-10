@@ -298,7 +298,7 @@
 
   function dashboardNodes() {
     return {
-      nodes: [], loading: true, error: '', _timer: null,
+      nodes: [], loading: true, error: '', _poller: null,
       fmtUptime: ProxUtils.formatUptime,
       cpuPct(n)     { return (n.cpu * 100).toFixed(1); },
       memPct(n)     { return ((n.mem_used / n.mem_total) * 100).toFixed(1); },
@@ -315,15 +315,15 @@
       refresh() { this.load(); },
       init() {
         this.load();
-        this._timer = setInterval(() => { if (!document.hidden) this.load(); }, 10000);
+        this._poller = ProxUtils.createAdaptivePoller(() => this.load(), 10000);
       },
-      destroy() { clearInterval(this._timer); },
+      destroy() { this._poller?.destroy(); },
     };
   }
 
   function dashboardTasks() {
     return {
-      tasks: [], loading: true, error: '', _timer: null,
+      tasks: [], loading: true, error: '', _poller: null,
       displayName(t) { return ProxUtils.taskTypeName(t.type); },
       statusClass(t) { return ALLOWED_STATUS.has(t.status_class) ? t.status_class : 'secondary'; },
       isVmTask(t)    { const ty = t.type || ''; return ty.startsWith('qm') || ty.startsWith('vz'); },
@@ -340,9 +340,9 @@
       refresh() { this.load(); },
       init() {
         this.load();
-        this._timer = setInterval(() => { if (!document.hidden) this.load(); }, 30000);
+        this._poller = ProxUtils.createAdaptivePoller(() => this.load(), 30000);
       },
-      destroy() { clearInterval(this._timer); },
+      destroy() { this._poller?.destroy(); },
     };
   }
 

@@ -668,7 +668,7 @@ const ALLOWED_STATUS = new Set(['primary','secondary','success','danger','warnin
 
 function vmTasks(node, vmid) {
   return {
-    tasks: [], loading: true, error: '', _timer: null,
+    tasks: [], loading: true, error: '', _poller: null,
     displayName(t) { return ProxUtils.taskTypeName(t.type); },
     statusClass(t) { return ALLOWED_STATUS.has(t.status_class) ? t.status_class : 'secondary'; },
     async load() {
@@ -680,9 +680,9 @@ function vmTasks(node, vmid) {
     refresh() { this.load(); },
     init() {
       this.load();
-      this._timer = setInterval(() => { if (!document.hidden) this.load(); }, 30000);
+      this._poller = ProxUtils.createAdaptivePoller(() => this.load(), 30000);
     },
-    destroy() { clearInterval(this._timer); },
+    destroy() { this._poller?.destroy(); },
   };
 }
 
@@ -696,7 +696,7 @@ function vmMetrics(node, vmid) {
   // (Alpine's Proxy corrupts Chart.js internals: this.options.events → undefined).
   let charts = null;
   return {
-    timeframe: 'day', lastUpdate: 'Loading...', loading: false, _timer: null,
+    timeframe: 'day', lastUpdate: 'Loading...', loading: false, _poller: null,
     init() {
       charts = {
         cpu: new Chart(this.$refs.cpu.getContext('2d'), {
@@ -730,10 +730,10 @@ function vmMetrics(node, vmid) {
       // and may read the old timeframe value.
       this.$watch('timeframe', () => this.load());
       this.load();
-      this._timer = setInterval(() => { if (!document.hidden) this.load(); }, 30000);
+      this._poller = ProxUtils.createAdaptivePoller(() => this.load(), 30000);
     },
     destroy() {
-      clearInterval(this._timer);
+      this._poller?.destroy();
       if (charts) { Object.values(charts).forEach(c => c.destroy()); charts = null; }
     },
     async load() {

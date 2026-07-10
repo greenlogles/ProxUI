@@ -488,12 +488,43 @@
     
     <!-- Global Jobs JavaScript -->
     <script>
-    let globalJobsInterval = null;
-
+    // Adaptive poller for global jobs: 3s when active, backs off when tab is hidden,
+    // stops after 10-minute step, resumes immediately on tab focus.
     document.addEventListener('DOMContentLoaded', function() {
-        // Start polling for jobs
+        const hiddenDelays = [10_000, 30_000, 120_000, 300_000, 600_000];
+        let timerId = null;
+        let hiddenCount = 0;
+
+        function scheduleNext() {
+            const delay = (document.hidden && hiddenCount > 0)
+                ? hiddenDelays[Math.min(hiddenCount - 1, hiddenDelays.length - 1)]
+                : 3000;
+            timerId = setTimeout(tick, delay);
+        }
+
+        function tick() {
+            timerId = null;
+            if (document.hidden) {
+                hiddenCount++;
+                if (hiddenCount > hiddenDelays.length) return;
+            } else {
+                hiddenCount = 0;
+                loadGlobalJobs();
+            }
+            scheduleNext();
+        }
+
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden) return;
+            clearTimeout(timerId);
+            timerId = null;
+            hiddenCount = 0;
+            loadGlobalJobs();
+            scheduleNext();
+        });
+
         loadGlobalJobs();
-        globalJobsInterval = setInterval(loadGlobalJobs, 3000);
+        scheduleNext();
     });
 
     async function loadGlobalJobs() {
