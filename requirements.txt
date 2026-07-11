@@ -4,4 +4,5 @@ proxmoxer==2.0.1
 requests==2.33.0
 simple-websocket==1.0.0
 toml==0.10.2
+PyYAML==6.0.2
 websocket-client==1.7.0
