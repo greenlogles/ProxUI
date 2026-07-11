@@ -1,8 +1,11 @@
+import base64
 import json
 import os
 import pprint
 import re
 import secrets
+import shlex
+import socket
 import traceback
 import ssl
 import threading
@@ -13,10 +16,7 @@ from datetime import datetime
 from functools import wraps
 from urllib.parse import urlparse, unquote, quote
 
-import io
-import tempfile
-
-import requests as _http
+import requests
 import toml
 import urllib3
 import websocket
@@ -916,6 +916,13 @@ def update_cluster_next_id(proxmox, vmid):
 
 def get_proxmox_for_node(node_name):
     """Get the appropriate Proxmox connection for a specific node"""
+    # Self-heal: if we have a configured cluster but no live connections
+    # (e.g. after a process restart / reloader cycle), re-establish them
+    # lazily so requests don't fail with a storm of "Node not found" 404s.
+    if not proxmox_nodes and current_cluster_id and current_cluster_id in all_clusters:
+        print("No active Proxmox connections; re-initializing for current cluster...")
+        init_proxmox_connections()
+
     # First check if we have a direct connection to this node
     if node_name in proxmox_nodes:
         return proxmox_nodes[node_name]
@@ -5967,10 +5974,539 @@ def not_found(error):
 # Cloud-init helpers
 # ---------------------------------------------------------------------------
 
+# ───────────────────────────────────────────────────────────────────────────
+# SSH / key management for snippet writes
+#
+# Proxmox has no API to upload snippets, so writing a custom cloud-init snippet
+# to a node requires filesystem access. When ProxUI runs remotely we reach the
+# node over SSH (Tier 2) or, if port 22 is blocked, the node Shell / termproxy
+# over 8006 (Tier 3). ProxUI uses its own generated ed25519 key, installed once
+# into root's cluster-shared authorized_keys.
+# ───────────────────────────────────────────────────────────────────────────
+
+_SSH_DIR = os.path.join(os.path.dirname(CONFIG_FILE_PATH), "ssh")
+_SSH_KEY_PATH = os.path.join(_SSH_DIR, "proxui_ed25519")
+_SSH_KEY_PUB_PATH = _SSH_KEY_PATH + ".pub"
+
+
+class SnippetWriteError(Exception):
+    """Raised when a snippet cannot be written to the node's storage."""
+
+
+def _get_paramiko():
+    """Lazy paramiko import; returns the module or None if not installed."""
+    try:
+        import paramiko
+        return paramiko
+    except ImportError:
+        return None
+
+
+def _ssh_key_comment() -> str:
+    """Identifiable comment for ProxUI's public key, e.g. proxui-snippet@host-2026-07-11."""
+    try:
+        host = socket.gethostname() or "proxui"
+    except Exception:
+        host = "proxui"
+    return f"proxui-snippet@{host}-{datetime.now().strftime('%Y-%m-%d')}"
+
+
+def _ensure_ssh_key() -> tuple[str, str]:
+    """Generate ProxUI's ed25519 keypair if missing. Returns (private_path, public_line).
+
+    Uses the `cryptography` backend (a paramiko dependency) since
+    paramiko.Ed25519Key has no generate() helper.
+    """
+    os.makedirs(_SSH_DIR, exist_ok=True)
+    try:
+        os.chmod(_SSH_DIR, 0o700)
+    except OSError:
+        pass
+    if not os.path.exists(_SSH_KEY_PATH):
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        from cryptography.hazmat.primitives import serialization
+
+        priv = ed25519.Ed25519PrivateKey.generate()
+        priv_bytes = priv.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.OpenSSH,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        pub_b64 = priv.public_key().public_bytes(
+            encoding=serialization.Encoding.OpenSSH,
+            format=serialization.PublicFormat.OpenSSH,
+        ).decode()
+        pub_line = f"{pub_b64} {_ssh_key_comment()}"
+        # Write private key with restrictive perms before writing anything else.
+        fd = os.open(_SSH_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(priv_bytes)
+        with open(_SSH_KEY_PUB_PATH, "w") as f:
+            f.write(pub_line + "\n")
+
+    with open(_SSH_KEY_PUB_PATH) as f:
+        return _SSH_KEY_PATH, f.read().strip()
+
+
+def _ssh_public_key() -> str | None:
+    """Return the public key line if the key exists, else None (without generating)."""
+    try:
+        with open(_SSH_KEY_PUB_PATH) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def _ssh_target_for_node(node: str) -> tuple[str | None, bool]:
+    """Return (host, verify_ssl) to reach a node. Uses the configured API host.
+
+    Writing to the cluster-shared pmxcfs storage only requires reaching any one
+    node, so the configured host is sufficient even with a single API endpoint.
+    """
+    meta = connection_metadata.get(node) or {}
+    return meta.get("host"), meta.get("verify_ssl", True)
+
+
+def _ssh_connect_root(node: str, timeout: int = 20):
+    """Open a paramiko SSHClient to `node` as root using ProxUI's key.
+
+    Returns the connected client, or raises. Caller must close it.
+    """
+    paramiko = _get_paramiko()
+    if not paramiko:
+        raise SnippetWriteError("paramiko is not installed (pip install paramiko).")
+    host, _ = _ssh_target_for_node(node)
+    if not host:
+        raise SnippetWriteError(f"No connection host known for node '{node}'.")
+    if not os.path.exists(_SSH_KEY_PATH):
+        raise SnippetWriteError("ProxUI SSH key is not set up yet.")
+
+    pkey = paramiko.Ed25519Key.from_private_key_file(_SSH_KEY_PATH)
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.WarningPolicy())
+    client.connect(
+        hostname=host,
+        port=22,
+        username="root",
+        pkey=pkey,
+        timeout=timeout,
+        banner_timeout=timeout,
+        auth_timeout=timeout,
+        allow_agent=False,
+        look_for_keys=False,
+    )
+    return client
+
+
+def _ssh_connect_root_password(node: str, password: str, timeout: int = 20):
+    """Open a paramiko SSHClient to `node` as root using a password (for provisioning)."""
+    paramiko = _get_paramiko()
+    if not paramiko:
+        raise SnippetWriteError("paramiko is not installed (pip install paramiko).")
+    host, _ = _ssh_target_for_node(node)
+    if not host:
+        raise SnippetWriteError(f"No connection host known for node '{node}'.")
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.WarningPolicy())
+    try:
+        client.connect(
+            hostname=host,
+            port=22,
+            username="root",
+            password=password,
+            timeout=timeout,
+            banner_timeout=timeout,
+            auth_timeout=timeout,
+            allow_agent=False,
+            look_for_keys=False,
+        )
+    except paramiko.AuthenticationException:
+        raise SnippetWriteError("SSH login as root failed — check root's password.")
+    return client
+
+
+def _sftp_write_file(node: str, remote_path: str, content: str) -> None:
+    """Write `content` to `remote_path` on `node` via SFTP as root, creating parent dirs."""
+    client = _ssh_connect_root(node)
+    try:
+        sftp = client.open_sftp()
+        # Ensure parent directories exist (mkdir -p semantics).
+        parent = os.path.dirname(remote_path)
+        parts = [p for p in parent.split("/") if p]
+        cur = ""
+        for p in parts:
+            cur += "/" + p
+            try:
+                sftp.stat(cur)
+            except IOError:
+                try:
+                    sftp.mkdir(cur)
+                except IOError:
+                    pass  # concurrent create or perms handled by the write below
+        with sftp.open(remote_path, "w") as wf:
+            wf.write(content)
+    finally:
+        client.close()
+
+
+def _sftp_read_file(node: str, remote_path: str) -> str:
+    """Read a file from `node` via SFTP as root. Raises on failure."""
+    client = _ssh_connect_root(node)
+    try:
+        sftp = client.open_sftp()
+        with sftp.open(remote_path, "r") as rf:
+            return rf.read().decode("utf-8", errors="replace")
+    finally:
+        client.close()
+
+
+def _ssh_run_root(node: str, command: str, timeout: int = 30) -> tuple[int, str, str]:
+    """Run a command on `node` as root via SSH. Returns (exit_code, stdout, stderr)."""
+    client = _ssh_connect_root(node, timeout=timeout)
+    try:
+        _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        rc = stdout.channel.recv_exit_status()
+        out = stdout.read().decode("utf-8", errors="replace")
+        err = stderr.read().decode("utf-8", errors="replace")
+        return rc, out, err
+    finally:
+        client.close()
+
+
+def _ssh_port_open(node: str, timeout: float = 4.0) -> bool:
+    """Quick TCP check for SSH (port 22) reachability."""
+    host, _ = _ssh_target_for_node(node)
+    if not host:
+        return False
+    try:
+        with socket.create_connection((host, 22), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# termproxy (node Shell over 8006) — Tier-3 fallback and key provisioning.
+#
+# The node Shell gives a root PTY over the API port, so it works even when SSH
+# (port 22) is blocked. It requires the Sys.Console privilege and password auth
+# (an API token cannot open a console session). We drive the PTY by base64ing
+# the payload and echoing a unique sentinel with the exit code, so we can tell
+# when a command finished and whether it succeeded despite the noisy terminal.
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def _pve_login_ticket(node: str) -> tuple[str, str, str, bool]:
+    """Return (host, PVEAuthCookie ticket, CSRF token, verify_ssl) for a node.
+
+    Requires username/password auth; raises SnippetWriteError otherwise.
+    """
+    meta = connection_metadata.get(node) or {}
+    host = meta.get("host")
+    user = meta.get("user")
+    password = meta.get("password")
+    verify = meta.get("verify_ssl", True)
+    if not host:
+        raise SnippetWriteError(f"No connection host known for node '{node}'.")
+    if not password:
+        raise SnippetWriteError(
+            "The node Shell (termproxy) needs username/password auth — an API "
+            "token can't open a console session."
+        )
+    r = requests.post(
+        f"https://{host}:8006/api2/json/access/ticket",
+        data={"username": user, "password": password},
+        verify=verify,
+        timeout=15,
+    )
+    r.raise_for_status()
+    d = r.json()["data"]
+    return host, d["ticket"], d["CSRFPreventionToken"], verify
+
+
+class _TermSession:
+    """A driven root PTY over a Proxmox termproxy websocket."""
+
+    def __init__(self, ws):
+        self.ws = ws
+
+    def _send_input(self, data: str) -> None:
+        self.ws.send(f"0:{len(data.encode('utf-8'))}:{data}")
+
+    def _drain_until(self, patterns: list, timeout: int = 8) -> tuple[int, str]:
+        """Read until any regex in `patterns` matches. Returns (index, buffer); -1 if none."""
+        compiled = [re.compile(p) for p in patterns]
+        buf = ""
+        deadline = time.time() + timeout
+        try:
+            self.ws.settimeout(min(timeout, 4))
+        except Exception:
+            pass
+        while time.time() < deadline:
+            try:
+                c = self.ws.recv()
+            except websocket.WebSocketTimeoutException:
+                for i, rx in enumerate(compiled):
+                    if rx.search(buf):
+                        return i, buf
+                continue
+            except Exception:
+                break
+            if isinstance(c, (bytes, bytearray)):
+                c = c.decode("utf-8", errors="replace")
+            buf += c
+            for i, rx in enumerate(compiled):
+                if rx.search(buf):
+                    return i, buf
+        return -1, buf
+
+    def _login(self, os_user: str, os_password: str) -> None:
+        """Drive an interactive `login:` prompt with OS credentials."""
+        self._send_input(f"{os_user}\n")
+        idx, _ = self._drain_until([r"[Pp]assword:\s*$"], timeout=8)
+        if idx != 0:
+            raise SnippetWriteError("termproxy: no password prompt after sending username.")
+        self._send_input(f"{os_password}\n")
+        # Success → shell prompt; failure → 'Login incorrect' then another 'login:'.
+        idx, buf = self._drain_until([r"[#$]\s*$", r"[Ll]ogin incorrect", r"login:\s*$"], timeout=12)
+        if idx != 0:
+            raise SnippetWriteError("termproxy: OS login failed (check the root password).")
+
+    def run(self, command: str, timeout: int = 45) -> tuple[int, str]:
+        """Run a shell command, return (exit_code, captured_output)."""
+        marker = f"__PROXUI_{uuid.uuid4().hex}__"
+        # The echoed command contains `marker "$?"`; only the real output line
+        # contains `marker:<digits>`, so the regex won't match the echo.
+        self._send_input(f"{command}; printf '%s:%s\\n' {marker} \"$?\"\n")
+        pat = re.compile(re.escape(marker) + r":(\d+)")
+        buf = ""
+        deadline = time.time() + timeout
+        try:
+            self.ws.settimeout(min(timeout, 10))
+        except Exception:
+            pass
+        while time.time() < deadline:
+            try:
+                chunk = self.ws.recv()
+            except websocket.WebSocketTimeoutException:
+                continue
+            except Exception:
+                break
+            if isinstance(chunk, (bytes, bytearray)):
+                chunk = chunk.decode("utf-8", errors="replace")
+            if not chunk:
+                continue
+            buf += chunk
+            m = pat.search(buf)
+            if m:
+                return int(m.group(1)), buf
+        raise SnippetWriteError("termproxy: command timed out")
+
+    def write_file(self, remote_path: str, content: str) -> None:
+        """Write content to remote_path by streaming base64 through the PTY."""
+        b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        tmp = f"/tmp/proxui-snip-{uuid.uuid4().hex}.b64"
+        qdir = shlex.quote(os.path.dirname(remote_path) or "/")
+        qfile = shlex.quote(remote_path)
+        qtmp = shlex.quote(tmp)
+        rc, out = self.run(f"mkdir -p {qdir} && : > {qtmp}")
+        if rc != 0:
+            raise SnippetWriteError(f"termproxy: could not prepare {qdir} ({out[-200:].strip()})")
+        # Append base64 in PTY-safe chunks (well under the ~4 KB line limit).
+        for i in range(0, len(b64), 1024):
+            chunk = b64[i:i + 1024]
+            rc, out = self.run(f"printf '%s' {shlex.quote(chunk)} >> {qtmp}")
+            if rc != 0:
+                raise SnippetWriteError(f"termproxy: chunk write failed ({out[-200:].strip()})")
+        rc, out = self.run(f"base64 -d {qtmp} > {qfile} && rm -f {qtmp}")
+        if rc != 0:
+            raise SnippetWriteError(f"termproxy: writing {remote_path} failed ({out[-200:].strip()})")
+
+    def close(self) -> None:
+        try:
+            self.ws.close()
+        except Exception:
+            pass
+
+
+def _is_root_pam(node: str) -> bool:
+    """True if the API connection for this node authenticates as root@pam."""
+    meta = connection_metadata.get(node) or {}
+    return (meta.get("user") or "") == "root@pam"
+
+
+def _termproxy_open(node: str, os_password: str | None = None, timeout: int = 20) -> _TermSession:
+    """Open a root shell on `node` via termproxy over 8006.
+
+    root@pam gets a passwordless root shell. Any other API user hits an
+    interactive OS `login:` prompt, which we drive as root using `os_password`
+    (root's OS password). Raises SnippetWriteError with an actionable message.
+    """
+    from urllib.parse import quote_plus
+
+    host, login_ticket, csrf, verify = _pve_login_ticket(node)
+    r = requests.post(
+        f"https://{host}:8006/api2/json/nodes/{node}/termproxy",
+        headers={"CSRFPreventionToken": csrf, "Cookie": f"PVEAuthCookie={login_ticket}"},
+        verify=verify,
+        timeout=timeout,
+    )
+    if r.status_code == 403:
+        raise SnippetWriteError(
+            "The node Shell was denied — the API user needs the 'Sys.Console' "
+            "privilege on this node to open a console session."
+        )
+    r.raise_for_status()
+    d = r.json()["data"]
+    port, vncticket, tuser = d["port"], d["ticket"], d["user"]
+
+    url = (
+        f"wss://{host}:8006/api2/json/nodes/{node}/vncwebsocket"
+        f"?port={port}&vncticket={quote_plus(vncticket)}"
+    )
+    sslopt = {} if verify else {"cert_reqs": ssl.CERT_NONE, "check_hostname": False}
+    ws = websocket.create_connection(
+        url,
+        header=[f"Cookie: PVEAuthCookie={login_ticket}"],
+        sslopt=sslopt,
+        timeout=timeout,
+    )
+    ws.send(f"{tuser}:{vncticket}\n")
+    first = ws.recv()
+    if isinstance(first, (bytes, bytearray)):
+        first = first.decode("utf-8", errors="replace")
+    if not str(first).startswith("OK"):
+        ws.close()
+        raise SnippetWriteError(f"termproxy handshake rejected: {str(first)[:80]!r}")
+
+    sess = _TermSession(ws)
+    # Either a passwordless root shell (root@pam) or an interactive login prompt.
+    idx, _buf = sess._drain_until([r"login:\s*$", r"[#$]\s*$"], timeout=8)
+    if idx == 1:
+        return sess  # already at a shell
+    if idx == 0:
+        pw = os_password
+        if pw is None and _is_root_pam(node):
+            pw = (connection_metadata.get(node) or {}).get("password")
+        if not pw:
+            sess.close()
+            raise SnippetWriteError(
+                "The node Shell opened an OS login prompt (your API user is not "
+                "root@pam). Provide root's OS password to set up snippet access, "
+                "or install ProxUI's key manually."
+            )
+        try:
+            sess._login("root", pw)
+        except SnippetWriteError:
+            sess.close()
+            raise
+        return sess
+    sess.close()
+    raise SnippetWriteError("termproxy: unexpected shell state (no login or shell prompt).")
+
+
+def _install_key_command(pub_line: str) -> str:
+    """Idempotent shell to put ProxUI's pubkey in root's authorized_keys.
+
+    Removes any previous proxui-snippet@ lines first so re-running is clean.
+    """
+    q = shlex.quote(pub_line)
+    return (
+        "mkdir -p /root/.ssh && chmod 700 /root/.ssh && "
+        "touch /root/.ssh/authorized_keys && "
+        "grep -v 'proxui-snippet@' /root/.ssh/authorized_keys > /root/.ssh/.proxui_ak.tmp 2>/dev/null || true && "
+        f"printf '%s\\n' {q} >> /root/.ssh/.proxui_ak.tmp && "
+        "cat /root/.ssh/.proxui_ak.tmp > /root/.ssh/authorized_keys && "
+        "rm -f /root/.ssh/.proxui_ak.tmp && chmod 600 /root/.ssh/authorized_keys && "
+        "echo PROXUI_INSTALLED"
+    )
+
+
+def _provision_ssh_key(node: str, root_password: str | None = None) -> dict:
+    """Install ProxUI's public key into root's authorized_keys on `node`.
+
+    Prefers SSH-as-root-with-password when port 22 is open; otherwise drives the
+    node Shell (termproxy). Then verifies key-based SFTP works and detects whether
+    root's authorized_keys is cluster-shared (pmxcfs). Returns a status dict.
+    """
+    _priv, pub = _ensure_ssh_key()
+    install_cmd = _install_key_command(pub)
+
+    if _ssh_port_open(node) and root_password:
+        client = _ssh_connect_root_password(node, root_password)
+        try:
+            _in, out_s, err_s = client.exec_command(install_cmd, timeout=30)
+            rc = out_s.channel.recv_exit_status()
+            out = out_s.read().decode("utf-8", errors="replace")
+            if rc != 0 or "PROXUI_INSTALLED" not in out:
+                err = err_s.read().decode("utf-8", errors="replace")
+                raise SnippetWriteError(f"Key install failed: {(err or out)[-200:].strip()}")
+        finally:
+            client.close()
+        channel = "ssh-password"
+    else:
+        sess = _termproxy_open(node, os_password=root_password)
+        try:
+            rc, out = sess.run(install_cmd)
+            if rc != 0 or "PROXUI_INSTALLED" not in out:
+                raise SnippetWriteError(f"Key install failed via node Shell: {out[-200:].strip()}")
+        finally:
+            sess.close()
+        channel = "termproxy"
+
+    result = {
+        "channel": channel,
+        "sftp_ok": False,
+        "shared_authorized_keys": False,
+        "authorized_keys_path": "",
+        "pubkey": pub,
+    }
+    # Verify key-based access works and inspect the authorized_keys target.
+    if _ssh_port_open(node):
+        try:
+            rc, out, _err = _ssh_run_root(node, "readlink -f /root/.ssh/authorized_keys; echo PROXUI_SFTP_OK")
+            result["sftp_ok"] = "PROXUI_SFTP_OK" in out
+            ak_path = next((ln.strip() for ln in out.splitlines() if ln.startswith("/")), "")
+            result["authorized_keys_path"] = ak_path
+            result["shared_authorized_keys"] = "/etc/pve/" in ak_path
+        except Exception as e:
+            result["verify_error"] = str(e)
+    return result
+
+
 # In-memory cache for snippet content (keyed by "node/vmid/type").
 # Populated when ProxUI saves a snippet; used as fallback if filesystem
 # access is unavailable.
 _snippet_cache: dict = {}
+
+# Persistent local store for snippet content. Proxmox has no REST endpoint to
+# read snippet file contents back, and ProxUI usually runs on a different host
+# than the nodes (so it can't read the storage path directly). We keep a copy
+# of every snippet we write here so it can always be shown again after a
+# restart, independent of node filesystem access or the in-memory cache.
+_SNIPPET_STORE_DIR = os.path.join(os.path.dirname(CONFIG_FILE_PATH), "snippets")
+
+
+def _snippet_store_path(node: str, storage: str, filename: str) -> str:
+    safe = f"{node}__{storage}__{filename}".replace("/", "_").replace("..", "_")
+    return os.path.join(_SNIPPET_STORE_DIR, safe)
+
+
+def _store_snippet_local(node: str, storage: str, filename: str, content: str) -> None:
+    try:
+        os.makedirs(_SNIPPET_STORE_DIR, exist_ok=True)
+        with open(_snippet_store_path(node, storage, filename), "w") as f:
+            f.write(content)
+    except OSError as exc:
+        print(f"Warning: could not persist snippet locally: {exc}")
+
+
+def _read_snippet_local(node: str, storage: str, filename: str) -> str | None:
+    try:
+        with open(_snippet_store_path(node, storage, filename)) as f:
+            return f.read()
+    except OSError:
+        return None
 
 _CLOUD_INIT_LIST_KEYS = frozenset({
     "users", "packages", "runcmd", "bootcmd", "write_files",
@@ -6072,81 +6608,125 @@ def _validate_cloud_init_yaml(content: str) -> tuple[list, list]:
 
 
 def _get_storage_path(node: str, storage: str) -> str | None:
-    """Return the filesystem path of a Proxmox directory-type storage, or None."""
+    """Return the filesystem base path of a Proxmox storage, or None.
+
+    Uses the configured `path` (dir storage) and falls back to the /mnt/pve/<name>
+    convention for the network filesystem types that mount there.
+    """
     try:
         proxmox = get_proxmox_connection(node, auto_renew=True)
-        storages = proxmox.storage.get()
-        cfg = next((s for s in storages if s.get("storage") == storage), {})
+        cfg = next((s for s in proxmox.storage.get() if s.get("storage") == storage), {})
         path = cfg.get("path", "")
-        return path if path else None
+        if path:
+            return path
+        if cfg.get("type") in ("nfs", "cifs", "cephfs", "glusterfs"):
+            return f"/mnt/pve/{storage}"
+        return None
     except Exception:
         return None
 
 
+def _snippet_remote_path(node: str, storage: str, filename: str) -> str | None:
+    """Return {storage_path}/snippets/{filename} for a node, or None if unknown."""
+    base = _get_storage_path(node, storage)
+    return os.path.join(base, "snippets", filename) if base else None
+
+
 def _read_snippet(node: str, storage: str, filename: str, snippet_type: str = "user") -> str | None:
-    """Read snippet content: filesystem first, then in-memory cache."""
+    """Read snippet content: node filesystem, SFTP, local store, then cache.
+
+    SFTP is the authoritative remote source once ProxUI's key is installed; the
+    local store is the fallback when the node is unreachable or after a restart
+    (which clears the in-memory cache).
+    """
     path = _get_storage_path(node, storage)
     if path:
         try:
-            fpath = os.path.join(path, "snippets", filename)
-            with open(fpath) as f:
+            with open(os.path.join(path, "snippets", filename)) as f:
                 return f.read()
         except OSError:
             pass
+    # Remote read via SFTP (authoritative — reflects the file actually on the node).
+    if os.path.exists(_SSH_KEY_PATH) and _ssh_port_open(node):
+        remote = _snippet_remote_path(node, storage, filename)
+        if remote:
+            try:
+                return _sftp_read_file(node, remote)
+            except Exception:
+                pass
+    local = _read_snippet_local(node, storage, filename)
+    if local is not None:
+        return local
     return _snippet_cache.get(f"{node}/{storage}/{snippet_type}")
 
 
-def _write_snippet(node: str, storage: str, filename: str, content: str, snippet_type: str = "user") -> None:
-    """Write snippet: filesystem if accessible, then Proxmox upload API."""
+def _write_snippet(node: str, storage: str, filename: str, content: str, snippet_type: str = "user") -> str:
+    """Write a snippet file to the storage's snippets/ directory. Returns the tier used.
+
+    Proxmox has no REST API to upload snippets, so we place the file directly, in
+    order of preference:
+      1. local filesystem  — ProxUI runs on the node / storage is mounted
+      2. SFTP as root       — remote, port 22 open, ProxUI key installed
+      3. node Shell (root@pam) — remote, port 22 blocked, passwordless console
+    The content is always kept in the local store first so nothing is lost, and a
+    clear SnippetWriteError explains what to do if no channel works.
+    """
+    # Keep a copy no matter what happens next.
+    _snippet_cache[f"{node}/{storage}/{snippet_type}"] = content
+    _store_snippet_local(node, storage, filename, content)
+
     path = _get_storage_path(node, storage)
-    written_to_fs = False
+    remote_path = os.path.join(path, "snippets", filename) if path else None
+
+    # Tier 1: local filesystem.
     if path:
         try:
             snippets_dir = os.path.join(path, "snippets")
             os.makedirs(snippets_dir, exist_ok=True)
-            fpath = os.path.join(snippets_dir, filename)
-            with open(fpath, "w") as f:
+            with open(os.path.join(snippets_dir, filename), "w") as f:
                 f.write(content)
-            written_to_fs = True
+            return "local"
         except OSError:
             pass
 
-    if not written_to_fs:
-        # Fall back to Proxmox storage upload API
-        meta = connection_metadata.get(node) or {}
-        host = meta.get("host")
-        if not host:
-            raise ValueError(f"No connection metadata for node {node}")
-        verify_ssl = meta.get("verify_ssl", True)
-        url = f"https://{host}:8006/api2/json/nodes/{node}/storage/{storage}/upload"
-        headers: dict = {}
-        if meta.get("token_name") and meta.get("token_value"):
-            headers["Authorization"] = (
-                f"PVEAPIToken={meta['user']}!{meta['token_name']}={meta['token_value']}"
-            )
-        else:
-            auth_resp = _http.post(
-                f"https://{host}:8006/api2/json/access/ticket",
-                data={"username": meta["user"], "password": meta.get("password", "")},
-                verify=verify_ssl,
-                timeout=30,
-            )
-            auth_resp.raise_for_status()
-            ticket_data = auth_resp.json()["data"]
-            headers["Cookie"] = f"PVEAuthCookie={ticket_data['ticket']}"
-            headers["CSRFPreventionToken"] = ticket_data["CSRFPreventionToken"]
-        resp = _http.post(
-            url,
-            headers=headers,
-            data={"content": "snippets"},
-            files={"filename": (filename, content.encode(), "application/octet-stream")},
-            verify=verify_ssl,
-            timeout=30,
+    if not remote_path:
+        raise SnippetWriteError(
+            f"Storage '{storage}' on node '{node}' has no resolvable filesystem "
+            f"path, so the snippet can't be written. Pick a directory/NFS/CephFS "
+            f"storage. Your content is saved in ProxUI."
         )
-        resp.raise_for_status()
 
-    # Always update in-memory cache so reads work even without filesystem access
-    _snippet_cache[f"{node}/{storage}/{snippet_type}"] = content
+    errors = []
+
+    # Tier 2: SFTP as root with ProxUI's key.
+    if os.path.exists(_SSH_KEY_PATH) and _ssh_port_open(node):
+        try:
+            _sftp_write_file(node, remote_path, content)
+            return "sftp"
+        except Exception as e:
+            errors.append(f"SFTP: {e}")
+
+    # Tier 3: node Shell (only usable without a prompt for root@pam here, since a
+    # normal save has no OS password to offer).
+    if _is_root_pam(node):
+        try:
+            sess = _termproxy_open(node)
+            try:
+                sess.write_file(remote_path, content)
+            finally:
+                sess.close()
+            return "termproxy"
+        except Exception as e:
+            errors.append(f"node Shell: {e}")
+
+    hint = (
+        "Set up snippet access (install ProxUI's SSH key) from the Cloud-Init tab, "
+        "or run ProxUI where it can reach the storage. Your content is saved in ProxUI."
+    )
+    detail = (" [" + "; ".join(errors) + "]") if errors else ""
+    raise SnippetWriteError(
+        f"Couldn't write the snippet to {remote_path} on node '{node}'.{detail} {hint}"
+    )
 
 
 def _parse_cicustom(cicustom: str) -> dict:
@@ -6167,6 +6747,170 @@ def _build_cicustom(parts: dict) -> str:
 # ---------------------------------------------------------------------------
 # Cloud-init API routes
 # ---------------------------------------------------------------------------
+
+@app.route("/api/snippets/ssh/status")
+def api_snippets_ssh_status():
+    """Report ProxUI's SSH-key state for snippet writes."""
+    pub = _ssh_public_key()
+    node = request.args.get("node")
+    resp = {
+        "paramiko_available": _get_paramiko() is not None,
+        "key_exists": pub is not None,
+        "pubkey": pub or "",
+        "comment": (pub.split()[-1] if pub and len(pub.split()) >= 3 else ""),
+    }
+    if node:
+        resp["ssh_port_open"] = _ssh_port_open(node)
+        resp["root_pam"] = _is_root_pam(node)
+        # Does key-based SFTP already work?
+        resp["sftp_ok"] = False
+        if pub and resp["ssh_port_open"]:
+            try:
+                rc, out, _ = _ssh_run_root(node, "echo PROXUI_SFTP_OK")
+                resp["sftp_ok"] = "PROXUI_SFTP_OK" in out
+            except Exception:
+                resp["sftp_ok"] = False
+    return jsonify(resp)
+
+
+@app.route("/api/snippets/ssh/setup", methods=["POST"])
+def api_snippets_ssh_setup():
+    """Generate (if needed) and install ProxUI's public key into root's authorized_keys.
+
+    Body: { node, root_password? }. root_password is required unless the API user
+    is root@pam (passwordless node Shell).
+    """
+    data = request.get_json() or {}
+    node = data.get("node")
+    root_password = data.get("root_password") or None
+    if not node:
+        return jsonify({"error": "node is required"}), 400
+    if not get_proxmox_connection(node, auto_renew=True):
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        result = _provision_ssh_key(node, root_password=root_password)
+        result["success"] = True
+        result["message"] = (
+            "SSH key installed. Snippet writes will use SFTP as root."
+            if result.get("sftp_ok")
+            else "SSH key installed (verification limited — port 22 may be closed)."
+        )
+        return jsonify(result)
+    except SnippetWriteError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+def _any_proxmox():
+    """Return any working Proxmox connection, or None."""
+    if not proxmox_nodes:
+        return None
+    return get_proxmox_connection(next(iter(proxmox_nodes)), auto_renew=True)
+
+
+@app.route("/api/snippets/storages")
+def api_snippets_storages():
+    """List cluster storages for snippet placement, flagged shared / snippets-enabled.
+
+    Returns filesystem-type storages (only those can hold snippets), so the UI can
+    prefer shared ones and offer to enable snippets on a chosen storage.
+    """
+    node = request.args.get("node")
+    proxmox = get_proxmox_connection(node, auto_renew=True) if node else _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        out = []
+        for s in proxmox.storage.get():
+            stype = s.get("type", "")
+            content = [c for c in (s.get("content") or "").split(",") if c]
+            out.append({
+                "storage": s.get("storage"),
+                "type": stype,
+                "shared": bool(s.get("shared", 0)),
+                "snippets_enabled": "snippets" in content,
+                "filesystem": stype in ("dir", "nfs", "cifs", "cephfs", "glusterfs"),
+                "path": s.get("path", ""),
+            })
+        return jsonify(out)
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/snippets/storage/create", methods=["POST"])
+def api_snippets_storage_create():
+    """Create a cluster-shared snippet storage on pmxcfs (/etc/pve/<name>).
+
+    Files written there replicate to all nodes, so snippets survive VM migration.
+    Uses the Proxmox API, falling back to `pvesm` over root SSH.
+    """
+    data = request.get_json() or {}
+    node = data.get("node")
+    name = (data.get("name") or "proxui-snippets").strip()
+    path = data.get("path") or f"/etc/pve/{name}"
+    proxmox = get_proxmox_connection(node, auto_renew=True) if node else _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        existing = {s.get("storage") for s in proxmox.storage.get()}
+        if name in existing:
+            return jsonify({"success": True, "message": f"Storage '{name}' already exists.", "storage": name})
+        try:
+            proxmox.storage.post(storage=name, type="dir", path=path, content="snippets", shared=1, mkdir=1)
+        except Exception as api_err:
+            # Fall back to root SSH (e.g. API user lacks Datastore.Allocate).
+            if not node:
+                raise api_err
+            cmd = (
+                f"mkdir -p {shlex.quote(path)} && "
+                f"pvesm add dir {shlex.quote(name)} --path {shlex.quote(path)} "
+                f"--content snippets --shared 1"
+            )
+            rc, out, err = _ssh_run_root(node, cmd)
+            if rc != 0:
+                return jsonify({"error": f"Could not create storage: {(err or out)[-200:].strip()}"}), 400
+        return jsonify({
+            "success": True,
+            "message": f"Created shared snippet storage '{name}' at {path} (replicated across the cluster).",
+            "storage": name,
+        })
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/snippets/storage/enable-snippets", methods=["POST"])
+def api_snippets_storage_enable():
+    """Add the 'snippets' content type to an existing storage (API, or pvesm via SSH)."""
+    data = request.get_json() or {}
+    node = data.get("node")
+    storage = data.get("storage")
+    if not storage:
+        return jsonify({"error": "storage is required"}), 400
+    proxmox = get_proxmox_connection(node, auto_renew=True) if node else _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        cur = next((s for s in proxmox.storage.get() if s.get("storage") == storage), None)
+        if not cur:
+            return jsonify({"error": f"Storage '{storage}' not found"}), 404
+        content = [c for c in (cur.get("content") or "").split(",") if c]
+        if "snippets" in content:
+            return jsonify({"success": True, "message": "snippets already enabled.", "storage": storage})
+        content.append("snippets")
+        joined = ",".join(content)
+        try:
+            proxmox.storage(storage).put(content=joined)
+        except Exception as api_err:
+            if not node:
+                raise api_err
+            rc, out, err = _ssh_run_root(node, f"pvesm set {shlex.quote(storage)} --content {shlex.quote(joined)}")
+            if rc != 0:
+                return jsonify({"error": f"Could not enable snippets: {(err or out)[-200:].strip()}"}), 400
+        return jsonify({"success": True, "message": f"Enabled snippets on '{storage}'.", "storage": storage})
+    except Exception as e:
+        return _proxmox_error_response(e)
+
 
 @app.route("/api/node/<node>/storages/snippets")
 def api_node_snippet_storages(node):
@@ -6285,7 +7029,12 @@ def api_vm_cloudinit_snippet_save(node, vmid):
         return jsonify({"error": "Node not found"}), 404
 
     try:
-        _write_snippet(node, storage, filename, content, snippet_type)
+        tier = _write_snippet(node, storage, filename, content, snippet_type)
+    except SnippetWriteError as e:
+        # File couldn't be placed on the node — don't attach a dangling cicustom.
+        return jsonify({"error": str(e)}), 400
+
+    try:
         volid = f"{storage}:snippets/{filename}"
 
         # Merge into existing cicustom
@@ -6294,11 +7043,13 @@ def api_vm_cloudinit_snippet_save(node, vmid):
         ci_parts[snippet_type] = volid
         proxmox.nodes(node).qemu(vmid).config.put(cicustom=_build_cicustom(ci_parts))
 
+        via = {"local": "local filesystem", "sftp": "SFTP", "termproxy": "node Shell"}.get(tier, tier)
         return jsonify({
             "success": True,
-            "message": f"Snippet saved and attached as {snippet_type} ({volid}).",
+            "message": f"Snippet saved (via {via}) and attached as {snippet_type} ({volid}).",
             "volid": volid,
             "cicustom": _build_cicustom(ci_parts),
+            "tier": tier,
         })
     except Exception as e:
         return _proxmox_error_response(e)
