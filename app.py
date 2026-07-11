@@ -11,11 +11,16 @@ import uuid
 from collections import defaultdict
 from datetime import datetime
 from functools import wraps
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote, quote
 
+import io
+import tempfile
+
+import requests as _http
 import toml
 import urllib3
 import websocket
+import yaml
 from flask import (
     Flask,
     Response,
@@ -2344,8 +2349,11 @@ def vm_edit(node, vmid):
             vm_info = proxmox.nodes(node).lxc(vmid).status.current.get()
             config = proxmox.nodes(node).lxc(vmid).config.get()
 
+        ci_sshkeys = unquote(config.get("sshkeys", "")) if config.get("sshkeys") else ""
         return render_template(
-            "vm_edit.html", node=node, vm=vm_info, config=config, vm_type=vm_type
+            "vm_edit.html",
+            node=node, vm=vm_info, config=config, vm_type=vm_type,
+            ci_sshkeys=ci_sshkeys,
         )
     except Exception as e:
         flash(f"Error loading VM/Container configuration: {e}", "error")
@@ -5953,6 +5961,373 @@ def api_lxc_profile_apply(node, vmid, profile_id):
 @app.errorhandler(404)
 def not_found(error):
     return render_template("404.html"), 404
+
+
+# ---------------------------------------------------------------------------
+# Cloud-init helpers
+# ---------------------------------------------------------------------------
+
+# In-memory cache for snippet content (keyed by "node/vmid/type").
+# Populated when ProxUI saves a snippet; used as fallback if filesystem
+# access is unavailable.
+_snippet_cache: dict = {}
+
+_CLOUD_INIT_LIST_KEYS = frozenset({
+    "users", "packages", "runcmd", "bootcmd", "write_files",
+    "ssh_authorized_keys", "groups", "fs_setup", "mounts",
+    "cloud_config_modules", "cloud_final_modules", "cloud_init_modules",
+})
+_CLOUD_INIT_BOOL_KEYS = frozenset({
+    "package_update", "package_upgrade", "package_reboot_if_required",
+    "disable_root", "ssh_pwauth", "resize_rootfs", "manage_resolv_conf",
+})
+_CLOUD_INIT_STR_KEYS = frozenset({
+    "hostname", "fqdn", "timezone", "locale", "final_message",
+    "locale_configfile", "byobu_by_default", "merge_how",
+})
+_CLOUD_INIT_DICT_KEYS = frozenset({
+    "apt", "yum_repos", "ntp", "power_state", "resolv_conf", "network",
+    "ca_certs", "chpasswd", "puppet", "chef", "ansible", "datasource",
+    "ssh_keys", "disk_setup", "snap", "keyboard", "growpart", "swap",
+    "phone_home", "random_seed", "reporting", "output", "wireguard",
+    "ubuntu_advantage", "landscape",
+})
+_CLOUD_INIT_KNOWN = (
+    _CLOUD_INIT_LIST_KEYS | _CLOUD_INIT_BOOL_KEYS
+    | _CLOUD_INIT_STR_KEYS | _CLOUD_INIT_DICT_KEYS
+    | {"manage_etc_hosts"}
+)
+
+
+def _validate_cloud_init_yaml(content: str) -> tuple[list, list]:
+    """Return (errors, warnings) for cloud-init YAML content."""
+    errors: list = []
+    warnings: list = []
+
+    content = content.strip()
+    if not content:
+        errors.append("Content is empty.")
+        return errors, warnings
+
+    lines = content.splitlines()
+    first = lines[0].strip()
+    if first != "#cloud-config":
+        if first.startswith("#"):
+            warnings.append(f"First line is '{first}', expected '#cloud-config'.")
+        else:
+            errors.append("First line must be '#cloud-config'.")
+
+    try:
+        data = yaml.safe_load(content)
+    except yaml.YAMLError as exc:
+        errors.append(f"YAML syntax error: {exc}")
+        return errors, warnings
+
+    if data is None:
+        warnings.append("Config is effectively empty (only comment lines).")
+        return errors, warnings
+
+    if not isinstance(data, dict):
+        errors.append(f"Top-level value must be a mapping, got {type(data).__name__}.")
+        return errors, warnings
+
+    for key, value in data.items():
+        if key in _CLOUD_INIT_LIST_KEYS and not isinstance(value, list):
+            errors.append(f"'{key}' must be a list, got {type(value).__name__}.")
+        elif key in _CLOUD_INIT_BOOL_KEYS and not isinstance(value, bool):
+            errors.append(f"'{key}' must be true/false, got {type(value).__name__}.")
+        elif key in _CLOUD_INIT_STR_KEYS and not isinstance(value, str):
+            errors.append(f"'{key}' must be a string, got {type(value).__name__}.")
+        elif key in _CLOUD_INIT_DICT_KEYS and not isinstance(value, dict):
+            errors.append(f"'{key}' must be a mapping, got {type(value).__name__}.")
+        elif key not in _CLOUD_INIT_KNOWN:
+            warnings.append(f"Unknown key '{key}' (may be valid for your cloud-init version).")
+
+    if "users" in data and isinstance(data["users"], list):
+        for i, u in enumerate(data["users"]):
+            if u == "default":
+                continue
+            if not isinstance(u, dict):
+                errors.append(f"users[{i}] must be a mapping.")
+            else:
+                if "name" not in u:
+                    errors.append(f"users[{i}] missing required 'name' field.")
+                sk = u.get("ssh_authorized_keys")
+                if sk is not None and not isinstance(sk, list):
+                    errors.append(f"users[{i}].ssh_authorized_keys must be a list.")
+
+    if "write_files" in data and isinstance(data["write_files"], list):
+        for i, f in enumerate(data["write_files"]):
+            if not isinstance(f, dict):
+                errors.append(f"write_files[{i}] must be a mapping.")
+            elif "path" not in f:
+                errors.append(f"write_files[{i}] missing required 'path' field.")
+
+    if "runcmd" in data and isinstance(data["runcmd"], list):
+        for i, cmd in enumerate(data["runcmd"]):
+            if not isinstance(cmd, (str, list)):
+                errors.append(f"runcmd[{i}] must be a string or list of strings.")
+
+    return errors, warnings
+
+
+def _get_storage_path(node: str, storage: str) -> str | None:
+    """Return the filesystem path of a Proxmox directory-type storage, or None."""
+    try:
+        proxmox = get_proxmox_connection(node, auto_renew=True)
+        storages = proxmox.storage.get()
+        cfg = next((s for s in storages if s.get("storage") == storage), {})
+        path = cfg.get("path", "")
+        return path if path else None
+    except Exception:
+        return None
+
+
+def _read_snippet(node: str, storage: str, filename: str, snippet_type: str = "user") -> str | None:
+    """Read snippet content: filesystem first, then in-memory cache."""
+    path = _get_storage_path(node, storage)
+    if path:
+        try:
+            fpath = os.path.join(path, "snippets", filename)
+            with open(fpath) as f:
+                return f.read()
+        except OSError:
+            pass
+    return _snippet_cache.get(f"{node}/{storage}/{snippet_type}")
+
+
+def _write_snippet(node: str, storage: str, filename: str, content: str, snippet_type: str = "user") -> None:
+    """Write snippet: filesystem if accessible, then Proxmox upload API."""
+    path = _get_storage_path(node, storage)
+    written_to_fs = False
+    if path:
+        try:
+            snippets_dir = os.path.join(path, "snippets")
+            os.makedirs(snippets_dir, exist_ok=True)
+            fpath = os.path.join(snippets_dir, filename)
+            with open(fpath, "w") as f:
+                f.write(content)
+            written_to_fs = True
+        except OSError:
+            pass
+
+    if not written_to_fs:
+        # Fall back to Proxmox storage upload API
+        meta = connection_metadata.get(node) or {}
+        host = meta.get("host")
+        if not host:
+            raise ValueError(f"No connection metadata for node {node}")
+        verify_ssl = meta.get("verify_ssl", True)
+        url = f"https://{host}:8006/api2/json/nodes/{node}/storage/{storage}/upload"
+        headers: dict = {}
+        if meta.get("token_name") and meta.get("token_value"):
+            headers["Authorization"] = (
+                f"PVEAPIToken={meta['user']}!{meta['token_name']}={meta['token_value']}"
+            )
+        else:
+            auth_resp = _http.post(
+                f"https://{host}:8006/api2/json/access/ticket",
+                data={"username": meta["user"], "password": meta.get("password", "")},
+                verify=verify_ssl,
+                timeout=30,
+            )
+            auth_resp.raise_for_status()
+            ticket_data = auth_resp.json()["data"]
+            headers["Cookie"] = f"PVEAuthCookie={ticket_data['ticket']}"
+            headers["CSRFPreventionToken"] = ticket_data["CSRFPreventionToken"]
+        resp = _http.post(
+            url,
+            headers=headers,
+            data={"content": "snippets"},
+            files={"filename": (filename, content.encode(), "application/octet-stream")},
+            verify=verify_ssl,
+            timeout=30,
+        )
+        resp.raise_for_status()
+
+    # Always update in-memory cache so reads work even without filesystem access
+    _snippet_cache[f"{node}/{storage}/{snippet_type}"] = content
+
+
+def _parse_cicustom(cicustom: str) -> dict:
+    """Parse 'user=local:snippets/f.yaml,network=...' into a dict."""
+    result: dict = {}
+    for part in (cicustom or "").split(","):
+        part = part.strip()
+        if "=" in part:
+            k, _, v = part.partition("=")
+            result[k.strip()] = v.strip()
+    return result
+
+
+def _build_cicustom(parts: dict) -> str:
+    return ",".join(f"{k}={v}" for k, v in parts.items() if v)
+
+
+# ---------------------------------------------------------------------------
+# Cloud-init API routes
+# ---------------------------------------------------------------------------
+
+@app.route("/api/node/<node>/storages/snippets")
+def api_node_snippet_storages(node):
+    """List storages on this node that have the snippets content type enabled."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        storages = proxmox.nodes(node).storage.get()
+        result = [
+            {"storage": s["storage"], "type": s.get("type", ""), "active": s.get("active", 1)}
+            for s in storages
+            if "snippets" in s.get("content", "").split(",")
+            and s.get("enabled", 1) != 0
+        ]
+        return jsonify(result)
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/cloudinit")
+def api_vm_cloudinit_get(node, vmid):
+    """Return all cloud-init related config for a QEMU VM."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        config = proxmox.nodes(node).qemu(vmid).config.get()
+        sshkeys_raw = config.get("sshkeys", "")
+        cicustom = config.get("cicustom", "")
+        ci_parts = _parse_cicustom(cicustom)
+
+        # Try to read user snippet content if attached
+        snippet_content = None
+        snippet_storage = ""
+        snippet_filename = ""
+        user_val = ci_parts.get("user", "")
+        if user_val and ":" in user_val:
+            snippet_storage, _, snippet_path = user_val.partition(":")
+            snippet_filename = snippet_path.split("/")[-1]
+            snippet_content = _read_snippet(node, snippet_storage, snippet_filename, "user")
+
+        return jsonify({
+            "ciuser": config.get("ciuser", ""),
+            "sshkeys": unquote(sshkeys_raw) if sshkeys_raw else "",
+            "nameserver": config.get("nameserver", ""),
+            "searchdomain": config.get("searchdomain", ""),
+            "ipconfig0": config.get("ipconfig0", ""),
+            "cicustom": cicustom,
+            "ci_parts": ci_parts,
+            "snippet_content": snippet_content,
+            "snippet_storage": snippet_storage,
+            "snippet_filename": snippet_filename,
+        })
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/cloudinit/native", methods=["PUT"])
+def api_vm_cloudinit_native(node, vmid):
+    """Update native Proxmox cloud-init fields (ciuser, sshkeys, nameserver, etc.)."""
+    data = request.get_json() or {}
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        params: dict = {}
+        if "ciuser" in data:
+            params["ciuser"] = data["ciuser"] or ""
+        if "sshkeys" in data:
+            raw = (data["sshkeys"] or "").strip()
+            params["sshkeys"] = quote(raw, safe="") if raw else ""
+        if "nameserver" in data:
+            params["nameserver"] = data["nameserver"] or ""
+        if "searchdomain" in data:
+            params["searchdomain"] = data["searchdomain"] or ""
+        if "ipconfig0" in data:
+            params["ipconfig0"] = data["ipconfig0"] or ""
+        if not params:
+            return jsonify({"error": "No fields to update"}), 400
+        proxmox.nodes(node).qemu(vmid).config.put(**params)
+        return jsonify({"success": True, "message": "Cloud-init settings saved."})
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/cloudinit/validate", methods=["POST"])
+def api_vm_cloudinit_validate(node, vmid):
+    """Validate cloud-init YAML content."""
+    data = request.get_json() or {}
+    content = data.get("content", "")
+    if not content:
+        return jsonify({"valid": False, "errors": ["Content is empty."], "warnings": []})
+    errors, warnings = _validate_cloud_init_yaml(content)
+    return jsonify({"valid": len(errors) == 0, "errors": errors, "warnings": warnings})
+
+
+@app.route("/api/vm/<node>/<vmid>/cloudinit/snippet", methods=["POST"])
+def api_vm_cloudinit_snippet_save(node, vmid):
+    """Save a cloud-init snippet to storage and attach it to the VM via cicustom."""
+    data = request.get_json() or {}
+    storage = data.get("storage", "")
+    filename = (data.get("filename") or f"{vmid}-user-data.yaml").strip()
+    content = data.get("content", "")
+    snippet_type = data.get("type", "user")
+
+    if not storage:
+        return jsonify({"error": "storage is required"}), 400
+    if not content:
+        return jsonify({"error": "content is required"}), 400
+    if not filename.endswith((".yaml", ".yml", ".cfg")):
+        filename += ".yaml"
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        _write_snippet(node, storage, filename, content, snippet_type)
+        volid = f"{storage}:snippets/{filename}"
+
+        # Merge into existing cicustom
+        config = proxmox.nodes(node).qemu(vmid).config.get()
+        ci_parts = _parse_cicustom(config.get("cicustom", ""))
+        ci_parts[snippet_type] = volid
+        proxmox.nodes(node).qemu(vmid).config.put(cicustom=_build_cicustom(ci_parts))
+
+        return jsonify({
+            "success": True,
+            "message": f"Snippet saved and attached as {snippet_type} ({volid}).",
+            "volid": volid,
+            "cicustom": _build_cicustom(ci_parts),
+        })
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/cloudinit/snippet", methods=["DELETE"])
+def api_vm_cloudinit_snippet_detach(node, vmid):
+    """Detach a cloud-init snippet type from the VM's cicustom config."""
+    data = request.get_json() or {}
+    snippet_type = data.get("type", "user")
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        config = proxmox.nodes(node).qemu(vmid).config.get()
+        ci_parts = _parse_cicustom(config.get("cicustom", ""))
+        if snippet_type not in ci_parts:
+            return jsonify({"error": f"No {snippet_type} snippet attached"}), 400
+        del ci_parts[snippet_type]
+        new_cicustom = _build_cicustom(ci_parts)
+        if new_cicustom:
+            proxmox.nodes(node).qemu(vmid).config.put(cicustom=new_cicustom)
+        else:
+            proxmox.nodes(node).qemu(vmid).config.put(delete="cicustom")
+        _snippet_cache.pop(f"{node}/{data.get('storage', '')}/user", None)
+        return jsonify({"success": True, "message": f"{snippet_type} snippet detached."})
+    except Exception as e:
+        return _proxmox_error_response(e)
 
 
 @app.route("/api/vm/<node>/<vmid>/agent", methods=["PUT"])

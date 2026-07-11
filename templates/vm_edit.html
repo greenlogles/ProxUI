@@ -500,6 +500,165 @@
 </div>
 {% endif %}
 
+{% if vm_type != 'lxc' %}
+<!-- Cloud-Init -->
+<div class="row justify-content-center mt-3"
+     x-data="cloudInit('{{ node }}', '{{ vm.vmid }}', {{ vm.name | tojson }})">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-cloud-fill"></i> Cloud-Init</h5>
+                <span x-show="loading" class="spinner-border spinner-border-sm text-secondary"></span>
+            </div>
+            <div class="card-body">
+                <ul class="nav nav-tabs mb-3">
+                    <li class="nav-item">
+                        <a class="nav-link" :class="{active: tab==='native'}" href="#"
+                           @click.prevent="tab='native'">
+                            <i class="bi bi-sliders"></i> Native Settings
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" :class="{active: tab==='snippet'}" href="#"
+                           @click.prevent="tab='snippet'; initSnippetTab()">
+                            <i class="bi bi-file-code"></i> Custom Snippet
+                            <span x-show="cicustom" class="badge bg-success ms-1" style="font-size:.7em;">attached</span>
+                        </a>
+                    </li>
+                </ul>
+
+                <!-- Native Settings -->
+                <div x-show="tab==='native'">
+                    <div class="row g-3">
+                        <div class="col-sm-6">
+                            <label class="form-label small fw-semibold">Default User</label>
+                            <input type="text" class="form-control form-control-sm" x-model="ciuser"
+                                   placeholder="e.g. ubuntu">
+                        </div>
+                        <div class="col-sm-6">
+                            <label class="form-label small fw-semibold">Nameserver</label>
+                            <input type="text" class="form-control form-control-sm" x-model="nameserver"
+                                   placeholder="8.8.8.8 1.1.1.1">
+                        </div>
+                        <div class="col-sm-6">
+                            <label class="form-label small fw-semibold">Search Domain</label>
+                            <input type="text" class="form-control form-control-sm" x-model="searchdomain"
+                                   placeholder="example.com">
+                        </div>
+                        <div class="col-sm-6">
+                            <label class="form-label small fw-semibold">IP Config (ipconfig0)</label>
+                            <input type="text" class="form-control form-control-sm" x-model="ipconfig0"
+                                   placeholder="ip=dhcp  or  ip=10.0.0.10/24,gw=10.0.0.1">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label small fw-semibold">
+                                SSH Authorized Keys <span class="text-muted fw-normal">(one per line)</span>
+                            </label>
+                            <textarea class="form-control form-control-sm font-monospace" rows="4"
+                                      x-model="sshkeys" placeholder="ssh-rsa AAAA..."></textarea>
+                        </div>
+                    </div>
+                    <div class="mt-3 d-flex gap-2 align-items-center">
+                        <button class="btn btn-sm btn-primary" @click="saveNative()" :disabled="nativeBusy">
+                            <span x-show="nativeBusy" class="spinner-border spinner-border-sm me-1"></span>
+                            <i x-show="!nativeBusy" class="bi bi-floppy"></i> Save Settings
+                        </button>
+                    </div>
+                    <div x-show="nativeError" class="alert alert-danger py-2 small mt-2 mb-0" x-text="nativeError"></div>
+                    <div x-show="nativeSuccess" class="alert alert-success py-2 small mt-2 mb-0" x-text="nativeSuccess"></div>
+                </div>
+
+                <!-- Custom Snippet -->
+                <div x-show="tab==='snippet'">
+                    <div x-show="cicustom" class="alert alert-info py-2 small d-flex align-items-center gap-2 mb-3">
+                        <i class="bi bi-paperclip"></i>
+                        <span><strong>Attached:</strong> <code x-text="cicustom"></code></span>
+                        <button class="btn btn-sm btn-outline-danger py-0 ms-auto"
+                                @click="detachSnippet()" :disabled="snippetBusy">Detach</button>
+                    </div>
+
+                    <div class="row g-2 mb-3">
+                        <div class="col-sm-4">
+                            <label class="form-label small fw-semibold">Template</label>
+                            <select class="form-select form-select-sm" x-model="template"
+                                    @change="applyTemplate()">
+                                <option value="">— blank —</option>
+                                <option value="generic">Generic / Base</option>
+                                <option value="ubuntu">Ubuntu / Debian</option>
+                                <option value="rhel">RHEL / CentOS / Rocky</option>
+                                <option value="freebsd">FreeBSD</option>
+                            </select>
+                        </div>
+                        <div class="col-sm-4">
+                            <label class="form-label small fw-semibold">Storage</label>
+                            <select class="form-select form-select-sm" x-model="snippetStorage">
+                                <option value="">— select storage —</option>
+                                <template x-for="s in snippetStorages" :key="s.storage">
+                                    <option :value="s.storage" x-text="s.storage + (s.type ? ' (' + s.type + ')' : '')"></option>
+                                </template>
+                            </select>
+                        </div>
+                        <div class="col-sm-4">
+                            <label class="form-label small fw-semibold">Filename</label>
+                            <input type="text" class="form-control form-control-sm font-monospace"
+                                   x-model="snippetFilename">
+                        </div>
+                    </div>
+
+                    <textarea class="form-control font-monospace" rows="18"
+                              x-model="snippetContent"
+                              placeholder="#cloud-config&#10;hostname: myvm&#10;..."
+                              style="font-size: 0.8rem; resize: vertical; tab-size: 2;"></textarea>
+
+                    <!-- Validation results -->
+                    <div x-show="validateResult" class="mt-2">
+                        <div x-show="validateResult && validateResult.valid && !validateResult.warnings.length"
+                             class="alert alert-success py-2 small mb-0">
+                            <i class="bi bi-check-circle"></i> Valid cloud-init config.
+                        </div>
+                        <div x-show="validateResult && validateResult.errors.length"
+                             class="alert alert-danger py-2 small mb-0">
+                            <strong><i class="bi bi-x-circle"></i> Errors:</strong>
+                            <ul class="mb-0 ps-3 mt-1">
+                                <template x-for="e in (validateResult ? validateResult.errors : [])" :key="e">
+                                    <li x-text="e"></li>
+                                </template>
+                            </ul>
+                        </div>
+                        <div x-show="validateResult && validateResult.warnings.length"
+                             class="alert alert-warning py-2 small mt-1 mb-0">
+                            <strong><i class="bi bi-exclamation-triangle"></i> Warnings:</strong>
+                            <ul class="mb-0 ps-3 mt-1">
+                                <template x-for="w in (validateResult ? validateResult.warnings : [])" :key="w">
+                                    <li x-text="w"></li>
+                                </template>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="mt-3 d-flex gap-2 align-items-center flex-wrap">
+                        <button class="btn btn-sm btn-outline-secondary"
+                                @click="validateSnippet()"
+                                :disabled="validating || !snippetContent.trim()">
+                            <span x-show="validating" class="spinner-border spinner-border-sm me-1"></span>
+                            <i x-show="!validating" class="bi bi-check2-square"></i> Validate
+                        </button>
+                        <button class="btn btn-sm btn-primary"
+                                @click="saveSnippet()"
+                                :disabled="snippetBusy || !snippetContent.trim() || !snippetStorage">
+                            <span x-show="snippetBusy" class="spinner-border spinner-border-sm me-1"></span>
+                            <i x-show="!snippetBusy" class="bi bi-floppy"></i> Save &amp; Attach
+                        </button>
+                    </div>
+                    <div x-show="snippetError" class="alert alert-danger py-2 small mt-2 mb-0" x-text="snippetError"></div>
+                    <div x-show="snippetSuccess" class="alert alert-success py-2 small mt-2 mb-0" x-text="snippetSuccess"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 {% if vm_type == 'lxc' %}
 <div x-data="lxcAdvanced('{{ node }}', '{{ vm.vmid }}')">
 
@@ -2557,6 +2716,230 @@ document.addEventListener('DOMContentLoaded', function() {
     
 });
 </script>
+{% if vm_type != 'lxc' %}
+<script type="module">
+import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
+
+const _CI_TEMPLATES = {
+  generic: (h, k) => `#cloud-config
+hostname: ${h}
+manage_etc_hosts: true
+
+users:
+  - name: admin
+    groups: [sudo, wheel]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+${k}
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - wget
+  - git
+`,
+  ubuntu: (h, k) => `#cloud-config
+hostname: ${h}
+manage_etc_hosts: true
+
+users:
+  - name: ubuntu
+    groups: [sudo, adm]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+${k}
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - wget
+  - git
+  - vim
+  - ufw
+
+runcmd:
+  - ufw allow OpenSSH
+  - ufw --force enable
+`,
+  rhel: (h, k) => `#cloud-config
+hostname: ${h}
+manage_etc_hosts: true
+
+users:
+  - name: centos
+    groups: [wheel, adm]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+${k}
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - wget
+  - git
+  - vim
+
+runcmd:
+  - systemctl enable --now sshd
+  - firewall-cmd --permanent --add-service=ssh
+  - firewall-cmd --reload
+`,
+  freebsd: (h, k) => `#cloud-config
+hostname: ${h}
+manage_etc_hosts: true
+
+users:
+  - name: freebsd
+    groups: wheel
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/sh
+    ssh_authorized_keys:
+${k}
+
+packages:
+  - curl
+  - wget
+  - git
+  - vim
+
+runcmd:
+  - sysrc sshd_enable="YES"
+  - service sshd start
+`,
+};
+
+function cloudInit(node, vmid, vmName) {
+  return {
+    tab: 'native',
+    loading: false,
+    // Native fields pre-populated from server-rendered config
+    ciuser: {{ config.get('ciuser', '') | tojson }},
+    sshkeys: {{ ci_sshkeys | tojson }},
+    nameserver: {{ config.get('nameserver', '') | tojson }},
+    searchdomain: {{ config.get('searchdomain', '') | tojson }},
+    ipconfig0: {{ config.get('ipconfig0', '') | tojson }},
+    nativeBusy: false, nativeError: '', nativeSuccess: '',
+    // Snippet fields
+    cicustom: {{ config.get('cicustom', '') | tojson }},
+    snippetStorages: [], snippetStorage: '', snippetStoragesLoaded: false,
+    snippetFilename: `${vmid}-user-data.yaml`,
+    snippetContent: '',
+    template: '',
+    validating: false, validateResult: null,
+    snippetBusy: false, snippetError: '', snippetSuccess: '',
+
+    async initSnippetTab() {
+      if (!this.snippetStoragesLoaded) {
+        try {
+          this.snippetStorages = await ProxUtils.apiJson(`/api/node/${node}/storages/snippets`);
+          if (this.snippetStorages.length === 1) this.snippetStorage = this.snippetStorages[0].storage;
+          this.snippetStoragesLoaded = true;
+        } catch(e) { this.snippetError = e.message; }
+      }
+      // Load existing snippet content if attached and not yet loaded
+      if (this.cicustom && !this.snippetContent) {
+        try {
+          const ci = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/cloudinit`);
+          if (ci.snippet_content) {
+            this.snippetContent = ci.snippet_content;
+            if (ci.snippet_storage && !this.snippetStorage) this.snippetStorage = ci.snippet_storage;
+            if (ci.snippet_filename) this.snippetFilename = ci.snippet_filename;
+          }
+        } catch(_) {}
+      }
+    },
+
+    applyTemplate() {
+      if (!this.template) return;
+      const fn = _CI_TEMPLATES[this.template];
+      if (!fn) return;
+      const keyLines = (this.sshkeys || '').trim().split('\n')
+        .filter(k => k.trim())
+        .map(k => `      - ${k.trim()}`)
+        .join('\n');
+      this.snippetContent = fn(vmName, keyLines || '      # no SSH keys configured');
+      this.validateResult = null;
+    },
+
+    async saveNative() {
+      this.nativeBusy = true; this.nativeError = ''; this.nativeSuccess = '';
+      try {
+        const data = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/cloudinit/native`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ciuser: this.ciuser, sshkeys: this.sshkeys,
+            nameserver: this.nameserver, searchdomain: this.searchdomain,
+            ipconfig0: this.ipconfig0,
+          }),
+        });
+        this.nativeSuccess = data.message;
+      } catch(e) { this.nativeError = e.message || 'Request failed'; }
+      finally { this.nativeBusy = false; }
+    },
+
+    async validateSnippet() {
+      this.validating = true; this.validateResult = null;
+      try {
+        this.validateResult = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/cloudinit/validate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: this.snippetContent }),
+        });
+      } catch(e) {
+        this.validateResult = { valid: false, errors: [e.message], warnings: [] };
+      } finally { this.validating = false; }
+    },
+
+    async saveSnippet() {
+      this.snippetBusy = true; this.snippetError = ''; this.snippetSuccess = '';
+      try {
+        const data = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/cloudinit/snippet`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storage: this.snippetStorage, filename: this.snippetFilename,
+            content: this.snippetContent, type: 'user',
+          }),
+        });
+        this.cicustom = data.cicustom;
+        this.snippetSuccess = data.message;
+        this.validateResult = null;
+      } catch(e) { this.snippetError = e.message || 'Request failed'; }
+      finally { this.snippetBusy = false; }
+    },
+
+    async detachSnippet() {
+      if (!confirm('Detach this snippet from the VM? The file will NOT be deleted.')) return;
+      this.snippetBusy = true; this.snippetError = ''; this.snippetSuccess = '';
+      try {
+        const data = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/cloudinit/snippet`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'user' }),
+        });
+        this.cicustom = '';
+        this.snippetSuccess = data.message;
+      } catch(e) { this.snippetError = e.message || 'Request failed'; }
+      finally { this.snippetBusy = false; }
+    },
+  };
+}
+
+(function(){ function reg(){ window.Alpine.data('cloudInit', cloudInit); }
+  if(window.Alpine) reg(); else document.addEventListener('alpine:init', reg); })();
+</script>
+{% endif %}
+
 {% if vm_type == 'lxc' %}
 <script type="module">
   import { lxcAdvanced } from "{{ url_for('static', filename='js/lxc-advanced.js') }}";
