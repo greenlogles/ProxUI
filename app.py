@@ -5955,6 +5955,35 @@ def not_found(error):
     return render_template("404.html"), 404
 
 
+@app.route("/api/vm/<node>/<vmid>/agent", methods=["PUT"])
+def api_vm_agent(node, vmid):
+    """Enable or disable the QEMU guest agent, preserving any existing agent options."""
+    data = request.get_json()
+    if data is None or "enabled" not in data:
+        return jsonify({"error": "enabled field is required"}), 400
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).qemu(vmid).config.get()
+        current = str(config.get("agent", "0"))
+        # Preserve any key=value options that follow the enabled flag
+        parts = current.split(",")
+        extra = [p for p in parts[1:] if p.strip()]
+        flag = "1" if data["enabled"] else "0"
+        agent_val = ",".join([flag] + extra) if extra else flag
+        proxmox.nodes(node).qemu(vmid).config.put(agent=agent_val)
+        state = "enabled" if data["enabled"] else "disabled"
+        return jsonify({
+            "success": True,
+            "message": f"Guest agent {state}. Takes effect on next VM start.",
+        })
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
 @app.route("/api/vm/<node>/<vmid>/reset-password", methods=["POST"])
 def api_vm_reset_password(node, vmid):
     """Reset root password: LXC via pct exec, QEMU via guest agent with cipassword fallback."""

@@ -439,6 +439,67 @@
     </div>
 </div>
 
+{% if vm_type != 'lxc' %}
+{% set _agent_str = config.get('agent', '0') | string %}
+{% set _agent_enabled = _agent_str.startswith('1') or 'enabled=1' in _agent_str %}
+<div class="row justify-content-center mt-3"
+     x-data="{
+       enabled: {{ 'true' if _agent_enabled else 'false' }},
+       busy: false, error: '', success: '',
+       init() {
+         this.$watch('enabled', () => this.toggle());
+       },
+       async toggle() {
+         this.busy = true;
+         this.error = ''; this.success = '';
+         try {
+           const data = await window.ProxUtils.apiJson('/api/vm/{{ node }}/{{ vm.vmid }}/agent', {
+             method: 'PUT',
+             headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ enabled: this.enabled }),
+           });
+           this.success = data.message;
+         } catch(e) {
+           this.enabled = !this.enabled;
+           this.error = e.message || 'Request failed';
+         } finally {
+           this.busy = false;
+         }
+       }
+     }">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-cpu"></i> QEMU Guest Agent</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-3">
+                    Enables improved guest integration: graceful shutdown, IP reporting,
+                    file system freeze, and in-guest password reset.
+                    Requires <code>qemu-guest-agent</code> installed in the guest OS.
+                </p>
+                <div class="d-flex align-items-center gap-3">
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" role="switch"
+                               id="agentToggle" x-model="enabled" :disabled="busy"
+                               style="width: 3em; height: 1.5em; cursor: pointer;">
+                        <label class="form-check-label ms-2" for="agentToggle" style="cursor: pointer;">
+                            <span x-show="enabled" class="text-success fw-semibold">Enabled</span>
+                            <span x-show="!enabled" class="text-muted">Disabled</span>
+                        </label>
+                    </div>
+                    <span x-show="busy" class="spinner-border spinner-border-sm text-secondary"></span>
+                </div>
+                <div x-show="error" class="alert alert-danger py-2 small mt-2 mb-0" x-text="error"></div>
+                <div x-show="success" class="alert alert-success py-2 small mt-2 mb-0">
+                    <i class="bi bi-info-circle"></i> <span x-text="success"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 {% if vm_type == 'lxc' %}
 <div x-data="lxcAdvanced('{{ node }}', '{{ vm.vmid }}')">
 
