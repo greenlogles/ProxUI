@@ -6969,6 +6969,28 @@ def api_vm_cloudinit_get(node, vmid):
         return _proxmox_error_response(e)
 
 
+@app.route("/api/vm/<node>/<vmid>/cloudinit/regenerate", methods=["POST"])
+def api_vm_cloudinit_regenerate(node, vmid):
+    """Regenerate the VM's cloud-init drive from its current config (qm cloudinit update).
+
+    Refreshes the small cidata disk without a stop/start. Note: an
+    already-provisioned guest still won't re-run per-instance modules until
+    'cloud-init clean' + reboot inside the guest.
+    """
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        proxmox.nodes(node).qemu(vmid).cloudinit.put()
+        return jsonify({
+            "success": True,
+            "message": "Cloud-init drive regenerated. Reboot the VM to apply; an "
+                       "already-provisioned guest may also need 'cloud-init clean' first.",
+        })
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
 @app.route("/api/vm/<node>/<vmid>/cloudinit/native", methods=["PUT"])
 def api_vm_cloudinit_native(node, vmid):
     """Update native Proxmox cloud-init fields (ciuser, sshkeys, nameserver, etc.)."""

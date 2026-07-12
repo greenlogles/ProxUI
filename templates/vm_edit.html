@@ -509,7 +509,14 @@
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0"><i class="bi bi-cloud-fill"></i> Cloud-Init</h5>
-                <span x-show="loading" class="spinner-border spinner-border-sm text-secondary"></span>
+                <div class="d-flex align-items-center gap-2">
+                    <span x-show="loading" class="spinner-border spinner-border-sm text-secondary"></span>
+                    <button class="btn btn-sm btn-outline-secondary" @click="regenerate()" :disabled="regenBusy"
+                            title="Regenerate the cloud-init drive from the current config (qm cloudinit update). Reboot the VM to apply — an already-provisioned guest may also need 'cloud-init clean' inside it first.">
+                        <span x-show="regenBusy" class="spinner-border spinner-border-sm me-1"></span>
+                        <i x-show="!regenBusy" class="bi bi-arrow-clockwise"></i> Regenerate drive
+                    </button>
+                </div>
             </div>
             <div class="card-body">
                 <ul class="nav nav-tabs mb-3">
@@ -2963,6 +2970,7 @@ function cloudInit(node, vmid) {
     validating: false, validateResult: null,
     snippetBusy: false, snippetError: '', snippetSuccess: '',
     pwUser: 'root', pwPassword: '',
+    regenBusy: false,
     // Access / storage setup
     ssh: { checked: false, sftp_ok: false, root_pam: false, pubkey: '' },
     showSetup: false, showPubkey: false, rootPassword: '',
@@ -3169,6 +3177,19 @@ function cloudInit(node, vmid) {
         this.snippetSuccess = data.message;
       } catch(e) { this.snippetError = e.message || 'Request failed'; }
       finally { this.snippetBusy = false; }
+    },
+
+    async regenerate() {
+      if (!confirm('Regenerate the cloud-init drive from the current config?\n\n' +
+                   'Reboot the VM afterwards to apply. An already-provisioned guest may ' +
+                   'also need "cloud-init clean" run inside it before the reboot.')) return;
+      this.regenBusy = true;
+      try {
+        const data = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/cloudinit/regenerate`, { method: 'POST' });
+        ProxUtils.notify(data.message || 'Cloud-init drive regenerated.', 'success');
+      } catch(e) {
+        ProxUtils.notify(e.message || 'Failed to regenerate cloud-init drive', 'error');
+      } finally { this.regenBusy = false; }
     },
   };
 }
