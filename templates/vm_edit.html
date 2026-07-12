@@ -530,16 +530,18 @@
 
                 <!-- Native Settings -->
                 <div x-show="tab==='native'">
-                    <div x-show="hasUserSnippet" class="alert alert-warning py-2 small d-flex align-items-start gap-2 mb-3">
-                        <i class="bi bi-exclamation-triangle-fill mt-1"></i>
-                        <div>
-                            A custom <strong>user</strong> snippet is attached, so Proxmox ignores the
-                            native <strong>Default User</strong>, <strong>password</strong> and
-                            <strong>SSH keys</strong> — those are managed by the snippet.
-                            Set them in the <a href="#" @click.prevent="tab='snippet'">Custom Snippet</a> tab instead.
-                            Network settings below still apply.
+                    <template x-if="hasUserSnippet">
+                        <div class="alert alert-warning py-2 small d-flex align-items-start gap-2 mb-3">
+                            <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+                            <div>
+                                A custom <strong>user</strong> snippet is attached, so Proxmox ignores the
+                                native <strong>Default User</strong>, <strong>password</strong> and
+                                <strong>SSH keys</strong> — those are managed by the snippet.
+                                Set them in the <a href="#" @click.prevent="tab='snippet'">Custom Snippet</a> tab instead.
+                                Network settings below still apply.
+                            </div>
                         </div>
-                    </div>
+                    </template>
                     <div class="row g-3">
                         <div class="col-sm-6">
                             <label class="form-label small fw-semibold">Default User</label>
@@ -586,12 +588,14 @@
 
                 <!-- Custom Snippet -->
                 <div x-show="tab==='snippet'">
-                    <div x-show="cicustom" class="alert alert-info py-2 small d-flex align-items-center gap-2 mb-3">
-                        <i class="bi bi-paperclip"></i>
-                        <span><strong>Attached:</strong> <code x-text="cicustom"></code></span>
-                        <button class="btn btn-sm btn-outline-danger py-0 ms-auto"
-                                @click="detachSnippet()" :disabled="snippetBusy">Detach</button>
-                    </div>
+                    <template x-if="cicustom">
+                        <div class="alert alert-info py-2 small d-flex align-items-center gap-2 mb-3">
+                            <i class="bi bi-paperclip"></i>
+                            <span><strong>Attached:</strong> <code x-text="cicustom"></code></span>
+                            <button class="btn btn-sm btn-outline-danger py-0 ms-auto"
+                                    @click="detachSnippet()" :disabled="snippetBusy">Detach</button>
+                        </div>
+                    </template>
 
                     <div class="row g-2 mb-3">
                         <div class="col-sm-4">

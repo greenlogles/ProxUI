@@ -101,24 +101,39 @@ export function clusterSwitcher(currentId, currentName, knownIds) {
     init() {
       let saved = null;
       try { saved = localStorage.getItem("selectedClusterId"); } catch (_) {}
-      if (saved && saved !== this.currentId) {
-        if (this.knownIds.includes(saved)) {
-          this.switchTo(saved);
-        } else {
-          // The remembered cluster is gone — clear it and let the user re-pick.
-          try {
-            localStorage.removeItem("selectedClusterId");
-            localStorage.removeItem("selectedClusterName");
-          } catch (_) {}
-          if (this.knownIds.length > 0) this.staleOpen = true;
-        }
+      if (!saved || saved === this.currentId) return;   // already on the saved cluster
+
+      if (!this.knownIds.includes(saved)) {
+        // The remembered cluster is gone — clear it and let the user re-pick.
+        try {
+          localStorage.removeItem("selectedClusterId");
+          localStorage.removeItem("selectedClusterName");
+        } catch (_) {}
+        if (this.knownIds.length > 0) this.staleOpen = true;
+        return;
       }
+
+      // One-shot guard: auto-restore the saved cluster at most once per tab
+      // session. If the switch doesn't "stick" server-side (shared global reset,
+      // flaky node), this prevents an endless switch→reload loop that would
+      // leave the blocking overlay stuck on screen. Manual switches are exempt.
+      let attempted = null;
+      try { attempted = sessionStorage.getItem("clusterAutoSwitched"); } catch (_) {}
+      if (attempted === saved) return;
+      try { sessionStorage.setItem("clusterAutoSwitched", saved); } catch (_) {}
+      this.switchTo(saved, null, true);
     },
 
-    async switchTo(clusterId, clusterName = null) {
-      this.switching = true;
-      this.switchingText = "Switching to cluster...";
-      this.currentName = clusterName || "Switching…";
+    // `auto` marks an on-load auto-restore (vs. an explicit user click).
+    // Auto-restore runs quietly (no blocking overlay): the user is already
+    // seeing valid data, so a slow/failed reconnect must not freeze the UI —
+    // it just reloads on success, or stays on the current cluster on failure.
+    async switchTo(clusterId, clusterName = null, auto = false) {
+      if (!auto) {
+        this.switching = true;
+        this.switchingText = "Switching to cluster…";
+        this.currentName = clusterName || "Switching…";
+      }
       try {
         const data = await ProxUtils.apiJson(`/api/switch-cluster/${clusterId}`, { method: "POST" });
         if (data.success) {
@@ -126,16 +141,21 @@ export function clusterSwitcher(currentId, currentName, knownIds) {
             localStorage.setItem("selectedClusterId", clusterId);
             localStorage.setItem("selectedClusterName", data.cluster.name);
           } catch (_) {}
-          ProxUtils.notify(`Switched to ${data.cluster.name}`, "success");
-          setTimeout(() => window.location.reload(), 800);
+          if (!auto) ProxUtils.notify(`Switched to ${data.cluster.name}`, "success");
+          setTimeout(() => window.location.reload(), auto ? 200 : 800);
         } else {
           this.switching = false;
-          ProxUtils.notify(data.error || "Failed to switch cluster", "error");
+          if (!auto) ProxUtils.notify(data.error || "Failed to switch cluster", "error");
         }
       } catch (e) {
         this.switching = false;
-        ProxUtils.notify("Network error while switching cluster", "error");
+        if (!auto) ProxUtils.notify("Network error while switching cluster", "error");
       }
+    },
+
+    // Escape hatch so a slow/hung switch can never permanently trap the UI.
+    cancelSwitch() {
+      this.switching = false;
     },
   };
 }

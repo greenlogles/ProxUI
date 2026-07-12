@@ -164,7 +164,7 @@
                                                     <div x-show="job.status === 'running'" class="progress mt-1" style="height: 4px;">
                                                         <div class="progress-bar progress-bar-striped progress-bar-animated" :style="'width: ' + job.progress + '%'"></div>
                                                     </div>
-                                                    <small x-show="job.error" class="text-danger d-block mt-1">
+                                                    <small x-show="job.error" class="text-danger mt-1" style="display: block;">
                                                         <i class="bi bi-exclamation-triangle"></i> <span x-text="errorSnippet(job)"></span>
                                                     </small>
                                                 </div>
@@ -260,14 +260,19 @@
                             </li>
                         </ul>
 
-                        <!-- Cluster switching overlay + stale-cluster prompt (Alpine-controlled) -->
-                        <div x-show="switching" x-cloak class="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center"
-                             style="background: rgba(0,0,0,.5); z-index: 9999;">
-                            <div class="bg-white rounded p-4 text-center">
-                                <div class="spinner-border text-primary mb-2" role="status"></div>
-                                <div x-text="switchingText">Switching…</div>
+                        <!-- Cluster switching overlay + stale-cluster prompt (Alpine-controlled).
+                             x-if (not x-show) because the overlay uses d-flex, whose
+                             `display: flex !important` would defeat x-show's inline display:none. -->
+                        <template x-if="switching">
+                            <div class="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center"
+                                 style="background: rgba(0,0,0,.5); z-index: 9999;">
+                                <div class="bg-white rounded p-4 text-center">
+                                    <div class="spinner-border text-primary mb-2" role="status"></div>
+                                    <div x-text="switchingText">Switching…</div>
+                                    <button class="btn btn-sm btn-outline-secondary mt-3" @click="cancelSwitch()">Cancel</button>
+                                </div>
                             </div>
-                        </div>
+                        </template>
                         <div class="modal fade" :class="{ show: staleOpen }" tabindex="-1"
                              style="display: none;" :style="staleOpen ? 'display:block; background:rgba(0,0,0,.5)' : ''" x-show="staleOpen">
                             <div class="modal-dialog">
