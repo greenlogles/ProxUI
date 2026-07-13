@@ -2865,9 +2865,16 @@ def cluster():
 def api_nodes():
     """API endpoint to get all cluster nodes"""
     nodes = []
+    seen = set()
     for node_info in cluster_nodes:
+        name = node_info["name"]
+        # Guard against duplicate/blank node names reaching the UI: a duplicate
+        # key crashes Alpine's keyed x-for and blanks the whole page.
+        if not name or name in seen:
+            continue
+        seen.add(name)
         nodes.append(
-            {"name": node_info["name"], "status": node_info.get("status", "unknown")}
+            {"name": name, "status": node_info.get("status", "unknown")}
         )
     # Sort nodes alphabetically by name
     nodes.sort(key=lambda x: x["name"])

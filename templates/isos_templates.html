@@ -25,7 +25,7 @@
 
   <!-- Node Tabs -->
   <ul class="nav nav-tabs mb-4" id="nodeTab" role="tablist" x-show="!loading && nodes.length > 0">
-    <template x-for="(node, idx) in nodes" :key="node.name">
+    <template x-for="(node, idx) in nodes" :key="idx">
       <li class="nav-item" role="presentation">
         <button class="nav-link" :class="idx === 0 && 'active'"
                 :id="'node-tab-' + node.name"
@@ -41,7 +41,7 @@
   </ul>
 
   <div class="tab-content" id="nodeTabContent" x-show="!loading && nodes.length > 0">
-    <template x-for="(node, idx) in nodes" :key="node.name">
+    <template x-for="(node, idx) in nodes" :key="idx">
       <div class="tab-pane fade"
            :class="idx === 0 ? 'show active' : ''"
            :id="'node-content-' + node.name"
