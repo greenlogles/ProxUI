@@ -2867,6 +2867,10 @@ packages:
   - curl
   - wget
   - git
+  - qemu-guest-agent
+
+runcmd:
+  - systemctl enable --now qemu-guest-agent
 `,
   ubuntu: (h, k) => `#cloud-config
 hostname: ${h}
@@ -2888,11 +2892,10 @@ packages:
   - wget
   - git
   - vim
-  - ufw
+  - qemu-guest-agent
 
 runcmd:
-  - ufw allow OpenSSH
-  - ufw --force enable
+  - systemctl enable --now qemu-guest-agent
 `,
   rhel: (h, k) => `#cloud-config
 hostname: ${h}
@@ -2914,9 +2917,11 @@ packages:
   - wget
   - git
   - vim
+  - qemu-guest-agent
 
 runcmd:
   - systemctl enable --now sshd
+  - systemctl enable --now qemu-guest-agent
   - firewall-cmd --permanent --add-service=ssh
   - firewall-cmd --reload
 `,
@@ -2937,10 +2942,13 @@ packages:
   - wget
   - git
   - vim
+  - qemu-guest-agent
 
 runcmd:
   - sysrc sshd_enable="YES"
   - service sshd start
+  - sysrc qemu_guest_agent_enable="YES"
+  - service qemu-guest-agent start
 `,
 };
 
