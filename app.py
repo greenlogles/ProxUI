@@ -4117,6 +4117,36 @@ def api_vm_metrics(node, vmid):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/vm/<node>/<vmid>/status")
+def api_vm_status(node, vmid):
+    """Lightweight current-status endpoint for live polling on the detail page."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        vm_type = "qemu"
+        try:
+            proxmox.nodes(node).qemu(vmid).config.get()
+            status = proxmox.nodes(node).qemu(vmid).status.current.get()
+        except Exception:
+            vm_type = "lxc"
+            status = proxmox.nodes(node).lxc(vmid).status.current.get()
+
+        return jsonify(
+            {
+                "status": status.get("status", "unknown"),
+                "uptime": status.get("uptime", 0),
+                "cpu": status.get("cpu", 0),
+                "mem": status.get("mem", 0),
+                "maxmem": status.get("maxmem", 0),
+                "vm_type": vm_type,
+            }
+        )
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
 # VM Configuration API
 @app.route("/api/vm/<node>/<vmid>/config", methods=["GET", "PUT"])
 def api_vm_config(node, vmid):

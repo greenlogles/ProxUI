@@ -3,6 +3,15 @@
 {% block title %}{{ config.name or ('Container' if vm_type == 'lxc' else 'VM') }} ({{ vmid }}) - Proxmox Manager{% endblock %}
 
 {% block content %}
+<!-- vmStatus wraps the header actions + status bar so both react to the live
+     status polled every 5s (data-* attrs seed the initial values). -->
+<div x-data="vmStatus"
+     data-node="{{ node }}" data-vmid="{{ vmid }}"
+     data-status="{{ status.status }}"
+     data-uptime="{{ status.uptime or 0 }}"
+     data-cpu="{{ status.cpu or 0 }}"
+     data-mem="{{ status.mem or 0 }}"
+     data-maxmem="{{ status.maxmem or 0 }}">
 <div class="row">
     <div class="col-12">
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -14,37 +23,46 @@
                 <p class="text-muted mb-0">{{ vm_type|upper }} {{ vmid }} on {{ node }}</p>
             </div>
             <div class="d-flex flex-wrap gap-2 align-items-center">
-                <!-- Power Actions -->
+                <!-- Power Actions — all forms present; visibility flips with the live
+                     status (:class object syntax; Jinja sets the initial class). -->
                 <div class="btn-group" role="group">
-                    {% if status.status == 'stopped' %}
-                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='start') }}" class="d-inline">
+                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='start') }}"
+                          class="d-inline {{ '' if status.status == 'stopped' else 'd-none' }}"
+                          :class="{ 'd-none': !isStopped }">
                         <button type="submit" class="btn btn-success">
                             <i class="bi bi-play-fill"></i> Start
                         </button>
                     </form>
-                    {% else %}
-                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='shutdown') }}" class="d-inline">
+                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='shutdown') }}"
+                          class="d-inline {{ 'd-none' if status.status == 'stopped' else '' }}"
+                          :class="{ 'd-none': isStopped }">
                         <button type="submit" class="btn btn-warning">
                             <i class="bi bi-power"></i> Shutdown
                         </button>
                     </form>
-                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='stop') }}" class="d-inline">
+                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='stop') }}"
+                          class="d-inline {{ 'd-none' if status.status == 'stopped' else '' }}"
+                          :class="{ 'd-none': isStopped }">
                         <button type="submit" class="btn btn-danger" onclick="return confirm('Force stop {{ 'container' if vm_type == 'lxc' else 'VM' }}?')">
                             <i class="bi bi-stop-fill"></i> Stop
                         </button>
                     </form>
-                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='reset') }}" class="d-inline">
+                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='reset') }}"
+                          class="d-inline {{ 'd-none' if status.status == 'stopped' else '' }}"
+                          :class="{ 'd-none': isStopped }">
                         <button type="submit" class="btn btn-outline-warning" onclick="return confirm('Reset {{ 'container' if vm_type == 'lxc' else 'VM' }}?')">
                             <i class="bi bi-arrow-clockwise"></i>
                         </button>
                     </form>
-                    {% endif %}
                 </div>
 
                 <!-- Console (QEMU and LXC) -->
                 <a href="{{ url_for('vm_console', node=node, vmid=vmid) }}"
                    class="btn btn-outline-info {{ 'disabled' if status.status != 'running' else '' }}"
-                   {% if status.status != 'running' %}aria-disabled="true" tabindex="-1" title="{{ 'VM' if vm_type == 'qemu' else 'Container' }} must be running"{% endif %}>
+                   :class="{ 'disabled': !isRunning }"
+                   :aria-disabled="!isRunning"
+                   :tabindex="isRunning ? null : '-1'"
+                   :title="isRunning ? '' : '{{ 'VM' if vm_type == 'qemu' else 'Container' }} must be running'">
                     <i class="bi bi-display"></i> Console
                 </a>
 
@@ -87,37 +105,31 @@
 </div>
 {% endif %}
 
-<!-- Status Bar -->
+<!-- Status Bar (values come from the vmStatus wrapper above) -->
 <div class="card mb-3">
     <div class="card-body py-2">
         <div class="d-flex flex-wrap align-items-center gap-4">
             <div class="d-flex align-items-center gap-2">
                 <span class="text-muted small">Status:</span>
-                {% if status.status == 'running' %}
-                    <span class="badge bg-success">Running</span>
-                {% elif status.status == 'stopped' %}
-                    <span class="badge bg-danger">Stopped</span>
-                {% else %}
-                    <span class="badge bg-warning">{{ status.status }}</span>
-                {% endif %}
+                <span class="badge" :class="statusClass" x-text="statusLabel"></span>
             </div>
             <div class="d-flex align-items-center gap-2">
                 <span class="text-muted small">Uptime:</span>
-                <span class="small">{{ status.uptime|humanize_uptime }}</span>
+                <span class="small" x-text="uptimeText"></span>
             </div>
             <div class="d-flex align-items-center gap-2 flex-grow-1" style="min-width: 150px; max-width: 250px;">
                 <span class="text-muted small">CPU:</span>
                 <div class="progress flex-grow-1" style="height: 12px;">
-                    <div class="progress-bar" style="width: {{ (status.cpu * 100)|round(1) }}%"></div>
+                    <div class="progress-bar" :style="`width: ${cpuPct}%`"></div>
                 </div>
-                <span class="small" style="min-width: 45px;">{{ (status.cpu * 100)|round(1) }}%</span>
+                <span class="small" style="min-width: 45px;" x-text="cpuPct + '%'"></span>
             </div>
             <div class="d-flex align-items-center gap-2 flex-grow-1" style="min-width: 200px; max-width: 300px;">
                 <span class="text-muted small">Memory:</span>
                 <div class="progress flex-grow-1" style="height: 12px;">
-                    <div class="progress-bar" style="width: {{ ((status.mem / status.maxmem) * 100)|round(1) }}%"></div>
+                    <div class="progress-bar" :style="`width: ${memPct}%`"></div>
                 </div>
-                <span class="small" style="min-width: 100px;">{{ (status.mem / 1024 / 1024 / 1024)|round(1) }}/{{ (status.maxmem / 1024 / 1024 / 1024)|round(1) }}GB</span>
+                <span class="small" style="min-width: 100px;" x-text="memText"></span>
             </div>
             {% if guest_disk_info %}
                 {% for disk in guest_disk_info %}
@@ -135,6 +147,7 @@
         </div>
     </div>
 </div>
+</div><!-- /vmStatus wrapper -->
 
 <div class="row mt-3">
     <!-- Performance Metrics Charts -->
@@ -548,7 +561,8 @@
 </div>
 
 <!-- Delete Modal -->
-<div class="modal fade" id="deleteModal" tabindex="-1" x-data="vmDelete('{{ node }}', '{{ vmid }}')">
+<div class="modal fade" id="deleteModal" tabindex="-1"
+     x-data="vmDelete('{{ node }}', '{{ vmid }}')" data-status="{{ status.status }}">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
@@ -579,17 +593,15 @@
                     </div>
                 </div>
 
-                {% if status.status != 'stopped' %}
-                <div class="alert alert-warning">
+                <div class="alert alert-warning" :class="isStopped ? 'd-none' : ''">
                     <i class="bi bi-exclamation-triangle"></i>
-                    {{ 'Container' if vm_type == 'lxc' else 'VM' }} must be stopped before deletion. Current status: <strong>{{ status.status }}</strong>
+                    {{ 'Container' if vm_type == 'lxc' else 'VM' }} must be stopped before deletion. Current status: <strong x-text="status"></strong>
                 </div>
-                {% endif %}
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-danger" @click="run()"
-                        :disabled="deleting || {{ 'true' if status.status != 'stopped' else 'false' }}">
+                        :disabled="deleting || !isStopped">
                     <span x-show="deleting" class="spinner-border spinner-border-sm me-1" role="status"></span>
                     <span x-show="!deleting"><i class="bi bi-trash"></i></span>
                     Delete {{ 'Container' if vm_type == 'lxc' else 'VM' }}
@@ -760,6 +772,20 @@ function vmMetrics(node, vmid) {
 function vmDelete(node, vmid) {
   return {
     deleting: false, statusMsg: '', statusType: 'info',
+    status: '',
+    get isStopped() { return this.status === 'stopped'; },
+    init() {
+      this.status = this.$el.dataset.status || '';
+      // Re-check status whenever the dialog opens so the "must be stopped" gate
+      // reflects the current power state, not the page-load state.
+      this.$el.addEventListener('show.bs.modal', () => this.refreshStatus());
+    },
+    async refreshStatus() {
+      try {
+        const d = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/status`);
+        if (d && !d.error) this.status = d.status;
+      } catch (e) { /* keep last known status */ }
+    },
     async run() {
       this.deleting = true;
       this.statusMsg = 'Deleting...';
@@ -824,10 +850,51 @@ function lxcSummary() {
 }
 {% endif %}
 
+// Status bar: seeded from the server (data-* attributes on the card), then
+// polled every 5s — same pattern as vmMetrics/vmTasks — so start/stop reflect
+// without a manual page refresh.
+function vmStatus() {
+  return {
+    node: '', vmid: '', status: '', uptime: 0, cpu: 0, mem: 0, maxmem: 0, _poller: null,
+    get isRunning() { return this.status === 'running'; },
+    get isStopped() { return this.status === 'stopped'; },
+    get statusLabel() { return this.isRunning ? 'Running' : this.isStopped ? 'Stopped' : (this.status || 'unknown'); },
+    get statusClass() { return this.isRunning ? 'bg-success' : this.isStopped ? 'bg-danger' : 'bg-warning'; },
+    get cpuPct() { return Math.round((this.cpu || 0) * 1000) / 10; },
+    get memPct() { return this.maxmem ? Math.round((this.mem / this.maxmem) * 1000) / 10 : 0; },
+    get uptimeText() { return this.isRunning ? ProxUtils.formatUptime(this.uptime) : '—'; },
+    get memText() {
+      const gb = (b) => (b / 1073741824).toFixed(1);
+      return `${gb(this.mem)}/${gb(this.maxmem)}GB`;
+    },
+    async load() {
+      try {
+        const d = await ProxUtils.apiJson(`/api/vm/${this.node}/${this.vmid}/status`);
+        if (d && !d.error) {
+          this.status = d.status; this.uptime = d.uptime;
+          this.cpu = d.cpu; this.mem = d.mem; this.maxmem = d.maxmem;
+        }
+      } catch (e) { /* transient — keep last known state */ }
+    },
+    init() {
+      const ds = this.$el.dataset;
+      this.node = ds.node; this.vmid = ds.vmid;
+      this.status = ds.status;
+      this.uptime = Number(ds.uptime) || 0;
+      this.cpu = Number(ds.cpu) || 0;
+      this.mem = Number(ds.mem) || 0;
+      this.maxmem = Number(ds.maxmem) || 0;
+      this._poller = ProxUtils.createAdaptivePoller(() => this.load(), 5000);
+    },
+    destroy() { this._poller?.destroy(); },
+  };
+}
+
 function register() {
   window.Alpine.data('vmTasks', vmTasks);
   window.Alpine.data('vmMetrics', vmMetrics);
   window.Alpine.data('vmDelete', vmDelete);
+  window.Alpine.data('vmStatus', vmStatus);
   window.Alpine.data('migrateStorages', migrateStorages);
   {% if vm_type == 'lxc' %}
   window.Alpine.data('lxcSummary', lxcSummary);
