@@ -1108,6 +1108,63 @@ def get_qemu_guest_disk_info(proxmox, node, vmid):
         return None
 
 
+def is_agent_enabled(config):
+    """True if a VM config's 'agent' value has the guest agent enabled.
+
+    Handles the '1', '0', '1,fstrim_cloned_disks=1' and 'enabled=1,...' forms.
+    """
+    first = str(config.get("agent", "0")).split(",")[0].strip()
+    if first.startswith("enabled="):
+        first = first.split("=", 1)[1].strip()
+    return first == "1"
+
+
+def apply_agent_after_clone(source_node, target_node, target_vmid, task_upid, enabled):
+    """Best-effort background apply of the guest-agent flag to a fresh clone.
+
+    A clone inherits the source's 'agent' setting, and the target VM stays locked
+    until the clone task finishes — so wait for the task, then set the flag. The
+    create/clone default is disabled so the detail page never blocks waiting on a
+    guest agent that isn't installed yet.
+    """
+    try:
+        proxmox = get_proxmox_connection(source_node, auto_renew=True)
+        if not proxmox:
+            return
+        waited = 0
+        while waited < 1800:
+            try:
+                st = proxmox.nodes(source_node).tasks(task_upid).status.get()
+                if st.get("status") == "stopped":
+                    break
+            except Exception:
+                pass
+            time.sleep(3)
+            waited += 3
+
+        conn = get_proxmox_connection(target_node, auto_renew=True) or proxmox
+        # Preserve any extra agent options already present on the clone.
+        try:
+            cfg = conn.nodes(target_node).qemu(target_vmid).config.get()
+            extra = [p for p in str(cfg.get("agent", "")).split(",")[1:] if p.strip()]
+        except Exception:
+            extra = []
+        flag = "1" if enabled else "0"
+        agent_val = ",".join([flag] + extra) if extra else flag
+        conn.nodes(target_node).qemu(target_vmid).config.put(agent=agent_val)
+    except Exception as e:
+        print(f"Post-clone agent config failed for {target_vmid}: {e}")
+
+
+def spawn_agent_after_clone(source_node, target_node, target_vmid, task_upid, enabled):
+    """Run apply_agent_after_clone in a daemon thread (non-blocking)."""
+    threading.Thread(
+        target=apply_agent_after_clone,
+        args=(source_node, target_node, target_vmid, task_upid, enabled),
+        daemon=True,
+    ).start()
+
+
 def parse_vm_configuration(config, vm_type="qemu"):
     """Parse VM/LXC configuration into structured groups"""
     parsed_config = {
@@ -2280,9 +2337,14 @@ def vm_detail(node, vmid):
             ]
         )
 
-        # Get guest agent disk information for QEMU VMs
+        # Get guest agent disk information for QEMU VMs — only when the agent is
+        # actually enabled, otherwise the agent call stalls the whole page load.
         guest_disk_info = None
-        if vm_type == "qemu" and status.get("status") == "running":
+        if (
+            vm_type == "qemu"
+            and status.get("status") == "running"
+            and is_agent_enabled(config)
+        ):
             guest_disk_info = get_qemu_guest_disk_info(proxmox, node, vmid)
 
         # Check for active migration tasks
@@ -2564,11 +2626,15 @@ def create_vm():
                     return redirect(url_for("create_vm"))
 
                 # Clone the VM
-                proxmox.nodes(node).qemu(template_vmid).clone.post(
+                upid = proxmox.nodes(node).qemu(template_vmid).clone.post(
                     newid=vmid, name=name, full=1  # Full clone
                 )
                 # Update next-id if incremental VMID is enabled
                 update_cluster_next_id(proxmox, vmid)
+                # Apply the guest-agent toggle after the clone finishes (default
+                # off — clones inherit the template's agent setting).
+                agent_enabled = request.form.get("agent") in ("1", "on", "true", "yes")
+                spawn_agent_after_clone(node, node, vmid, upid, agent_enabled)
                 flash(f"VM {name} cloned from template successfully", "success")
 
             elif vm_type == "qemu":
@@ -2596,6 +2662,11 @@ def create_vm():
                     params["ide2"] = f"{iso_image},media=cdrom"
                     # Update boot order to include CD-ROM first for OS installation
                     params["boot"] = "dc"  # CD-ROM first, then disk
+
+                # QEMU guest agent — off by default (avoids slow detail-page loads
+                # when the agent isn't installed in the guest).
+                if request.form.get("agent") in ("1", "on", "true", "yes"):
+                    params["agent"] = "1"
 
                 # Create the VM
                 proxmox.nodes(node).qemu.create(**params)
@@ -4466,6 +4537,7 @@ def api_vm_clone(node, vmid):
         target_storage = data.get("target_storage", "")
         clone_type = data.get("clone_type", "full")
         description = data.get("description", "")
+        agent_enabled = bool(data.get("agent", False))
 
         # Prepare clone parameters
         clone_params = {
@@ -4488,6 +4560,10 @@ def api_vm_clone(node, vmid):
 
         # Execute clone operation
         result = proxmox.nodes(node).qemu(vmid).clone.post(**clone_params)
+
+        # Apply the guest-agent toggle after the clone finishes (default off —
+        # clones inherit the source's agent setting).
+        spawn_agent_after_clone(node, target_node, clone_vmid, result, agent_enabled)
 
         # Update next-id if incremental VMID is enabled
         update_cluster_next_id(proxmox, clone_vmid)

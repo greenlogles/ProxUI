@@ -132,6 +132,19 @@
                                       rows="3" placeholder="Optional description for the cloned VM"
                                       x-model="description"></textarea>
                         </div>
+
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="clone_agent"
+                                       x-model="agentEnabled">
+                                <label class="form-check-label" for="clone_agent">Enable QEMU guest agent</label>
+                            </div>
+                            <div class="form-text">
+                                Applied after the clone finishes. Leave off unless <code>qemu-guest-agent</code>
+                                is installed in the guest — enabling it without the agent running makes detail
+                                pages slow to load.
+                            </div>
+                        </div>
                     </div>
 
                     <div class="d-grid gap-2 d-md-flex justify-content-md-end">
@@ -175,6 +188,7 @@
       targetStorage: '',
       cloneType: 'full',
       description: '',
+      agentEnabled: false,
       storages: [],
       vmidState: 'empty',
       vmidFeedbackMsg: 'Leave empty to auto-generate next available ID',
@@ -280,6 +294,7 @@
               target_storage: this.targetStorage,
               clone_type: this.cloneType,
               description: this.description,
+              agent: this.agentEnabled,
             }),
           });
           if (result.success) {

@@ -138,6 +138,18 @@
                         <div class="form-text">Select an ISO image to attach to the VM for OS installation</div>
                     </div>
 
+                    <!-- VM-specific: QEMU guest agent -->
+                    <div class="mb-3" x-show="vmType === 'qemu'">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="agent" name="agent" value="1">
+                            <label class="form-check-label" for="agent">Enable QEMU guest agent</label>
+                        </div>
+                        <div class="form-text">
+                            Leave off unless <code>qemu-guest-agent</code> is installed in the guest — enabling it
+                            without the agent running makes detail pages slow to load.
+                        </div>
+                    </div>
+
                     <!-- Container-specific: OS Template -->
                     <div class="mb-3" x-show="vmType === 'lxc'">
                         <label for="ostemplate" class="form-label">OS Template</label>
