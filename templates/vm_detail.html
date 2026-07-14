@@ -215,11 +215,11 @@
 <div class="row">
     
     <div class="col-md-6 mb-3">
-        {% if guest_disk_info and vm_type == 'qemu' %}
+        {% if guest_disk_info %}
         <!-- Guest Disk Usage Card -->
         <div class="card">
             <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-hdd"></i> Guest Disk Usage</h5>
+                <h5 class="mb-0"><i class="bi bi-hdd"></i> {{ 'Disk Usage' if vm_type == 'lxc' else 'Guest Disk Usage' }}</h5>
             </div>
             <div class="card-body">
                 <div style="max-height: 300px; overflow-y: auto;">
