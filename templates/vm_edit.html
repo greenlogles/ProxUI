@@ -666,7 +666,8 @@
                             </span>
                             <button x-show="ssh.checked && !ssh.sftp_ok" class="btn btn-sm btn-outline-secondary py-0"
                                     @click="showSetup = !showSetup">Set up access</button>
-                            <button class="btn btn-sm btn-outline-secondary py-0"
+                            <button x-show="!snippetStorages.some(s => s.shared && s.snippets_enabled)"
+                                    class="btn btn-sm btn-outline-secondary py-0"
                                     @click="createSharedStorage()" :disabled="setupBusy"
                                     title="Create a cluster-shared snippet storage on /etc/pve (migration-safe)">
                                 <i class="bi bi-hdd-network"></i> Create shared /etc/pve storage
