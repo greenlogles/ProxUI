@@ -362,13 +362,873 @@
 </div>
 
 <!-- Loading overlay -->
-<div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center" 
+<div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center"
      style="background-color: rgba(0,0,0,0.5); z-index: 9999;">
     <div class="bg-white rounded p-4 text-center">
         <div class="spinner-border text-primary mb-2" role="status"></div>
         <div>Updating configuration...</div>
     </div>
 </div>
+
+<!-- Reset Root Password -->
+<div class="row justify-content-center mt-3"
+     x-data="{
+       pw: '', pw2: '', busy: false, error: '', success: '', rebootRequired: false,
+       async submit() {
+         this.error = ''; this.success = '';
+         if (!this.pw) { this.error = 'Password is required'; return; }
+         if (this.pw !== this.pw2) { this.error = 'Passwords do not match'; return; }
+         if (this.pw.length < 5) { this.error = 'Password must be at least 5 characters'; return; }
+         this.busy = true;
+         try {
+           const data = await window.ProxUtils.apiJson('/api/vm/{{ node }}/{{ vm.vmid }}/reset-password', {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ password: this.pw, vm_type: '{{ vm_type }}' }),
+           });
+           this.success = data.message;
+           this.rebootRequired = !!data.reboot_required;
+           this.pw = ''; this.pw2 = '';
+         } catch(e) {
+           this.error = e.message || 'Request failed';
+         } finally {
+           this.busy = false;
+         }
+       }
+     }">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-key"></i> Reset Root Password</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-3">
+                    {% if vm_type == 'lxc' %}
+                    The container must be <strong>running</strong>. Uses <code>chpasswd</code> via <code>pct exec</code>.
+                    {% else %}
+                    If the VM is running and the QEMU guest agent is active, the password is changed immediately.
+                    Otherwise falls back to <strong>cloud-init <code>cipassword</code></strong> — takes effect on next reboot.
+                    {% endif %}
+                </p>
+                <div class="row g-2 align-items-end">
+                    <div class="col-sm-4">
+                        <label class="form-label">New password</label>
+                        <input type="password" class="form-control" x-model="pw"
+                               @keydown.enter="submit()" autocomplete="new-password">
+                    </div>
+                    <div class="col-sm-4">
+                        <label class="form-label">Confirm password</label>
+                        <input type="password" class="form-control" x-model="pw2"
+                               @keydown.enter="submit()" autocomplete="new-password">
+                    </div>
+                    <div class="col-sm-4">
+                        <button class="btn btn-warning w-100" @click="submit()" :disabled="busy">
+                            <span x-show="busy" class="spinner-border spinner-border-sm me-1"></span>
+                            <i x-show="!busy" class="bi bi-key-fill"></i>
+                            Reset Password
+                        </button>
+                    </div>
+                </div>
+                <div x-show="error" class="alert alert-danger py-2 small mt-2 mb-0" x-text="error"></div>
+                <div x-show="success && !rebootRequired" class="alert alert-success py-2 small mt-2 mb-0" x-text="success"></div>
+                <div x-show="success && rebootRequired" class="alert alert-warning py-2 small mt-2 mb-0">
+                    <i class="bi bi-arrow-clockwise"></i> <span x-text="success"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if vm_type != 'lxc' %}
+{% set _agent_str = config.get('agent', '0') | string %}
+{% set _agent_enabled = _agent_str.startswith('1') or 'enabled=1' in _agent_str %}
+<div class="row justify-content-center mt-3"
+     x-data="{
+       enabled: {{ 'true' if _agent_enabled else 'false' }},
+       busy: false, error: '', success: '',
+       init() {
+         this.$watch('enabled', () => this.toggle());
+       },
+       async toggle() {
+         this.busy = true;
+         this.error = ''; this.success = '';
+         try {
+           const data = await window.ProxUtils.apiJson('/api/vm/{{ node }}/{{ vm.vmid }}/agent', {
+             method: 'PUT',
+             headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ enabled: this.enabled }),
+           });
+           this.success = data.message;
+         } catch(e) {
+           this.enabled = !this.enabled;
+           this.error = e.message || 'Request failed';
+         } finally {
+           this.busy = false;
+         }
+       }
+     }">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-cpu"></i> QEMU Guest Agent</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-3">
+                    Enables improved guest integration: graceful shutdown, IP reporting,
+                    file system freeze, and in-guest password reset.
+                    Requires <code>qemu-guest-agent</code> installed in the guest OS.
+                </p>
+                <div class="d-flex align-items-center gap-3">
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" role="switch"
+                               id="agentToggle" x-model="enabled" :disabled="busy"
+                               style="width: 3em; height: 1.5em; cursor: pointer;">
+                        <label class="form-check-label ms-2" for="agentToggle" style="cursor: pointer;">
+                            <span x-show="enabled" class="text-success fw-semibold">Enabled</span>
+                            <span x-show="!enabled" class="text-muted">Disabled</span>
+                        </label>
+                    </div>
+                    <span x-show="busy" class="spinner-border spinner-border-sm text-secondary"></span>
+                </div>
+                <div x-show="error" class="alert alert-danger py-2 small mt-2 mb-0" x-text="error"></div>
+                <div x-show="success" class="alert alert-success py-2 small mt-2 mb-0">
+                    <i class="bi bi-info-circle"></i> <span x-text="success"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if vm_type != 'lxc' %}
+<!-- Cloud-Init -->
+<div class="row justify-content-center mt-3"
+     x-data="cloudInit('{{ node }}', '{{ vm.vmid }}')"
+     data-vm-name="{{ vm.name | e }}">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-cloud-fill"></i> Cloud-Init</h5>
+                <div class="d-flex align-items-center gap-2">
+                    <span x-show="loading" class="spinner-border spinner-border-sm text-secondary"></span>
+                    <button class="btn btn-sm btn-outline-secondary" @click="regenerate()" :disabled="regenBusy"
+                            title="Regenerate the cloud-init drive from the current config (qm cloudinit update). Reboot the VM to apply — an already-provisioned guest may also need 'cloud-init clean' inside it first.">
+                        <span x-show="regenBusy" class="spinner-border spinner-border-sm me-1"></span>
+                        <i x-show="!regenBusy" class="bi bi-arrow-clockwise"></i> Regenerate drive
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <ul class="nav nav-tabs mb-3">
+                    <li class="nav-item">
+                        <a class="nav-link" :class="{active: tab==='native'}" href="#"
+                           @click.prevent="tab='native'">
+                            <i class="bi bi-sliders"></i> Native Settings
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" :class="{active: tab==='snippet'}" href="#"
+                           @click.prevent="openSnippetTab()">
+                            <i class="bi bi-file-code"></i> Custom Snippet
+                            <span x-show="cicustom" class="badge bg-success ms-1" style="font-size:.7em;">attached</span>
+                        </a>
+                    </li>
+                </ul>
+
+                <!-- Native Settings -->
+                <div x-show="tab==='native'">
+                    <template x-if="hasUserSnippet">
+                        <div class="alert alert-warning py-2 small d-flex align-items-start gap-2 mb-3">
+                            <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+                            <div>
+                                A custom <strong>user</strong> snippet is attached, so Proxmox ignores the
+                                native <strong>Default User</strong>, <strong>password</strong> and
+                                <strong>SSH keys</strong> — those are managed by the snippet.
+                                Set them in the <a href="#" @click.prevent="tab='snippet'">Custom Snippet</a> tab instead.
+                                Network settings below still apply.
+                            </div>
+                        </div>
+                    </template>
+                    <div class="row g-3">
+                        <div class="col-sm-6">
+                            <label class="form-label small fw-semibold">Default User</label>
+                            <input type="text" class="form-control form-control-sm" x-model="ciuser"
+                                   :disabled="hasUserSnippet" :class="hasUserSnippet && 'bg-light'"
+                                   :title="hasUserSnippet ? 'Managed by the attached user snippet — edit it in the Custom Snippet tab' : ''"
+                                   placeholder="e.g. ubuntu">
+                        </div>
+                        <div class="col-sm-6">
+                            <label class="form-label small fw-semibold">Nameserver</label>
+                            <input type="text" class="form-control form-control-sm" x-model="nameserver"
+                                   placeholder="8.8.8.8 1.1.1.1">
+                        </div>
+                        <div class="col-sm-6">
+                            <label class="form-label small fw-semibold">Search Domain</label>
+                            <input type="text" class="form-control form-control-sm" x-model="searchdomain"
+                                   placeholder="example.com">
+                        </div>
+                        <div class="col-sm-6">
+                            <label class="form-label small fw-semibold">IP Config (ipconfig0)</label>
+                            <input type="text" class="form-control form-control-sm" x-model="ipconfig0"
+                                   placeholder="ip=dhcp  or  ip=10.0.0.10/24,gw=10.0.0.1">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label small fw-semibold">
+                                SSH Authorized Keys <span class="text-muted fw-normal">(one per line)</span>
+                            </label>
+                            <textarea class="form-control form-control-sm font-monospace" rows="4"
+                                      x-model="sshkeys" :disabled="hasUserSnippet"
+                                      :class="hasUserSnippet && 'bg-light'"
+                                      :title="hasUserSnippet ? 'Managed by the attached user snippet — edit it in the Custom Snippet tab' : ''"
+                                      placeholder="ssh-rsa AAAA..."></textarea>
+                        </div>
+                    </div>
+                    <div class="mt-3 d-flex gap-2 align-items-center">
+                        <button class="btn btn-sm btn-primary" @click="saveNative()" :disabled="nativeBusy">
+                            <span x-show="nativeBusy" class="spinner-border spinner-border-sm me-1"></span>
+                            <i x-show="!nativeBusy" class="bi bi-floppy"></i> Save Settings
+                        </button>
+                    </div>
+                    <div x-show="nativeError" class="alert alert-danger py-2 small mt-2 mb-0" x-text="nativeError"></div>
+                    <div x-show="nativeSuccess" class="alert alert-success py-2 small mt-2 mb-0" x-text="nativeSuccess"></div>
+                </div>
+
+                <!-- Custom Snippet -->
+                <div x-show="tab==='snippet'">
+                    <template x-if="cicustom">
+                        <div class="alert alert-info py-2 small d-flex align-items-center gap-2 mb-3">
+                            <i class="bi bi-paperclip"></i>
+                            <span><strong>Attached:</strong> <code x-text="cicustom"></code></span>
+                            <button class="btn btn-sm btn-outline-danger py-0 ms-auto"
+                                    @click="detachSnippet()" :disabled="snippetBusy">Detach</button>
+                        </div>
+                    </template>
+
+                    <div class="row g-2 mb-3">
+                        <div class="col-sm-4">
+                            <label class="form-label small fw-semibold">Template</label>
+                            <select class="form-select form-select-sm" x-model="template"
+                                    @change="applyTemplate()">
+                                <option value="">— blank —</option>
+                                <option value="generic">Generic / Base</option>
+                                <option value="ubuntu">Ubuntu / Debian</option>
+                                <option value="rhel">RHEL / CentOS / Rocky</option>
+                                <option value="freebsd">FreeBSD</option>
+                            </select>
+                        </div>
+                        <div class="col-sm-4">
+                            <label class="form-label small fw-semibold">Storage</label>
+                            <select class="form-select form-select-sm" x-model="snippetStorage">
+                                <option value="">— select storage —</option>
+                                <template x-for="s in snippetStorages" :key="s.storage">
+                                    <option :value="s.storage" x-text="storageLabel(s)"></option>
+                                </template>
+                            </select>
+                        </div>
+                        <div class="col-sm-4">
+                            <label class="form-label small fw-semibold">Filename</label>
+                            <input type="text" class="form-control form-control-sm font-monospace"
+                                   x-model="snippetFilename">
+                        </div>
+                    </div>
+
+                    <!-- Access & storage setup -->
+                    <div class="mb-3">
+                        <!-- Migration warning: node-local storage -->
+                        <div x-show="selectedStorage && !selectedStorage.shared"
+                             class="alert alert-warning py-2 small mb-2">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            <strong x-text="selectedStorage && selectedStorage.storage"></strong>
+                            is node-local — a snippet here won't follow the VM on migration
+                            (cloud-init would lose it). Prefer a shared storage, or
+                            <a href="#" @click.prevent="createSharedStorage()">create a shared /etc/pve snippet storage</a>.
+                        </div>
+                        <!-- Chosen storage lacks the snippets content type -->
+                        <div x-show="selectedStorage && !selectedStorage.snippets_enabled"
+                             class="alert alert-info py-2 small mb-2 d-flex align-items-center gap-2">
+                            <span>Storage <code x-text="selectedStorage && selectedStorage.storage"></code>
+                                doesn't allow snippets yet.</span>
+                            <button class="btn btn-sm btn-outline-primary py-0 ms-auto"
+                                    @click="enableSnippets()" :disabled="setupBusy">Enable snippets</button>
+                        </div>
+                        <!-- Access status + actions -->
+                        <div class="d-flex align-items-center gap-2 flex-wrap small">
+                            <span x-show="ssh.sftp_ok" class="text-success">
+                                <i class="bi bi-check-circle-fill"></i> Node write access ready
+                            </span>
+                            <span x-show="ssh.checked && !ssh.sftp_ok" class="text-muted">
+                                <i class="bi bi-shield-lock"></i> ProxUI needs SSH access to write snippets to nodes.
+                            </span>
+                            <button x-show="ssh.checked && !ssh.sftp_ok" class="btn btn-sm btn-outline-secondary py-0"
+                                    @click="showSetup = !showSetup">Set up access</button>
+                            <button class="btn btn-sm btn-outline-secondary py-0"
+                                    @click="createSharedStorage()" :disabled="setupBusy"
+                                    title="Create a cluster-shared snippet storage on /etc/pve (migration-safe)">
+                                <i class="bi bi-hdd-network"></i> Create shared /etc/pve storage
+                            </button>
+                        </div>
+                        <!-- Setup form -->
+                        <div x-show="showSetup" class="p-2 border rounded bg-light mt-2 small">
+                            <div>ProxUI will install its SSH key into root's <code>authorized_keys</code>
+                                (shared across the cluster via pmxcfs), then write snippets over SFTP.</div>
+                            <div x-show="!ssh.root_pam" class="mt-2">
+                                <label class="form-label small mb-1">root's password
+                                    <span class="text-muted">(used once to install the key, not stored)</span></label>
+                                <input type="password" class="form-control form-control-sm" x-model="rootPassword"
+                                       style="max-width: 20rem;" autocomplete="off">
+                            </div>
+                            <div x-show="ssh.root_pam" class="text-muted mt-1">
+                                This cluster uses root@pam — the node console can install the key without a password.
+                            </div>
+                            <button class="btn btn-sm btn-primary mt-2" @click="setupAccess()" :disabled="setupBusy">
+                                <span x-show="setupBusy" class="spinner-border spinner-border-sm me-1"></span>
+                                <i x-show="!setupBusy" class="bi bi-key"></i> Install key
+                            </button>
+                            <div class="mt-2">
+                                <a href="#" @click.prevent="showPubkey = !showPubkey">show public key (manual install)</a>
+                                <pre x-show="showPubkey" class="mt-1 mb-0 p-2 bg-body border rounded"
+                                     style="white-space: pre-wrap; font-size: .72rem;" x-text="ssh.pubkey"></pre>
+                            </div>
+                        </div>
+                        <div x-show="setupMsg" class="alert py-2 small mt-2 mb-0"
+                             :class="setupOk ? 'alert-success' : 'alert-danger'" x-text="setupMsg"></div>
+                    </div>
+
+                    <textarea class="form-control font-monospace" rows="18"
+                              x-model="snippetContent"
+                              placeholder="#cloud-config&#10;hostname: myvm&#10;..."
+                              style="font-size: 0.8rem; resize: vertical; tab-size: 2;"></textarea>
+
+                    <!-- Password helper: with a user snippet attached the native
+                         cipassword is ignored, so offer setting it here instead. -->
+                    <div class="mt-2 p-2 border rounded bg-light">
+                        <label class="form-label small fw-semibold mb-1">
+                            <i class="bi bi-key"></i> Set a login password via this snippet
+                            <span class="text-muted fw-normal">— optional</span>
+                        </label>
+                        <div class="d-flex gap-2 align-items-center flex-wrap">
+                            <input type="text" class="form-control form-control-sm font-monospace" style="max-width: 12rem;"
+                                   x-model="pwUser" placeholder="user (e.g. root)">
+                            <input type="text" class="form-control form-control-sm font-monospace" style="max-width: 14rem;"
+                                   x-model="pwPassword" placeholder="password">
+                            <button class="btn btn-sm btn-outline-secondary"
+                                    @click="insertPasswordBlock()" :disabled="!pwPassword.trim()">
+                                <i class="bi bi-plus-lg"></i> Insert into config
+                            </button>
+                        </div>
+                        <div class="form-text small mt-1">
+                            Adds a <code>chpasswd</code> block (with <code>ssh_pwauth</code>) to the YAML above.
+                            The password is stored in plaintext inside the snippet file — use SSH keys where you can.
+                        </div>
+                    </div>
+
+                    <!-- Validation results -->
+                    <div x-show="validateResult" class="mt-2">
+                        <div x-show="validateResult && validateResult.valid && !validateResult.warnings.length"
+                             class="alert alert-success py-2 small mb-0">
+                            <i class="bi bi-check-circle"></i> Valid cloud-init config.
+                        </div>
+                        <div x-show="validateResult && validateResult.errors.length"
+                             class="alert alert-danger py-2 small mb-0">
+                            <strong><i class="bi bi-x-circle"></i> Errors:</strong>
+                            <ul class="mb-0 ps-3 mt-1">
+                                <template x-for="e in (validateResult ? validateResult.errors : [])" :key="e">
+                                    <li x-text="e"></li>
+                                </template>
+                            </ul>
+                        </div>
+                        <div x-show="validateResult && validateResult.warnings.length"
+                             class="alert alert-warning py-2 small mt-1 mb-0">
+                            <strong><i class="bi bi-exclamation-triangle"></i> Warnings:</strong>
+                            <ul class="mb-0 ps-3 mt-1">
+                                <template x-for="w in (validateResult ? validateResult.warnings : [])" :key="w">
+                                    <li x-text="w"></li>
+                                </template>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="mt-3 d-flex gap-2 align-items-center flex-wrap">
+                        <button class="btn btn-sm btn-outline-secondary"
+                                @click="validateSnippet()"
+                                :disabled="validating || !snippetContent.trim()">
+                            <span x-show="validating" class="spinner-border spinner-border-sm me-1"></span>
+                            <i x-show="!validating" class="bi bi-check2-square"></i> Validate
+                        </button>
+                        <button class="btn btn-sm btn-primary"
+                                @click="saveSnippet()"
+                                :disabled="snippetBusy || !snippetContent.trim() || !snippetStorage">
+                            <span x-show="snippetBusy" class="spinner-border spinner-border-sm me-1"></span>
+                            <i x-show="!snippetBusy" class="bi bi-floppy"></i> Save &amp; Attach
+                        </button>
+                    </div>
+                    <div x-show="snippetError" class="alert alert-danger py-2 small mt-2 mb-0" x-text="snippetError"></div>
+                    <div x-show="snippetSuccess" class="alert alert-success py-2 small mt-2 mb-0" x-text="snippetSuccess"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if vm_type == 'lxc' %}
+<div x-data="lxcAdvanced('{{ node }}', '{{ vm.vmid }}')">
+
+<!-- LXC Advanced / Passthrough -->
+<div class="row justify-content-center mt-3">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-sliders2"></i> Advanced / Passthrough</h5>
+                <div class="d-flex gap-2 align-items-center">
+                    <small class="text-muted fst-italic" x-show="hasBackup" x-text="'Snapshot: ' + backupTimestamp"></small>
+                    <button class="btn btn-sm btn-outline-secondary" x-show="hasBackup"
+                            @click="restore()" title="Revert to pre-write snapshot">
+                        <i class="bi bi-arrow-counterclockwise"></i> Restore
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary" @click="refresh()" title="Refresh">
+                        <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <template x-if="loading">
+                    <div class="text-center py-3">
+                        <div class="spinner-border spinner-border-sm" role="status"></div>
+                        <span class="ms-2">Loading…</span>
+                    </div>
+                </template>
+                <template x-if="!loading && errorMsg">
+                    <div class="alert alert-danger" x-text="errorMsg"></div>
+                </template>
+                <div x-show="flash.show" :class="'alert alert-' + flash.cls + ' alert-dismissible fade show'" role="alert">
+                    <i :class="'bi bi-' + (flash.cls === 'success' ? 'check-circle' : 'exclamation-triangle')"></i>
+                    <span x-text="flash.msg"></span>
+                    <button type="button" class="btn-close" @click="flash.show=false"></button>
+                </div>
+                <div x-show="!loading && isRunning" class="alert alert-info py-2 mb-3">
+                    <i class="bi bi-info-circle"></i>
+                    <strong>Container is running.</strong>
+                    Feature flag changes take effect after restart.
+                    Device &amp; mount changes require the container to be stopped first.
+                </div>
+                <div x-show="!loading && !canWrite" class="alert alert-warning py-2 mb-3">
+                    <i class="bi bi-lock"></i>
+                    <strong>Read-only connection.</strong> Write actions are disabled.
+                </div>
+                <div x-show="!loading && !errorMsg">
+                    <!-- Feature Flags -->
+                    <h6 class="text-primary mb-3"><i class="bi bi-toggles"></i> Feature Flags</h6>
+                    <div class="row g-2 mb-3">
+                        <template x-for="f in LXC_FLAGS" :key="f.key">
+                            <div class="col-sm-6 col-lg-4">
+                                <div class="border rounded p-2 d-flex align-items-start gap-2">
+                                    <div class="form-check form-switch mt-1">
+                                        <input class="form-check-input" type="checkbox" role="switch"
+                                               :id="'lxcFlag_' + f.key"
+                                               x-model="desiredFeatures[f.key]"
+                                               :disabled="!canWrite">
+                                    </div>
+                                    <div>
+                                        <label class="form-check-label fw-semibold mb-0" :for="'lxcFlag_' + f.key" x-text="f.label"></label>
+                                        <div class="text-muted small" x-text="f.desc"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                    <button class="btn btn-primary btn-sm" x-show="canWrite" @click="previewFeatures()">
+                        <i class="bi bi-eye"></i> Preview &amp; Apply
+                    </button>
+                    <hr class="my-3">
+                    <!-- Devices -->
+                    <h6 class="text-primary mb-2"><i class="bi bi-device-hdd"></i> Devices / Passthrough</h6>
+                    <div x-show="!supportsDevN" class="alert alert-warning py-2 mb-2">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        PVE <span x-text="pveVersion || '< 8.2'"></span> detected — the <code>dev[n]</code> API requires PVE 8.2+.
+                    </div>
+                    <p x-show="devices.length === 0 && legacyDevices.length === 0" class="text-muted small mb-2">No device passthrough configured.</p>
+                    <div class="mb-2" x-show="devices.length > 0 || legacyDevices.length > 0">
+                        <template x-for="d in devices" :key="d.key">
+                            <div class="border rounded p-2 mb-1 d-flex align-items-center gap-2">
+                                <span class="badge bg-secondary me-1" x-text="d.key"></span>
+                                <code class="flex-grow-1" x-text="d.path"></code>
+                                <span x-show="d.uid" class="badge bg-outline-secondary border me-1" x-text="'uid=' + d.uid"></span>
+                                <span x-show="d.gid" class="badge bg-outline-secondary border me-1" x-text="'gid=' + d.gid"></span>
+                                <button x-show="canWrite && !isRunning" class="btn btn-sm btn-outline-danger ms-auto" @click="removeDevice(d.key)">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </template>
+                        <template x-for="l in legacyDevices" :key="l.key">
+                            <div class="border rounded p-2 mb-1 d-flex align-items-center gap-2 opacity-75">
+                                <span class="badge bg-warning text-dark me-1" x-text="l.key"></span>
+                                <code class="flex-grow-1 small" x-text="l.raw"></code>
+                                <span class="badge bg-secondary">legacy</span>
+                            </div>
+                        </template>
+                    </div>
+                    <button x-show="canWrite && supportsDevN" class="btn btn-sm btn-outline-primary" @click="openAddDevice()">
+                        <i class="bi bi-plus-circle"></i> Add Device
+                    </button>
+                    <hr class="my-3">
+                    <!-- Mounts -->
+                    <h6 class="text-primary mb-2"><i class="bi bi-folder2-open"></i> Bind Mounts</h6>
+                    <div x-show="!isRoot" class="alert alert-warning py-2 mb-2">
+                        <i class="bi bi-lock"></i>
+                        Proxmox restricts adding bind mounts to <strong>root@pam</strong> only.
+                        You can view existing mounts but cannot add new ones with this connection.
+                    </div>
+                    <p x-show="mounts.length === 0" class="text-muted small mb-2">No bind mounts configured.</p>
+                    <div class="mb-2" x-show="mounts.length > 0">
+                        <template x-for="m in mounts" :key="m.key">
+                            <div class="border rounded p-2 mb-1 d-flex align-items-center gap-2">
+                                <span class="badge bg-secondary me-1" x-text="m.key"></span>
+                                <code class="small flex-grow-1"><span x-text="m.host_path"></span> → <span x-text="m.mp"></span></code>
+                                <span x-show="m.ro === '1'" class="badge bg-warning text-dark me-1">ro</span>
+                                <button x-show="canWrite && !isRunning" class="btn btn-sm btn-outline-danger ms-auto" @click="removeMount(m.key)">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </template>
+                    </div>
+                    <button x-show="canWrite && isRoot" class="btn btn-sm btn-outline-primary" @click="openAddMount()">
+                        <i class="bi bi-plus-circle"></i> Add Mount
+                    </button>
+                    <hr class="my-3">
+                    <!-- idmap -->
+                    <h6 class="text-primary mb-2"><i class="bi bi-person-lock"></i> UID/GID Mapping (idmap)</h6>
+                    <p x-show="idmaps.length === 0" class="text-muted small mb-2">No idmap entries (container uses default subuid/subgid mapping).</p>
+                    <div class="mb-2" x-show="idmaps.length > 0">
+                        <template x-for="m in idmaps" :key="m.key">
+                            <div class="border rounded p-2 mb-1 d-flex align-items-center gap-2">
+                                <span class="badge bg-secondary me-1" x-text="m.key"></span>
+                                <span class="badge me-1" :class="m.type === 'u' ? 'bg-info' : 'bg-success'" x-text="m.type === 'u' ? 'UID' : 'GID'"></span>
+                                <span class="flex-grow-1"><code class="small" x-text="idmapDesc(m)"></code></span>
+                                <button x-show="canWrite && !isRunning" class="btn btn-sm btn-outline-danger ms-auto" @click="removeIdmap(m.key)">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </template>
+                    </div>
+                    <button x-show="canWrite" class="btn btn-sm btn-outline-primary" @click="openAddIdmap()">
+                        <i class="bi bi-plus-circle"></i> Add Mapping
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Profiles Card -->
+<div class="row justify-content-center mt-3">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-collection"></i> Apply Config Profile</h5>
+                <button class="btn btn-sm btn-outline-primary" @click="loadProfiles()" title="Refresh">
+                    <i class="bi bi-arrow-clockwise"></i>
+                </button>
+            </div>
+            <div class="card-body">
+                <template x-if="loading">
+                    <div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div><span class="ms-2">Loading…</span></div>
+                </template>
+                <template x-if="!loading && profiles.length === 0">
+                    <p class="text-muted">No profiles found.</p>
+                </template>
+                <div class="row g-3" x-show="profiles.length > 0">
+                    <template x-for="p in profiles" :key="p.id">
+                        <div class="col-md-6">
+                            <div class="border rounded p-3 h-100 d-flex flex-column">
+                                <div class="d-flex justify-content-between align-items-start mb-1">
+                                    <strong x-text="p.name"></strong>
+                                    <div>
+                                        <template x-for="t in (p.tags || [])" :key="t">
+                                            <span class="badge bg-secondary me-1" x-text="t"></span>
+                                        </template>
+                                    </div>
+                                </div>
+                                <p class="text-muted small flex-grow-1 mb-2" x-text="p.description"></p>
+                                <div class="d-flex gap-2 text-muted small mb-2">
+                                    <span><i class="bi bi-toggles"></i> <span x-text="Object.keys(p.features || {}).length"></span> flag(s)</span>
+                                    <span><i class="bi bi-device-hdd"></i> <span x-text="(p.devices || []).length"></span> device(s)</span>
+                                </div>
+                                <button class="btn btn-sm btn-outline-primary" @click="openPreviewProfile(p.id, p.name)">
+                                    <i class="bi bi-eye"></i> Preview &amp; Apply
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Profile Diff Modal -->
+<div class="modal fade" tabindex="-1" x-ref="profileDiffModal">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-eye"></i> <span x-text="profileTitle">Profile Preview</span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <template x-if="profileDiff && profileDiff.loading">
+                    <div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div></div>
+                </template>
+                <template x-if="profileDiff && profileDiff.error">
+                    <div class="alert alert-danger" x-text="profileDiff.error"></div>
+                </template>
+                <template x-if="profileDiff && !profileDiff.loading && !profileDiff.error && profileDiff.alreadyApplied">
+                    <div class="alert alert-success"><i class="bi bi-check-circle"></i> This profile is already fully applied to this container.</div>
+                </template>
+                <div x-show="profileDiff && !profileDiff.loading && !profileDiff.error && !profileDiff.alreadyApplied">
+                    <div x-show="profileDiff && profileDiff.featuresToAdd && profileDiff.featuresToAdd.length > 0" class="mb-3">
+                        <h6 class="text-primary"><i class="bi bi-plus-circle"></i> Features to enable</h6>
+                        <ul class="mb-0">
+                            <template x-for="f in (profileDiff ? profileDiff.featuresToAdd : [])" :key="f">
+                                <li><code x-text="f"></code></li>
+                            </template>
+                        </ul>
+                    </div>
+                    <div x-show="profileDiff && profileDiff.devicesToAdd && profileDiff.devicesToAdd.length > 0" class="mb-3">
+                        <h6 class="text-primary"><i class="bi bi-device-hdd"></i> Devices to add</h6>
+                        <ul class="mb-0">
+                            <template x-for="d in (profileDiff ? profileDiff.devicesToAdd : [])" :key="d.path">
+                                <li><code x-text="d.path + (d.gid ? ' (gid=' + d.gid + ')' : '')"></code></li>
+                            </template>
+                        </ul>
+                    </div>
+                    <div x-show="profileDiff && (profileDiff.featuresAlreadySet.length > 0 || profileDiff.devicesAlreadyPresent.length > 0)" class="text-muted small">
+                        <i class="bi bi-check2"></i> Already present:
+                        <span x-text="profileDiff ? [...profileDiff.featuresAlreadySet, ...(profileDiff.devicesAlreadyPresent.map(d=>d.path))].join(', ') : ''"></span>
+                    </div>
+                    <div x-show="profileDiff && profileDiff.running && profileDiff.devicesRequireStop" class="alert alert-warning mt-3 mb-0">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <strong>Container is running.</strong> Device changes require it to be stopped first.
+                    </div>
+                    <div x-show="profileDiff && profileDiff.running && !profileDiff.devicesRequireStop" class="alert alert-info mt-3 mb-0">
+                        <i class="bi bi-info-circle"></i> Container is running — feature changes take effect after restart.
+                    </div>
+                    <div x-show="profileDiff && !profileDiff.supportsDevN && profileDiff.devicesToAdd && profileDiff.devicesToAdd.length > 0" class="alert alert-warning mt-3 mb-0">
+                        <i class="bi bi-exclamation-triangle"></i> PVE &lt; 8.2 detected — device passthrough not supported via API.
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" @click="applyProfile()"
+                        :disabled="profileApplyDisabled || busy.applyProfile">
+                    <span x-show="busy.applyProfile" class="spinner-border spinner-border-sm me-1"></span>
+                    <i x-show="!busy.applyProfile" class="bi bi-check2-circle"></i> Apply Profile
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Feature Preview Modal -->
+<div class="modal fade" tabindex="-1" x-ref="previewModal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-eye"></i> Preview Changes</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted mb-2">The following will be written to the container config:</p>
+                <pre class="bg-light rounded p-3 small mb-2" style="white-space:pre-wrap;" x-text="previewDiffText"></pre>
+                <div class="alert alert-warning mb-0" x-show="previewRunningWarn">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <strong>Container is running.</strong> Changes take effect after the next restart.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" @click="applyFeatures()" :disabled="busy.applyFeatures">
+                    <span x-show="busy.applyFeatures" class="spinner-border spinner-border-sm me-1"></span>
+                    <i x-show="!busy.applyFeatures" class="bi bi-check2-circle"></i> Apply
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Add Device Modal -->
+<div class="modal fade" tabindex="-1" x-ref="addDeviceModal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-device-hdd"></i> Add Device Passthrough</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Quick Preset</label>
+                    <select class="form-select" x-model="dev.preset" @change="applyDevicePreset()">
+                        <option value="">— choose a common device —</option>
+                        <option value="0">renderD128 (QuickSync / VA-API)</option>
+                        <option value="1">card0 (DRI primary)</option>
+                        <option value="2">card1 (DRI secondary)</option>
+                        <option value="3">net/tun (Tailscale)</option>
+                        <option value="4">fuse</option>
+                        <option value="5">kvm</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Device path <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control font-monospace" x-model="dev.path"
+                           placeholder="/dev/dri/renderD128">
+                </div>
+                <div class="row g-2 mb-2">
+                    <div class="col-6">
+                        <label class="form-label">GID override
+                            <i class="bi bi-info-circle text-muted" title="Debian render group = 104, video group = 44"></i>
+                        </label>
+                        <input type="number" class="form-control" x-model="dev.gid" placeholder="104 (render)">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">UID override</label>
+                        <input type="number" class="form-control" x-model="dev.uid" placeholder="0">
+                    </div>
+                </div>
+                <div class="alert alert-info py-2 small mb-0">
+                    <i class="bi bi-info-circle"></i>
+                    Requires PVE 8.2+ and the container must be <strong>stopped</strong>.
+                    Debian render group GID is typically <strong>104</strong>.
+                </div>
+                <div x-show="modalError" class="alert alert-danger py-2 small mt-2 mb-0" x-text="modalError"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" @click="addDevice()" :disabled="busy.addDevice">
+                    <span x-show="busy.addDevice" class="spinner-border spinner-border-sm me-1"></span>
+                    <i x-show="!busy.addDevice" class="bi bi-plus-circle"></i> Add
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Add idmap Modal -->
+<div class="modal fade" tabindex="-1" x-ref="addIdmapModal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-person-lock"></i> Add UID/GID Mapping</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Quick preset</label>
+                    <select class="form-select" x-model="idmap.preset" @change="applyIdmapPreset()">
+                        <option value="">— common patterns —</option>
+                        <option value="full_u">Full UID map (u 0 100000 65536)</option>
+                        <option value="full_g">Full GID map (g 0 100000 65536)</option>
+                        <option value="root_u">Map root only — UID (u 0 0 1)</option>
+                        <option value="root_g">Map root only — GID (g 0 0 1)</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Type</label>
+                    <div class="d-flex gap-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="idmapType" id="idmapTypeU" value="u" x-model="idmap.type">
+                            <label class="form-check-label" for="idmapTypeU">UID (u)</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="idmapType" id="idmapTypeG" value="g" x-model="idmap.type">
+                            <label class="form-check-label" for="idmapTypeG">GID (g)</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-4">
+                        <label class="form-label">Container start ID</label>
+                        <input type="number" class="form-control" x-model.number="idmap.ct_id" min="0">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label">Host start ID</label>
+                        <input type="number" class="form-control" x-model.number="idmap.host_id" min="0">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label">Count</label>
+                        <input type="number" class="form-control" x-model.number="idmap.count" min="1">
+                    </div>
+                </div>
+                <div class="bg-light rounded p-2 small font-monospace mb-3" x-text="idmapPreviewText"></div>
+                <div class="alert alert-warning py-2 small mb-0">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    For an <strong>unprivileged</strong> container to access a bind-mounted directory,
+                    the host directory must be owned by the mapped UID/GID.
+                    Use <code>chown -R 100000:100000 /host/path</code> as root on the host.
+                </div>
+                <div x-show="modalError" class="alert alert-danger py-2 small mt-2 mb-0" x-text="modalError"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" @click="addIdmap()" :disabled="busy.addIdmap">
+                    <span x-show="busy.addIdmap" class="spinner-border spinner-border-sm me-1"></span>
+                    <i x-show="!busy.addIdmap" class="bi bi-plus-circle"></i> Add
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LXC Add Mount Modal -->
+<div class="modal fade" tabindex="-1" x-ref="addMountModal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-folder2-open"></i> Add Bind Mount</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">Host path <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control font-monospace" x-model="mount.host_path"
+                           placeholder="/mnt/nvme/data">
+                    <div class="form-text">Absolute path on the Proxmox host.</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Container path <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control font-monospace" x-model="mount.mp"
+                           placeholder="/data">
+                    <div class="form-text">Absolute path inside the container.</div>
+                </div>
+                <div class="d-flex gap-4 mb-2">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="mpReadOnly" x-model="mount.ro">
+                        <label class="form-check-label" for="mpReadOnly">Read-only</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="mpBackup" x-model="mount.backup">
+                        <label class="form-check-label" for="mpBackup">Include in backup</label>
+                    </div>
+                </div>
+                <div class="alert alert-info py-2 small mb-0">
+                    <i class="bi bi-info-circle"></i>
+                    Container must be <strong>stopped</strong> before adding mounts.
+                    For unprivileged containers, the host directory owner must match the container UID mapping.
+                </div>
+                <div x-show="modalError" class="alert alert-danger py-2 small mt-2 mb-0" x-text="modalError"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" @click="addMount()" :disabled="busy.addMount">
+                    <span x-show="busy.addMount" class="spinner-border spinner-border-sm me-1"></span>
+                    <i x-show="!busy.addMount" class="bi bi-plus-circle"></i> Add
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+</div><!-- end lxcAdvanced -->
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
@@ -377,6 +1237,27 @@
 const node = '{{ node }}';
 const vmid = '{{ vm.vmid }}';
 const vmType = '{{ vm_type|default("qemu") }}';
+
+// Shared VM config fetch. On page load several loaders each need the config;
+// deduping the concurrent burst into a single in-flight request avoids firing
+// six identical /config calls at once. The in-flight ref is cleared once the
+// request settles, so any later call (e.g. reloading after a mutation) fetches
+// fresh data rather than serving a stale cache.
+let _vmConfigInFlight = null;
+function getVmConfig() {
+    if (_vmConfigInFlight) return _vmConfigInFlight;
+    _vmConfigInFlight = fetch(`/api/vm/${node}/${vmid}/config`)
+        .then(response => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.json();
+        })
+        .then(data => {
+            if (data && data.error) throw new Error(data.error);
+            return data;
+        })
+        .finally(() => { _vmConfigInFlight = null; });
+    return _vmConfigInFlight;
+}
 
 // Global functions for network management
 function addNetworkInterface() {
@@ -484,8 +1365,7 @@ function showNotification(message, type = 'info') {
 }
 
 function loadNetworkInterfaces() {
-    fetch(`/api/vm/${node}/${vmid}/config`)
-        .then(response => response.json())
+    getVmConfig()
         .then(data => {
             if (data.error) {
                 console.error('Error loading network interfaces:', data.error);
@@ -860,8 +1740,7 @@ function showAddNetworkModal() {
 }
 
 function loadDiskInterfaces() {
-    fetch(`/api/vm/${node}/${vmid}/config`)
-        .then(response => response.json())
+    getVmConfig()
         .then(data => {
             if (data.error) {
                 console.error('Error loading disk interfaces:', data.error);
@@ -943,9 +1822,11 @@ function createDiskInterfaceCard(disk) {
     let size = '';
     let format = '';
 
-    // First part usually contains storage:volume or storage:size
+    // Bind mount: config starts with '/' (host path), no storage backend
     const firstPart = parts[0];
-    if (firstPart.includes(':')) {
+    const isBindMount = firstPart.startsWith('/');
+
+    if (!isBindMount && firstPart.includes(':')) {
         const colonParts = firstPart.split(':');
         storage = colonParts[0];
         // For LXC rootfs, the size might be directly after colon (e.g., "local-lvm:8")
@@ -976,7 +1857,30 @@ function createDiskInterfaceCard(disk) {
     const displayName = disk.isRootfs ? 'Root Filesystem' : disk.key;
     const displayType = disk.isRootfs ? 'rootfs' : (disk.key.match(/^mp\d+$/) ? 'Mount Point' : storage);
 
-    div.innerHTML = `
+    // Extract the container mount path for bind mounts
+    let bindMountPath = '';
+    if (isBindMount) {
+        const mpPart = parts.find(p => p.startsWith('mp='));
+        bindMountPath = mpPart ? mpPart.replace('mp=', '') : '';
+    }
+
+    div.innerHTML = isBindMount ? `
+        <div class="card-body py-2">
+            <div class="row align-items-center">
+                <div class="col-md-2">
+                    <strong>${displayName}</strong><br>
+                    <small class="text-muted">Bind Mount</small>
+                </div>
+                <div class="col-md-5">
+                    <label class="form-label small mb-1">Host Path → Container Path</label>
+                    <div class="font-monospace small">${firstPart} → ${bindMountPath || '?'}</div>
+                </div>
+                <div class="col-md-5 text-muted small fst-italic">
+                    Bind mounts are managed in the Advanced / Passthrough section below.
+                </div>
+            </div>
+        </div>
+    ` : `
         <div class="card-body py-2">
             <div class="row align-items-center">
                 <div class="col-md-2">
@@ -1052,8 +1956,7 @@ function resizeDisk(diskKey) {
 }
 
 function loadIsoInterfaces() {
-    fetch(`/api/vm/${node}/${vmid}/config`)
-        .then(response => response.json())
+    getVmConfig()
         .then(data => {
             if (data.error) {
                 console.error('Error loading ISO interfaces:', data.error);
@@ -1148,8 +2051,7 @@ function createIsoInterfaceCard(iso) {
 }
 
 function loadCloudinitDrive() {
-    fetch(`/api/vm/${node}/${vmid}/config`)
-        .then(response => response.json())
+    getVmConfig()
         .then(data => {
             if (data.error) {
                 console.error('Error loading cloud-init drive:', data.error);
@@ -1378,9 +2280,8 @@ function loadBootOrder() {
         }
         return;
     }
-    
-    fetch(`/api/vm/${node}/${vmid}/config`)
-        .then(response => response.json())
+
+    getVmConfig()
         .then(data => {
             if (data.error) {
                 console.error('Error loading boot order:', data.error);
@@ -1782,8 +2683,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     function loadVMConfiguration() {
-        fetch(`/api/vm/${node}/${vmid}/config`)
-            .then(response => response.json())
+        getVmConfig()
             .then(data => {
                 if (data.error) {
                     showNotification('Error loading VM configuration: ' + data.error, 'error');
@@ -1943,4 +2843,375 @@ document.addEventListener('DOMContentLoaded', function() {
     
 });
 </script>
+{% if vm_type != 'lxc' %}
+<script type="module">
+import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
+
+const _CI_TEMPLATES = {
+  generic: (h, k) => `#cloud-config
+hostname: ${h}
+manage_etc_hosts: true
+
+users:
+  - name: admin
+    groups: [sudo, wheel]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+${k}
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - wget
+  - git
+  - qemu-guest-agent
+
+runcmd:
+  - systemctl enable --now qemu-guest-agent
+`,
+  ubuntu: (h, k) => `#cloud-config
+hostname: ${h}
+manage_etc_hosts: true
+
+users:
+  - name: ubuntu
+    groups: [sudo, adm]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+${k}
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - wget
+  - git
+  - vim
+  - qemu-guest-agent
+
+runcmd:
+  - systemctl enable --now qemu-guest-agent
+`,
+  rhel: (h, k) => `#cloud-config
+hostname: ${h}
+manage_etc_hosts: true
+
+users:
+  - name: centos
+    groups: [wheel, adm]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+${k}
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - wget
+  - git
+  - vim
+  - qemu-guest-agent
+
+runcmd:
+  - systemctl enable --now sshd
+  - systemctl enable --now qemu-guest-agent
+  - firewall-cmd --permanent --add-service=ssh
+  - firewall-cmd --reload
+`,
+  freebsd: (h, k) => `#cloud-config
+hostname: ${h}
+manage_etc_hosts: true
+
+users:
+  - name: freebsd
+    groups: wheel
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/sh
+    ssh_authorized_keys:
+${k}
+
+packages:
+  - curl
+  - wget
+  - git
+  - vim
+  - qemu-guest-agent
+
+runcmd:
+  - sysrc sshd_enable="YES"
+  - service sshd start
+  - sysrc qemu_guest_agent_enable="YES"
+  - service qemu-guest-agent start
+`,
+};
+
+function cloudInit(node, vmid) {
+  return {
+    tab: 'native',
+    loading: false,
+    vmName: vmid,
+    init() {
+      // $root is the component's root element, which carries data-vm-name.
+      // (Reading this.$el inside an event handler would give the <select>.)
+      this.vmName = (this.$root && this.$root.dataset.vmName) || vmid;
+    },
+    // Native fields pre-populated from server-rendered config
+    ciuser: {{ config.get('ciuser', '') | tojson }},
+    sshkeys: {{ ci_sshkeys | tojson }},
+    nameserver: {{ config.get('nameserver', '') | tojson }},
+    searchdomain: {{ config.get('searchdomain', '') | tojson }},
+    ipconfig0: {{ config.get('ipconfig0', '') | tojson }},
+    nativeBusy: false, nativeError: '', nativeSuccess: '',
+    // Snippet fields
+    cicustom: {{ config.get('cicustom', '') | tojson }},
+    snippetStorages: [], snippetStorage: '', snippetStoragesLoaded: false,
+    snippetFilename: `${vmid}-user-data.yaml`,
+    snippetContent: '',
+    template: '',
+    validating: false, validateResult: null,
+    snippetBusy: false, snippetError: '', snippetSuccess: '',
+    pwUser: 'root', pwPassword: '',
+    regenBusy: false,
+    // Access / storage setup
+    ssh: { checked: false, sftp_ok: false, root_pam: false, pubkey: '' },
+    showSetup: false, showPubkey: false, rootPassword: '',
+    setupBusy: false, setupMsg: '', setupOk: false,
+
+    // True when a custom "user" snippet is attached: Proxmox then ignores the
+    // native ciuser/cipassword/sshkeys, so we disable those native fields.
+    get hasUserSnippet() {
+      return /(^|,)\s*user=/.test(this.cicustom || '');
+    },
+
+    get selectedStorage() {
+      return this.snippetStorages.find(s => s.storage === this.snippetStorage) || null;
+    },
+
+    storageLabel(s) {
+      const parts = [s.storage];
+      if (s.type) parts.push(`(${s.type})`);
+      parts.push(s.shared ? '· shared' : '· local');
+      if (!s.snippets_enabled) parts.push('· snippets off');
+      return parts.join(' ');
+    },
+
+    openSnippetTab() { this.tab = 'snippet'; this.initSnippetTab(); },
+
+    async loadStorages(preselect) {
+      try {
+        const all = await ProxUtils.apiJson(`/api/snippets/storages?node=${node}`);
+        // Only filesystem storages can hold snippets; show shared first.
+        this.snippetStorages = (all || [])
+          .filter(s => s.filesystem)
+          .sort((a, b) => (b.shared - a.shared) || (b.snippets_enabled - a.snippets_enabled));
+        if (preselect && this.snippetStorages.some(s => s.storage === preselect)) {
+          this.snippetStorage = preselect;
+        } else if (!this.snippetStorage) {
+          const best = this.snippetStorages.find(s => s.shared && s.snippets_enabled)
+            || this.snippetStorages.find(s => s.snippets_enabled);
+          if (best) this.snippetStorage = best.storage;
+        }
+      } catch(e) { this.snippetError = e.message; }
+    },
+
+    async loadSshStatus() {
+      try {
+        const st = await ProxUtils.apiJson(`/api/snippets/ssh/status?node=${node}`);
+        this.ssh = { checked: true, sftp_ok: !!st.sftp_ok, root_pam: !!st.root_pam, pubkey: st.pubkey || '' };
+      } catch(e) { this.ssh = { ...this.ssh, checked: true }; }
+    },
+
+    async setupAccess() {
+      this.setupBusy = true; this.setupMsg = '';
+      try {
+        const body = { node };
+        if (!this.ssh.root_pam && this.rootPassword) body.root_password = this.rootPassword;
+        const r = await ProxUtils.apiJson(`/api/snippets/ssh/setup`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        this.rootPassword = '';
+        this.setupOk = true; this.setupMsg = r.message || 'SSH key installed.';
+        this.showSetup = false;
+        await this.loadSshStatus();
+      } catch(e) {
+        this.setupOk = false; this.setupMsg = e.message || 'Setup failed';
+      } finally { this.setupBusy = false; }
+    },
+
+    async createSharedStorage() {
+      this.setupBusy = true; this.setupMsg = '';
+      try {
+        const r = await ProxUtils.apiJson(`/api/snippets/storage/create`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ node }),
+        });
+        this.setupOk = true; this.setupMsg = r.message || 'Shared storage created.';
+        await this.loadStorages(r.storage);
+      } catch(e) {
+        this.setupOk = false; this.setupMsg = e.message || 'Could not create storage';
+      } finally { this.setupBusy = false; }
+    },
+
+    async enableSnippets() {
+      if (!this.selectedStorage) return;
+      this.setupBusy = true; this.setupMsg = '';
+      try {
+        const r = await ProxUtils.apiJson(`/api/snippets/storage/enable-snippets`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ node, storage: this.selectedStorage.storage }),
+        });
+        this.setupOk = true; this.setupMsg = r.message || 'Snippets enabled.';
+        await this.loadStorages(this.snippetStorage);
+      } catch(e) {
+        this.setupOk = false; this.setupMsg = e.message || 'Could not enable snippets';
+      } finally { this.setupBusy = false; }
+    },
+
+    async initSnippetTab() {
+      if (!this.snippetStoragesLoaded) {
+        await this.loadStorages();
+        await this.loadSshStatus();
+        this.snippetStoragesLoaded = true;
+      }
+      // Load existing snippet content if attached and not yet loaded
+      if (this.cicustom && !this.snippetContent) {
+        try {
+          const ci = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/cloudinit`);
+          if (ci.snippet_content) {
+            this.snippetContent = ci.snippet_content;
+            if (ci.snippet_storage && !this.snippetStorage) this.snippetStorage = ci.snippet_storage;
+            if (ci.snippet_filename) this.snippetFilename = ci.snippet_filename;
+          }
+        } catch(_) {}
+      }
+    },
+
+    applyTemplate() {
+      if (!this.template) return;
+      const fn = _CI_TEMPLATES[this.template];
+      if (!fn) return;
+      const keyLines = (this.sshkeys || '').trim().split('\n')
+        .filter(k => k.trim())
+        .map(k => `      - ${k.trim()}`)
+        .join('\n');
+      this.snippetContent = fn(this.vmName, keyLines || '      # no SSH keys configured');
+      this.validateResult = null;
+    },
+
+    insertPasswordBlock() {
+      const user = (this.pwUser || 'root').trim();
+      const pw = this.pwPassword;
+      if (!pw.trim()) return;
+      let content = this.snippetContent || '';
+      if (!content.trim()) content = '#cloud-config\n';
+      if (!content.endsWith('\n')) content += '\n';
+      // Escape the password for a YAML double-quoted scalar.
+      const esc = pw.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      content += `\nchpasswd:\n  expire: false\n  users:\n` +
+                 `    - {name: ${user}, password: "${esc}", type: text}\n` +
+                 `ssh_pwauth: true\n`;
+      this.snippetContent = content;
+      this.pwPassword = '';
+      this.validateResult = null;
+      this.snippetSuccess = `Password block for '${user}' inserted — review, then Save & Attach.`;
+    },
+
+    async saveNative() {
+      this.nativeBusy = true; this.nativeError = ''; this.nativeSuccess = '';
+      try {
+        const data = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/cloudinit/native`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ciuser: this.ciuser, sshkeys: this.sshkeys,
+            nameserver: this.nameserver, searchdomain: this.searchdomain,
+            ipconfig0: this.ipconfig0,
+          }),
+        });
+        this.nativeSuccess = data.message;
+      } catch(e) { this.nativeError = e.message || 'Request failed'; }
+      finally { this.nativeBusy = false; }
+    },
+
+    async validateSnippet() {
+      this.validating = true; this.validateResult = null;
+      try {
+        this.validateResult = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/cloudinit/validate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: this.snippetContent }),
+        });
+      } catch(e) {
+        this.validateResult = { valid: false, errors: [e.message], warnings: [] };
+      } finally { this.validating = false; }
+    },
+
+    async saveSnippet() {
+      this.snippetBusy = true; this.snippetError = ''; this.snippetSuccess = '';
+      try {
+        const data = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/cloudinit/snippet`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storage: this.snippetStorage, filename: this.snippetFilename,
+            content: this.snippetContent, type: 'user',
+          }),
+        });
+        this.cicustom = data.cicustom;
+        this.snippetSuccess = data.message;
+        this.validateResult = null;
+      } catch(e) { this.snippetError = e.message || 'Request failed'; }
+      finally { this.snippetBusy = false; }
+    },
+
+    async detachSnippet() {
+      if (!confirm('Detach this snippet from the VM? The file will NOT be deleted.')) return;
+      this.snippetBusy = true; this.snippetError = ''; this.snippetSuccess = '';
+      try {
+        const data = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/cloudinit/snippet`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'user' }),
+        });
+        this.cicustom = '';
+        this.snippetSuccess = data.message;
+      } catch(e) { this.snippetError = e.message || 'Request failed'; }
+      finally { this.snippetBusy = false; }
+    },
+
+    async regenerate() {
+      if (!confirm('Regenerate the cloud-init drive from the current config?\n\n' +
+                   'Reboot the VM afterwards to apply. An already-provisioned guest may ' +
+                   'also need "cloud-init clean" run inside it before the reboot.')) return;
+      this.regenBusy = true;
+      try {
+        const data = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/cloudinit/regenerate`, { method: 'POST' });
+        ProxUtils.notify(data.message || 'Cloud-init drive regenerated.', 'success');
+      } catch(e) {
+        ProxUtils.notify(e.message || 'Failed to regenerate cloud-init drive', 'error');
+      } finally { this.regenBusy = false; }
+    },
+  };
+}
+
+(function(){ function reg(){ window.Alpine.data('cloudInit', cloudInit); }
+  if(window.Alpine) reg(); else document.addEventListener('alpine:init', reg); })();
+</script>
+{% endif %}
+
+{% if vm_type == 'lxc' %}
+<script type="module">
+  import { lxcAdvanced } from "{{ url_for('static', filename='js/lxc-advanced.js') }}";
+  (function(){ function reg(){ window.Alpine.data('lxcAdvanced', lxcAdvanced); }
+    if(window.Alpine) reg(); else document.addEventListener('alpine:init', reg); })();
+</script>
+{% endif %}
 {% endblock %}

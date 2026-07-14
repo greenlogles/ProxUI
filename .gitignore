@@ -1,3 +1,6 @@
 config.toml
 __pycache__/
 tests/__pycache__/
+# Runtime data: cluster config (secrets), ProxUI SSH keypair, snippet store
+data/
+*.bak

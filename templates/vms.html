@@ -11,13 +11,13 @@
 
 <div class="row mt-3">
     <div class="col-12">
-        <div class="card">
+        <div class="card" x-data="{ search: '' }">
             <div class="card-header">
                 <div class="d-flex flex-column flex-sm-row justify-content-between align-items-stretch align-items-sm-center gap-2">
                     <div class="input-group input-group-sm flex-grow-1" style="max-width: 300px;">
                         <span class="input-group-text"><i class="bi bi-search"></i></span>
-                        <input type="text" class="form-control" id="vmSearch" placeholder="Search..." autofocus>
-                    </div>
+                        <input type="text" class="form-control" placeholder="Search..." autofocus
+                               x-model="search" @keydown.escape="search = ''">
                     <a href="{{ url_for('create_vm') }}" class="btn btn-success btn-sm">
                         <i class="bi bi-plus-circle"></i> Create
                     </a>
@@ -51,7 +51,7 @@
                         </thead>
                         <tbody>
                             {% for vm in resources %}
-                            <tr>
+                            <tr x-show="!search || '{{ (vm.name ~ ' ' ~ vm.vmid ~ ' ' ~ vm.node)|lower }}'.includes(search.toLowerCase())">
                                 <td>
                                     {% if vm.status == 'running' %}
                                         <span class="badge bg-success"><i class="bi bi-play-circle"></i> Running</span>
@@ -143,36 +143,4 @@
 </div>
 {% endblock %}
 
-{% block scripts %}
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    const searchInput = document.getElementById('vmSearch');
-    const tableBody = document.querySelector('table tbody');
-    const rows = tableBody.querySelectorAll('tr');
-
-    searchInput.addEventListener('input', function() {
-        const searchTerm = this.value.toLowerCase().trim();
-
-        rows.forEach(row => {
-            const nameCell = row.querySelector('td:nth-child(2)');
-            if (nameCell) {
-                const vmName = nameCell.textContent.toLowerCase();
-                if (vmName.includes(searchTerm)) {
-                    row.style.display = '';
-                } else {
-                    row.style.display = 'none';
-                }
-            }
-        });
-    });
-
-    // Clear search on Escape
-    searchInput.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            this.value = '';
-            this.dispatchEvent(new Event('input'));
-        }
-    });
-});
-</script>
-{% endblock %}
+{% block scripts %}{% endblock %}

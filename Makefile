@@ -1,6 +1,6 @@
-# ProxUI2 Development Makefile
+# ProxUI Development Makefile
 
-.PHONY: help install install-dev test test-coverage lint format security clean docker-build docker-test
+.PHONY: help install install-dev test test-coverage lint format security clean docker-build docker-test run
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -48,13 +48,17 @@ clean: ## Clean up generated files
 	find . -type d -name "__pycache__" -delete
 
 docker-build: ## Build Docker image
-	docker build -t proxui2:latest .
+	docker build -t proxui:latest .
 
 docker-test: docker-build ## Test Docker image
-	docker run --rm -p 8080:8080 --name proxui2-test proxui2:latest &
+	docker run --rm -p 8080:8080 --name proxui-test proxui:latest &
 	sleep 10
-	curl -f http://localhost:8080/connect || (docker logs proxui2-test && exit 1)
-	docker stop proxui2-test
+	curl -f http://localhost:8080/connect || (docker logs proxui-test && exit 1)
+	docker stop proxui-test
+
+run: docker-build ## Build image and run locally with ./data mounted (Ctrl-C to stop)
+	mkdir -p data
+	docker run --rm -it -p 8080:8080 -v "$(PWD)/data:/app/data" --name proxui proxui:latest
 
 ci: lint test security ## Run all CI checks locally
 

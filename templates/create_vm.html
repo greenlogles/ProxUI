@@ -13,11 +13,14 @@
     <div class="col-md-8 mx-auto">
         <div class="card">
             <div class="card-body">
-                <form method="POST" action="{{ url_for('create_vm') }}" id="createVmForm">
+                <form method="POST" action="{{ url_for('create_vm') }}" id="createVmForm"
+                      x-data="createVmForm()">
+
                     <!-- Type Selection -->
                     <div class="mb-3">
                         <label for="type" class="form-label">Type</label>
-                        <select class="form-select" id="type" name="type" required>
+                        <select class="form-select" id="type" name="type" required
+                                x-model="vmType" @change="onTypeChange()">
                             <option value="qemu">Virtual Machine (KVM)</option>
                             <option value="lxc">Container (LXC)</option>
                         </select>
@@ -26,7 +29,8 @@
                     <!-- Node Selection -->
                     <div class="mb-3">
                         <label for="node" class="form-label">Node</label>
-                        <select class="form-select" id="node" name="node" required>
+                        <select class="form-select" id="node" name="node" required
+                                x-model="node" @change="onNodeChange()">
                             <option value="">Select node...</option>
                             {% for node in nodes %}
                             <option value="{{ node }}">{{ node }}</option>
@@ -37,17 +41,21 @@
                     <!-- Creation Method -->
                     <div class="mb-3">
                         <label for="creation_method" class="form-label">Creation Method</label>
-                        <select class="form-select" id="creation_method" name="creation_method">
+                        <select class="form-select" id="creation_method" name="creation_method"
+                                x-model="creationMethod" @change="onMethodChange()">
                             <option value="blank">Create Blank VM/Container</option>
                             <option value="template">Use Template</option>
                         </select>
                     </div>
 
-                    <!-- Template Selection (hidden by default) -->
-                    <div class="mb-3" id="template-group" style="display: none;">
+                    <!-- Template Selection -->
+                    <div class="mb-3" x-show="creationMethod === 'template'">
                         <label for="template" class="form-label">Template</label>
-                        <select class="form-select" id="template" name="template">
-                            <option value="">Loading templates...</option>
+                        <select class="form-select" id="template" name="template" x-model="selectedTemplate">
+                            <option value="">Select template...</option>
+                            <template x-for="t in templates" :key="t.value">
+                                <option :value="t.value" x-text="t.label"></option>
+                            </template>
                         </select>
                     </div>
 
@@ -55,13 +63,16 @@
                     <div class="mb-3">
                         <label for="vmid" class="form-label">VM ID</label>
                         <input type="number" class="form-control" id="vmid" name="vmid"
-                               min="100" max="999999" required placeholder="e.g., 100">
-                        <div id="vmid-feedback" class="form-text"></div>
+                               min="100" max="999999" required placeholder="e.g., 100"
+                               x-model="vmid"
+                               @input="scheduleVmidCheck()"
+                               :class="vmidValid === true ? 'is-valid' : vmidValid === false ? 'is-invalid' : ''">
+                        <div class="form-text" :class="vmidCls" x-text="vmidMsg"></div>
                     </div>
 
                     <div class="mb-3">
                         <label for="name" class="form-label">Name</label>
-                        <input type="text" class="form-control" id="name" name="name" 
+                        <input type="text" class="form-control" id="name" name="name"
                                required placeholder="e.g., my-server">
                     </div>
 
@@ -69,64 +80,85 @@
                     <div class="row">
                         <div class="col-md-4 mb-3">
                             <label for="cores" class="form-label">CPU Cores</label>
-                            <input type="number" class="form-control" id="cores" name="cores" 
+                            <input type="number" class="form-control" id="cores" name="cores"
                                    min="1" max="128" value="2" required>
                         </div>
 
                         <div class="col-md-4 mb-3">
                             <label for="memory" class="form-label">Memory (MB)</label>
-                            <input type="number" class="form-control" id="memory" name="memory" 
+                            <input type="number" class="form-control" id="memory" name="memory"
                                    min="512" max="524288" value="2048" step="512" required>
                         </div>
 
-                        <div class="col-md-4 mb-3" id="sockets-group">
+                        <div class="col-md-4 mb-3" x-show="vmType === 'qemu'">
                             <label for="sockets" class="form-label">CPU Sockets</label>
-                            <input type="number" class="form-control" id="sockets" name="sockets" 
-                                   min="1" max="4" value="1" required>
+                            <input type="number" class="form-control" id="sockets" name="sockets"
+                                   min="1" max="4" value="1" :required="vmType === 'qemu'">
                         </div>
                     </div>
 
                     <!-- Storage -->
                     <div class="mb-3">
                         <label for="storage" class="form-label">Storage</label>
-                        <select class="form-select" id="storage" name="storage" required>
+                        <select class="form-select" id="storage" name="storage" required
+                                x-model="selectedStorage">
                             <option value="">Select storage...</option>
+                            <template x-for="s in storages" :key="s.value">
+                                <option :value="s.value" x-text="s.label"></option>
+                            </template>
                         </select>
                     </div>
 
                     <div class="mb-3">
                         <label for="disk_size" class="form-label">Disk Size (GB)</label>
-                        <input type="number" class="form-control" id="disk_size" name="disk_size" 
+                        <input type="number" class="form-control" id="disk_size" name="disk_size"
                                min="1" max="2048" value="20" required>
                     </div>
 
                     <!-- Network -->
                     <div class="mb-3">
                         <label for="bridge" class="form-label">Network Bridge</label>
-                        <select class="form-select" id="bridge" name="bridge">
+                        <select class="form-select" id="bridge" name="bridge" x-model="selectedBridge">
                             <option value="">Select network bridge...</option>
+                            <template x-for="b in bridges" :key="b.value">
+                                <option :value="b.value" x-text="b.label"></option>
+                            </template>
                         </select>
                     </div>
 
-                    <!-- VM-specific options -->
-                    <div id="qemu-options">
-                        <div class="mb-3">
-                            <label for="iso" class="form-label">ISO Image (Optional)</label>
-                            <select class="form-select" id="iso" name="iso">
-                                <option value="">No ISO (blank VM)</option>
-                            </select>
-                            <div class="form-text">Select an ISO image to attach to the VM for OS installation</div>
+                    <!-- VM-specific: ISO -->
+                    <div class="mb-3" x-show="vmType === 'qemu'">
+                        <label for="iso" class="form-label">ISO Image (Optional)</label>
+                        <select class="form-select" id="iso" name="iso" x-model="selectedIso">
+                            <option value="">No ISO (blank VM)</option>
+                            <template x-for="iso in isos" :key="iso.value">
+                                <option :value="iso.value" x-text="iso.label"></option>
+                            </template>
+                        </select>
+                        <div class="form-text">Select an ISO image to attach to the VM for OS installation</div>
+                    </div>
+
+                    <!-- VM-specific: QEMU guest agent -->
+                    <div class="mb-3" x-show="vmType === 'qemu'">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="agent" name="agent" value="1">
+                            <label class="form-check-label" for="agent">Enable QEMU guest agent</label>
+                        </div>
+                        <div class="form-text">
+                            Leave off unless <code>qemu-guest-agent</code> is installed in the guest — enabling it
+                            without the agent running makes detail pages slow to load.
                         </div>
                     </div>
 
-                    <!-- Container-specific options -->
-                    <div id="lxc-options" style="display: none;">
-                        <div class="mb-3">
-                            <label for="ostemplate" class="form-label">OS Template</label>
-                            <select class="form-select" id="ostemplate" name="ostemplate">
-                                <option value="">Select OS template...</option>
-                            </select>
-                        </div>
+                    <!-- Container-specific: OS Template -->
+                    <div class="mb-3" x-show="vmType === 'lxc'">
+                        <label for="ostemplate" class="form-label">OS Template</label>
+                        <select class="form-select" id="ostemplate" name="ostemplate" x-model="selectedOsTemplate">
+                            <option value="">Select OS template...</option>
+                            <template x-for="t in osTemplates" :key="t.value">
+                                <option :value="t.value" x-text="t.label"></option>
+                            </template>
+                        </select>
                     </div>
 
                     <div class="d-grid gap-2 d-md-flex justify-content-md-end">
@@ -143,313 +175,9 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Get form elements
-    const typeSelect = document.getElementById('type');
-    const nodeSelect = document.getElementById('node');
-    const creationMethodSelect = document.getElementById('creation_method');
-    const templateGroup = document.getElementById('template-group');
-    const templateSelect = document.getElementById('template');
-    const socketsGroup = document.getElementById('sockets-group');
-    const storageSelect = document.getElementById('storage');
-    const bridgeSelect = document.getElementById('bridge');
-    const qemuOptions = document.getElementById('qemu-options');
-    const isoSelect = document.getElementById('iso');
-    const lxcOptions = document.getElementById('lxc-options');
-    const osTemplateSelect = document.getElementById('ostemplate');
-    const vmidInput = document.getElementById('vmid');
-    const vmidFeedback = document.getElementById('vmid-feedback');
-
-    // VMID validation with debounce
-    let vmidCheckTimeout = null;
-    vmidInput.addEventListener('input', function() {
-        clearTimeout(vmidCheckTimeout);
-        vmidCheckTimeout = setTimeout(() => checkVmidAvailability(this.value), 300);
-    });
-
-    // Event listeners for form changes
-    typeSelect.addEventListener('change', handleTypeChange);
-    nodeSelect.addEventListener('change', handleNodeChange);
-    creationMethodSelect.addEventListener('change', handleCreationMethodChange);
-
-    // Initial setup
-    handleTypeChange();
-    
-    // Handle VM type change
-    function handleTypeChange() {
-        const vmType = typeSelect.value;
-        
-        // Show/hide options for VM vs Container
-        if (vmType === 'lxc') {
-            socketsGroup.style.display = 'none';
-            qemuOptions.style.display = 'none';
-            lxcOptions.style.display = 'block';
-        } else {
-            socketsGroup.style.display = 'block';
-            qemuOptions.style.display = 'block';
-            lxcOptions.style.display = 'none';
-        }
-        
-        // Update templates if node is selected
-        if (nodeSelect.value) {
-            fetchTemplates(nodeSelect.value, vmType);
-            // Also refresh storages since they depend on VM type
-            fetchStorages(nodeSelect.value);
-            // Fetch ISO images for VMs
-            if (vmType === 'qemu') {
-                fetchIsoImages(nodeSelect.value);
-            }
-        }
-    }
-    
-    // Handle node change
-    function handleNodeChange() {
-        const node = nodeSelect.value;
-        if (!node) return;
-        
-        // Fetch storage options
-        fetchStorages(node);
-        
-        // Fetch network options
-        fetchNetworks(node);
-        
-        // Fetch templates based on current VM type
-        fetchTemplates(node, typeSelect.value);
-        
-        // Fetch ISO images for VMs
-        if (typeSelect.value === 'qemu') {
-            fetchIsoImages(node);
-        }
-        
-        // Fetch next available VMID
-        fetchNextVmid(node);
-    }
-    
-    // Handle creation method change
-    function handleCreationMethodChange() {
-        const method = creationMethodSelect.value;
-        
-        if (method === 'template') {
-            templateGroup.style.display = 'block';
-            // Fetch templates if node is selected
-            if (nodeSelect.value) {
-                fetchTemplates(nodeSelect.value, typeSelect.value);
-            }
-        } else {
-            templateGroup.style.display = 'none';
-        }
-    }
-    
-    // Fetch storage options for the selected node
-    function fetchStorages(node) {
-        const vmType = typeSelect.value;
-        fetch(`/api/node/${node}/storages?vm_type=${vmType}`)
-            .then(response => response.json())
-            .then(data => {
-                storageSelect.innerHTML = '<option value="">Select storage...</option>';
-                
-                if (data.error) {
-                    console.error('Error fetching storages:', data.error);
-                    return;
-                }
-                
-                data.forEach(storage => {
-                    const option = document.createElement('option');
-                    option.value = storage.storage;
-                    
-                    // Create display text with available space information
-                    let displayText = `${storage.storage} (${storage.type})`;
-                    if (storage.available_gb !== undefined) {
-                        displayText += ` - ${storage.available_gb} GB free`;
-                    }
-                    option.textContent = displayText;
-                    storageSelect.appendChild(option);
-                });
-                
-                // Auto-select storage with most available space (already sorted by API)
-                if (data.length > 0) {
-                    // The API already sorts by available space (most space first)
-                    // Filter out storages with very little space (less than 10GB) if alternatives exist
-                    const usableStorages = data.filter(s => s.available_gb >= 10);
-                    
-                    let selectedStorage;
-                    if (usableStorages.length > 0) {
-                        selectedStorage = usableStorages[0]; // Storage with most space that has at least 10GB
-                    } else {
-                        selectedStorage = data[0]; // Fallback to any available storage
-                    }
-                    
-                    storageSelect.value = selectedStorage.storage;
-                }
-            })
-            .catch(error => {
-                console.error('Error fetching storages:', error);
-            });
-    }
-    
-    // Fetch network options for the selected node
-    function fetchNetworks(node) {
-        fetch(`/api/node/${node}/networks`)
-            .then(response => response.json())
-            .then(data => {
-                bridgeSelect.innerHTML = '<option value="">Select network bridge...</option>';
-                
-                if (data.error) {
-                    console.error('Error fetching networks:', data.error);
-                    return;
-                }
-                
-                data.forEach(network => {
-                    const option = document.createElement('option');
-                    option.value = network.iface;
-                    option.textContent = network.iface;
-                    bridgeSelect.appendChild(option);
-                });
-                
-                // Select first bridge by default if available
-                if (data.length > 0) {
-                    bridgeSelect.value = data[0].iface;
-                }
-            })
-            .catch(error => {
-                console.error('Error fetching networks:', error);
-            });
-    }
-    
-    // Fetch templates for the selected node and VM type
-    function fetchTemplates(node, vmType) {
-        fetch(`/api/node/${node}/templates`)
-            .then(response => response.json())
-            .then(data => {
-                templateSelect.innerHTML = '<option value="">Select template...</option>';
-                osTemplateSelect.innerHTML = '<option value="">Select OS template...</option>';
-                
-                if (data.error) {
-                    console.error('Error fetching templates:', data.error);
-                    return;
-                }
-                
-                if (vmType === 'qemu') {
-                    // VM templates
-                    if (data.qemu && data.qemu.length > 0) {
-                        data.qemu.forEach(template => {
-                            const option = document.createElement('option');
-                            option.value = template.vmid;
-                            option.textContent = template.name || `Template VM ${template.vmid}`;
-                            templateSelect.appendChild(option);
-                        });
-                    }
-                } else if (vmType === 'lxc') {
-                    // Container templates - populate OS template dropdown
-                    if (data.lxc && data.lxc.length > 0) {
-                        console.log('Found LXC templates:', data.lxc.length);
-                        data.lxc.forEach(template => {
-                            const option = document.createElement('option');
-                            option.value = template.volid;
-                            option.textContent = template.volid.split('/').pop();
-                            osTemplateSelect.appendChild(option);
-                        });
-                    } else {
-                        console.log('No LXC templates found in data:', data);
-                    }
-                }
-            })
-            .catch(error => {
-                console.error('Error fetching templates:', error);
-            });
-    }
-    
-    // Fetch ISO images for the selected node
-    function fetchIsoImages(node) {
-        fetch(`/api/node/${node}/iso-images`)
-            .then(response => response.json())
-            .then(data => {
-                isoSelect.innerHTML = '<option value="">No ISO (blank VM)</option>';
-                
-                if (data.error) {
-                    console.error('Error fetching ISO images:', data.error);
-                    return;
-                }
-                
-                data.forEach(iso => {
-                    const option = document.createElement('option');
-                    option.value = iso.volid;
-                    
-                    // Create display text with size information
-                    let displayText = iso.volid.split('/').pop(); // Get filename only
-                    if (iso.size) {
-                        const sizeGB = (iso.size / (1024 * 1024 * 1024)).toFixed(1);
-                        displayText += ` (${sizeGB} GB)`;
-                    }
-                    option.textContent = displayText;
-                    isoSelect.appendChild(option);
-                });
-            })
-            .catch(error => {
-                console.error('Error fetching ISO images:', error);
-            });
-    }
-    
-    // Fetch next available VMID
-    function fetchNextVmid(node) {
-        fetch(`/api/cluster/nextid`)
-            .then(response => response.json())
-            .then(data => {
-                if (data.error) {
-                    console.error('Error fetching next VMID:', data.error);
-                    return;
-                }
-
-                document.getElementById('vmid').value = data.vmid;
-                // Check the auto-filled VMID availability
-                checkVmidAvailability(data.vmid);
-            })
-            .catch(error => {
-                console.error('Error fetching next VMID:', error);
-            });
-    }
-
-    // Check if VMID is available
-    function checkVmidAvailability(vmid) {
-        if (!vmid || vmid < 100) {
-            vmidFeedback.innerHTML = '';
-            vmidInput.classList.remove('is-valid', 'is-invalid');
-            return;
-        }
-
-        vmidFeedback.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Checking...';
-        vmidFeedback.className = 'form-text text-muted';
-
-        fetch(`/api/cluster/vmid/${vmid}/check`)
-            .then(response => response.json())
-            .then(data => {
-                if (data.error) {
-                    vmidFeedback.innerHTML = `<i class="bi bi-exclamation-triangle"></i> ${data.error}`;
-                    vmidFeedback.className = 'form-text text-warning';
-                    vmidInput.classList.remove('is-valid', 'is-invalid');
-                } else if (data.available) {
-                    vmidFeedback.innerHTML = '<i class="bi bi-check-circle"></i> VMID is available';
-                    vmidFeedback.className = 'form-text text-success';
-                    vmidInput.classList.remove('is-invalid');
-                    vmidInput.classList.add('is-valid');
-                } else {
-                    let msg = `<i class="bi bi-x-circle"></i> ${data.reason}`;
-                    if (data.name) {
-                        msg += ` (${data.name} on ${data.node})`;
-                    }
-                    vmidFeedback.innerHTML = msg;
-                    vmidFeedback.className = 'form-text text-danger';
-                    vmidInput.classList.remove('is-valid');
-                    vmidInput.classList.add('is-invalid');
-                }
-            })
-            .catch(error => {
-                console.error('Error checking VMID:', error);
-                vmidFeedback.innerHTML = '';
-                vmidInput.classList.remove('is-valid', 'is-invalid');
-            });
-    }
-});
+<script type="module">
+    import { createVmForm } from "{{ url_for('static', filename='js/create-vm.js') }}";
+    function register() { window.Alpine.data('createVmForm', createVmForm); }
+    if (window.Alpine) register(); else document.addEventListener('alpine:init', register);
 </script>
 {% endblock %}

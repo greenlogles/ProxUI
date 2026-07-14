@@ -10,6 +10,7 @@
     </script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
+    <script defer src="{{ url_for('static', filename='js/alpine.min.js') }}"></script>
     <style>
         html, body {
             margin: 0;
@@ -198,10 +199,6 @@
             display: none;
         }
 
-        #virtual-keyboard.visible {
-            display: block;
-        }
-
         .vkb-row {
             display: flex;
             justify-content: center;
@@ -290,7 +287,7 @@
     </style>
 </head>
 <body>
-    <div id="console-container">
+    <div id="console-container" x-data="consoleToolbar()">
         <!-- Toolbar -->
         <div id="console-toolbar">
             <div id="console-status">
@@ -308,22 +305,26 @@
                 <span class="kbd-hint">
                     <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Del</kbd>
                 </span>
-                <button class="btn btn-sm btn-outline-danger" onclick="sendCtrlAltDel()" title="Send Ctrl+Alt+Del">
+                <button class="btn btn-sm btn-outline-danger" @click="sendCtrlAltDel()" title="Send Ctrl+Alt+Del">
                     <i class="bi bi-sign-stop"></i>
                 </button>
-                <button class="btn btn-sm btn-outline-info" onclick="toggleVirtualKeyboard()" title="Virtual Keyboard" id="vkbToggleBtn">
+                <button class="btn btn-sm btn-outline-info" id="vkbToggleBtn"
+                        @click="toggleVirtualKeyboard()" title="Virtual Keyboard"
+                        :class="{ 'active': keyboardVisible }">
                     <i class="bi bi-keyboard-fill"></i>
                 </button>
-                <button class="btn btn-sm btn-outline-secondary" onclick="pasteToVM()" title="Paste to VM">
+                <button class="btn btn-sm btn-outline-secondary" @click="pasteToVM()" title="Paste to VM">
                     <i class="bi bi-clipboard-plus"></i>
                 </button>
-                <button class="btn btn-sm btn-outline-secondary" onclick="copyFromVM()" title="Copy from VM" id="copyFromVmBtn">
+                <button class="btn btn-sm btn-outline-secondary" id="copyFromVmBtn"
+                        @click="copyFromVM()" title="Copy from VM"
+                        :class="vmClipboardAvailable ? 'btn-outline-success' : 'btn-outline-secondary'">
                     <i class="bi bi-clipboard-minus"></i>
                 </button>
-                <button class="btn btn-sm btn-outline-secondary" onclick="toggleFullscreen()" title="Fullscreen">
+                <button class="btn btn-sm btn-outline-secondary" @click="toggleFullscreen()" title="Fullscreen">
                     <i class="bi bi-arrows-fullscreen"></i>
                 </button>
-                <button class="btn btn-sm btn-outline-warning" onclick="reconnect()" title="Reconnect">
+                <button class="btn btn-sm btn-outline-warning" @click="doReconnect()" title="Reconnect">
                     <i class="bi bi-arrow-clockwise"></i>
                 </button>
             </div>
@@ -341,13 +342,13 @@
             </div>
             <div id="overlay-text">Connecting to console...</div>
             <div id="error-message" class="hidden"></div>
-            <button class="btn btn-primary mt-3 hidden" id="retry-button" onclick="reconnect()">
+            <button class="btn btn-primary mt-3 hidden" id="retry-button" @click="doReconnect()">
                 <i class="bi bi-arrow-clockwise"></i> Retry Connection
             </button>
         </div>
 
         <!-- Virtual Keyboard - Full layout -->
-        <div id="virtual-keyboard">
+        <div id="virtual-keyboard" x-show="keyboardVisible">
             <!-- Row 1: Special keys -->
             <div class="vkb-row vkb-special">
                 <button class="vkb-key" data-key="Escape">ESC</button>
@@ -371,7 +372,7 @@
                 <button class="vkb-key" data-key="ArrowRight">→</button>
                 <button class="vkb-key" data-key="Backspace">⌫</button>
                 <button class="vkb-key" data-key="Delete">DEL</button>
-                <button class="vkb-key" onclick="toggleVirtualKeyboard()">✕</button>
+                <button class="vkb-key" @click="toggleVirtualKeyboard()">✕</button>
             </div>
             <!-- Row 3: Numbers -->
             <div class="vkb-row">
@@ -435,7 +436,6 @@
         const node = '{{ node }}';
         const vmid = '{{ vmid }}';
         const vmStatus = '{{ vm_status }}';
-        const vmType = 'qemu';
 
         let rfb = null;
         let reconnectAttempts = 0;
@@ -451,41 +451,11 @@
         const statusIndicator = document.getElementById('status-indicator');
         const connectionText = document.getElementById('connection-text');
 
-        // Make functions available globally
-        window.sendCtrlAltDel = function() {
-            if (rfb) {
-                rfb.sendCtrlAltDel();
-            }
-        };
-
-        window.toggleFullscreen = function() {
-            if (!document.fullscreenElement) {
-                document.documentElement.requestFullscreen();
-            } else {
-                document.exitFullscreen();
-            }
-        };
-
         // Virtual Keyboard
-        const virtualKeyboard = document.getElementById('virtual-keyboard');
-        const vkbToggleBtn = document.getElementById('vkbToggleBtn');
         let modifiers = { ctrl: false, alt: false, shift: false };
 
-        window.toggleVirtualKeyboard = function() {
-            virtualKeyboard.classList.toggle('visible');
-            vkbToggleBtn.classList.toggle('active');
-            // Reset modifiers when closing
-            if (!virtualKeyboard.classList.contains('visible')) {
-                resetModifiers();
-            }
-        };
-
-        function resetModifiers() {
-            modifiers = { ctrl: false, alt: false, shift: false };
-            document.querySelectorAll('.vkb-key.modifier').forEach(btn => {
-                btn.classList.remove('active');
-            });
-        }
+        // Clipboard received from VM
+        let vmClipboard = '';
 
         // X11 keysym mapping for noVNC
         const keySymMap = {
@@ -534,15 +504,19 @@
             'Shift': 'ShiftLeft'
         };
 
+        function resetModifiers() {
+            modifiers = { ctrl: false, alt: false, shift: false };
+            document.querySelectorAll('.vkb-key.modifier').forEach(btn => {
+                btn.classList.remove('active');
+            });
+        }
+
         function sendKey(key) {
             if (!rfb) return;
 
-            // Get keysym - for single chars use charCode, otherwise use map
             let keysym;
             if (key.length === 1 && !keySymMap[key]) {
-                // Single character - get proper keysym
                 let charCode = key.charCodeAt(0);
-                // Apply shift for uppercase
                 if (modifiers.shift && key >= 'a' && key <= 'z') {
                     charCode = key.toUpperCase().charCodeAt(0);
                 }
@@ -555,21 +529,17 @@
 
             const code = keyCodeMap[key] || null;
 
-            // Send modifier key presses
             if (modifiers.ctrl) rfb.sendKey(keySymMap['Control'], 'ControlLeft', true);
             if (modifiers.alt) rfb.sendKey(keySymMap['Alt'], 'AltLeft', true);
             if (modifiers.shift) rfb.sendKey(keySymMap['Shift'], 'ShiftLeft', true);
 
-            // Send the actual key press and release
             rfb.sendKey(keysym, code, true);
             rfb.sendKey(keysym, code, false);
 
-            // Release modifier keys
             if (modifiers.shift) rfb.sendKey(keySymMap['Shift'], 'ShiftLeft', false);
             if (modifiers.alt) rfb.sendKey(keySymMap['Alt'], 'AltLeft', false);
             if (modifiers.ctrl) rfb.sendKey(keySymMap['Control'], 'ControlLeft', false);
 
-            // Reset modifiers after sending (one-shot behavior)
             resetModifiers();
         }
 
@@ -581,7 +551,6 @@
                 const key = this.dataset.key;
 
                 if (modifier) {
-                    // Toggle modifier
                     modifiers[modifier] = !modifiers[modifier];
                     this.classList.toggle('active');
                 } else if (key) {
@@ -590,71 +559,23 @@
             });
         });
 
-        window.reconnect = function() {
-            reconnectAttempts = 0;
-            connect();
-        };
-
-        // Clipboard from VM - stored when VM sends clipboard data
-        let vmClipboard = '';
-
-        window.pasteToVM = async function() {
-            if (!rfb) {
-                alert('Not connected to VM');
-                return;
-            }
-            try {
-                // Try to read from browser clipboard
-                const text = await navigator.clipboard.readText();
-                if (text) {
-                    rfb.clipboardPasteFrom(text);
-                    showToast('Clipboard sent to VM');
-                } else {
-                    // Fallback: prompt for text
-                    const input = prompt('Enter text to paste to VM:');
-                    if (input) {
-                        rfb.clipboardPasteFrom(input);
-                        showToast('Text sent to VM');
-                    }
-                }
-            } catch (err) {
-                // Clipboard API not available or permission denied
-                const input = prompt('Enter text to paste to VM:\n(Browser clipboard access denied)');
-                if (input) {
-                    rfb.clipboardPasteFrom(input);
-                    showToast('Text sent to VM');
-                }
-            }
-        };
-
-        window.copyFromVM = async function() {
-            if (!vmClipboard) {
-                alert('No clipboard data received from VM.\n\nNote: The VM must copy text first, and the guest tools (QEMU Guest Agent or SPICE agent) must be installed for clipboard sharing to work.');
-                return;
-            }
-            try {
-                await navigator.clipboard.writeText(vmClipboard);
-                showToast('VM clipboard copied to browser');
-            } catch (err) {
-                // Fallback: show in a prompt for manual copy
-                prompt('VM clipboard content (Ctrl+C to copy):', vmClipboard);
-            }
-        };
-
         function showToast(message) {
-            // Simple toast notification
-            const toast = document.createElement('div');
-            toast.className = 'position-fixed bottom-0 end-0 p-3';
-            toast.style.zIndex = '9999';
-            toast.innerHTML = `
-                <div class="toast show" role="alert">
-                    <div class="toast-body bg-success text-white rounded">
-                        <i class="bi bi-check-circle"></i> ${message}
-                    </div>
-                </div>
-            `;
-            document.body.appendChild(toast);
-            setTimeout(() => toast.remove(), 2000);
+            const wrapper = document.createElement('div');
+            wrapper.className = 'position-fixed bottom-0 end-0 p-3';
+            wrapper.style.zIndex = '9999';
+            const toastDiv = document.createElement('div');
+            toastDiv.className = 'toast show';
+            toastDiv.setAttribute('role', 'alert');
+            const body = document.createElement('div');
+            body.className = 'toast-body bg-success text-white rounded';
+            const icon = document.createElement('i');
+            icon.className = 'bi bi-check-circle';
+            body.appendChild(icon);
+            body.appendChild(document.createTextNode(' ' + message));
+            toastDiv.appendChild(body);
+            wrapper.appendChild(toastDiv);
+            document.body.appendChild(wrapper);
+            setTimeout(() => wrapper.remove(), 2000);
         }
 
         function showError(message) {
@@ -704,7 +625,6 @@
         }
 
         async function connect() {
-            // Check if VM is running
             if (vmStatus !== 'running') {
                 showError('VM must be running to access console. Current status: ' + vmStatus);
                 return;
@@ -713,35 +633,29 @@
             showConnecting();
 
             try {
-                // Get VNC session from our proxy
                 const session = await getVncSession();
 
                 if (!session.success) {
                     throw new Error(session.error || 'Failed to create VNC session');
                 }
 
-                // Build WebSocket URL
                 const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 const wsUrl = `${wsProtocol}//${window.location.host}${session.websocket_url}`;
 
-                // Disconnect existing connection if any
                 if (rfb) {
                     rfb.disconnect();
                     rfb = null;
                 }
 
-                // Create noVNC RFB connection with VNC ticket as password
                 rfb = new RFB(vncScreen, wsUrl, {
                     shared: true,
                     credentials: { password: session.password || '' }
                 });
 
-                // Configure RFB
                 rfb.scaleViewport = true;
                 rfb.resizeSession = true;
                 rfb.showDotCursor = true;
 
-                // Event handlers
                 rfb.addEventListener('connect', () => {
                     console.log('VNC connected');
                     showConnected();
@@ -763,7 +677,6 @@
 
                 rfb.addEventListener('credentialsrequired', () => {
                     console.log('Credentials required');
-                    // VNC password is handled by Proxmox ticket, should not reach here
                     showError('VNC authentication failed. Please try reconnecting.');
                 });
 
@@ -772,17 +685,11 @@
                     showError('VNC security handshake failed: ' + (e.detail.reason || 'Unknown error'));
                 });
 
-                // Clipboard event - receive clipboard data from VM
                 rfb.addEventListener('clipboard', (e) => {
                     if (e.detail && e.detail.text) {
                         vmClipboard = e.detail.text;
                         console.log('Received clipboard from VM:', vmClipboard.substring(0, 50) + '...');
-                        // Update button to show data is available
-                        const btn = document.getElementById('copyFromVmBtn');
-                        if (btn) {
-                            btn.classList.remove('btn-outline-secondary');
-                            btn.classList.add('btn-outline-success');
-                        }
+                        window.dispatchEvent(new CustomEvent('vnc:clipboard-received'));
                     }
                 });
 
@@ -801,6 +708,73 @@
 
         // Start connection
         connect();
+
+        // Register Alpine toolbar component (closes over module-scope vars above)
+        function register() {
+            window.Alpine.data('consoleToolbar', () => ({
+                keyboardVisible: false,
+                vmClipboardAvailable: false,
+
+                init() {
+                    window.addEventListener('vnc:clipboard-received', () => {
+                        this.vmClipboardAvailable = true;
+                    });
+                },
+
+                sendCtrlAltDel() {
+                    if (rfb) rfb.sendCtrlAltDel();
+                },
+
+                toggleFullscreen() {
+                    if (!document.fullscreenElement) {
+                        document.documentElement.requestFullscreen();
+                    } else {
+                        document.exitFullscreen();
+                    }
+                },
+
+                toggleVirtualKeyboard() {
+                    this.keyboardVisible = !this.keyboardVisible;
+                    if (!this.keyboardVisible) resetModifiers();
+                },
+
+                async pasteToVM() {
+                    if (!rfb) { alert('Not connected to VM'); return; }
+                    try {
+                        const text = await navigator.clipboard.readText();
+                        if (text) {
+                            rfb.clipboardPasteFrom(text);
+                            showToast('Clipboard sent to VM');
+                        } else {
+                            const input = prompt('Enter text to paste to VM:');
+                            if (input) { rfb.clipboardPasteFrom(input); showToast('Text sent to VM'); }
+                        }
+                    } catch {
+                        const input = prompt('Enter text to paste to VM:\n(Browser clipboard access denied)');
+                        if (input) { rfb.clipboardPasteFrom(input); showToast('Text sent to VM'); }
+                    }
+                },
+
+                async copyFromVM() {
+                    if (!vmClipboard) {
+                        alert('No clipboard data received from VM.\n\nNote: The VM must copy text first, and the guest tools (QEMU Guest Agent or SPICE agent) must be installed for clipboard sharing to work.');
+                        return;
+                    }
+                    try {
+                        await navigator.clipboard.writeText(vmClipboard);
+                        showToast('VM clipboard copied to browser');
+                    } catch {
+                        prompt('VM clipboard content (Ctrl+C to copy):', vmClipboard);
+                    }
+                },
+
+                doReconnect() {
+                    reconnectAttempts = 0;
+                    connect();
+                },
+            }));
+        }
+        if (window.Alpine) register(); else document.addEventListener('alpine:init', register);
     </script>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>

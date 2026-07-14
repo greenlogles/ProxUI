@@ -1,20 +1,26 @@
+import base64
 import json
 import os
 import pprint
 import re
 import secrets
+import shlex
+import socket
 import ssl
 import threading
 import time
+import traceback
 import uuid
 from collections import defaultdict
 from datetime import datetime
 from functools import wraps
-from urllib.parse import urlparse
+from urllib.parse import quote, unquote, urlparse
 
+import requests
 import toml
 import urllib3
 import websocket
+import yaml
 from flask import (
     Flask,
     Response,
@@ -284,6 +290,10 @@ vnc_sessions = {}  # session_id -> {ticket, port, node, vmid, created_at, proxmo
 vnc_sessions_lock = threading.Lock()
 VNC_SESSION_TIMEOUT = 300  # 5 minutes
 
+lxc_config_backups = (
+    {}
+)  # "node:vmid" -> {"config": {...}, "timestamp": "...", "features": "..."}
+
 
 def cleanup_expired_vnc_sessions():
     """Remove expired VNC sessions"""
@@ -547,6 +557,29 @@ def load_cloud_images():
 
 CLOUD_IMAGES = load_cloud_images()
 
+LXC_PROFILES_DEFAULT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "lxc_profiles.json"
+)
+LXC_PROFILES_FILE = os.environ.get("LXC_PROFILES_PATH", LXC_PROFILES_DEFAULT_PATH)
+
+
+def load_lxc_profiles():
+    """Load LXC profile bundles from JSON file (path overridable via LXC_PROFILES_PATH)."""
+    try:
+        with open(LXC_PROFILES_FILE, "r") as f:
+            profiles = json.load(f)
+            print(f"Loaded {len(profiles)} LXC profiles from {LXC_PROFILES_FILE}")
+            return profiles
+    except FileNotFoundError:
+        print(f"Warning: LXC profiles file not found: {LXC_PROFILES_FILE}")
+        return {}
+    except json.JSONDecodeError as e:
+        print(f"Warning: Invalid JSON in LXC profiles file: {e}")
+        return {}
+
+
+LXC_PROFILES = load_lxc_profiles()
+
 # Store Proxmox connections for multiple clusters
 all_clusters = {}  # cluster_id -> cluster config
 current_cluster_id = None
@@ -648,6 +681,7 @@ def init_proxmox_connections(cluster_id=None):
                 "user": node_config["user"],
                 "verify_ssl": node_config.get("verify_ssl", True),
                 "last_authenticated": datetime.now(),
+                "pve_version": version.get("version", ""),
             }
             # Store auth credentials (token or password)
             if node_config.get("token_name") and node_config.get("token_value"):
@@ -884,6 +918,13 @@ def update_cluster_next_id(proxmox, vmid):
 
 def get_proxmox_for_node(node_name):
     """Get the appropriate Proxmox connection for a specific node"""
+    # Self-heal: if we have a configured cluster but no live connections
+    # (e.g. after a process restart / reloader cycle), re-establish them
+    # lazily so requests don't fail with a storm of "Node not found" 404s.
+    if not proxmox_nodes and current_cluster_id and current_cluster_id in all_clusters:
+        print("No active Proxmox connections; re-initializing for current cluster...")
+        init_proxmox_connections()
+
     # First check if we have a direct connection to this node
     if node_name in proxmox_nodes:
         return proxmox_nodes[node_name]
@@ -1067,6 +1108,63 @@ def get_qemu_guest_disk_info(proxmox, node, vmid):
     except Exception as e:
         print(f"Error getting guest agent disk info: {e}")
         return None
+
+
+def is_agent_enabled(config):
+    """True if a VM config's 'agent' value has the guest agent enabled.
+
+    Handles the '1', '0', '1,fstrim_cloned_disks=1' and 'enabled=1,...' forms.
+    """
+    first = str(config.get("agent", "0")).split(",")[0].strip()
+    if first.startswith("enabled="):
+        first = first.split("=", 1)[1].strip()
+    return first == "1"
+
+
+def apply_agent_after_clone(source_node, target_node, target_vmid, task_upid, enabled):
+    """Best-effort background apply of the guest-agent flag to a fresh clone.
+
+    A clone inherits the source's 'agent' setting, and the target VM stays locked
+    until the clone task finishes — so wait for the task, then set the flag. The
+    create/clone default is disabled so the detail page never blocks waiting on a
+    guest agent that isn't installed yet.
+    """
+    try:
+        proxmox = get_proxmox_connection(source_node, auto_renew=True)
+        if not proxmox:
+            return
+        waited = 0
+        while waited < 1800:
+            try:
+                st = proxmox.nodes(source_node).tasks(task_upid).status.get()
+                if st.get("status") == "stopped":
+                    break
+            except Exception:
+                pass
+            time.sleep(3)
+            waited += 3
+
+        conn = get_proxmox_connection(target_node, auto_renew=True) or proxmox
+        # Preserve any extra agent options already present on the clone.
+        try:
+            cfg = conn.nodes(target_node).qemu(target_vmid).config.get()
+            extra = [p for p in str(cfg.get("agent", "")).split(",")[1:] if p.strip()]
+        except Exception:
+            extra = []
+        flag = "1" if enabled else "0"
+        agent_val = ",".join([flag] + extra) if extra else flag
+        conn.nodes(target_node).qemu(target_vmid).config.put(agent=agent_val)
+    except Exception as e:
+        print(f"Post-clone agent config failed for {target_vmid}: {e}")
+
+
+def spawn_agent_after_clone(source_node, target_node, target_vmid, task_upid, enabled):
+    """Run apply_agent_after_clone in a daemon thread (non-blocking)."""
+    threading.Thread(
+        target=apply_agent_after_clone,
+        args=(source_node, target_node, target_vmid, task_upid, enabled),
+        daemon=True,
+    ).start()
 
 
 def parse_vm_configuration(config, vm_type="qemu"):
@@ -1259,6 +1357,373 @@ def parse_ssh_keys(ssh_keys_string):
 
     return parsed_keys
 
+
+# ─── LXC Advanced Configuration Helpers ──────────────────────────────────────
+
+LXC_FEATURE_FLAGS = [
+    ("nesting", "Container nesting (Docker-in-LXC, systemd, nested LXC)"),
+    ("keyctl", "Key retention service (required by some apps)"),
+    ("fuse", "FUSE filesystem support"),
+    ("mount", "Mount arbitrary filesystems (cifs, nfs, ext4…)"),
+    ("mknod", "Allow mknod in unprivileged containers"),
+]
+
+_LXC_FLAG_ORDER = [name for name, _ in LXC_FEATURE_FLAGS]
+
+
+def parse_lxc_features(features_str):
+    """Parse LXC features string into a flag dict.
+
+    'nesting=1,keyctl=1' → {'nesting': '1', 'keyctl': '1'}
+    """
+    if not features_str:
+        return {}
+    result = {}
+    for part in str(features_str).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" in part:
+            k, v = part.split("=", 1)
+            result[k.strip()] = v.strip()
+        else:
+            result[part] = "1"
+    return result
+
+
+def serialize_lxc_features(flags_dict):
+    """Serialize a flag dict to a PVE features string.
+
+    Only enabled flags (value truthy/1) are included.
+    Known flags are written in canonical order; unknown flags appended.
+    """
+    parts = []
+    seen = set()
+    for k in _LXC_FLAG_ORDER:
+        if k in flags_dict:
+            seen.add(k)
+            if str(flags_dict[k]) in ("1", "true", "True"):
+                parts.append(f"{k}=1")
+    for k, v in flags_dict.items():
+        if k not in seen and str(v) in ("1", "true", "True"):
+            parts.append(f"{k}=1")
+    return ",".join(parts)
+
+
+def check_lxc_write_permission(proxmox, vmid, node=None):
+    """Return True if the current connection can write to this container's config."""
+    # root@pam and the Proxmox root user always have unconditional superuser access.
+    if node:
+        meta = connection_metadata.get(node) or {}
+        user = meta.get("user", "")
+        username = user.split("@")[0]  # strip realm: "root@pam" → "root"
+        if user == "root@pam" or username == "root":
+            return True
+    try:
+        perms = proxmox.access.permissions.get(path=f"/vms/{vmid}")
+        # Empty dict: Proxmox returns {} for superusers with implicit access.
+        if not perms:
+            return True
+        # Proxmox nests privileges under the path key:
+        # {'/vms/210': {'VM.Config.Options': 1, ...}}
+        path_key = f"/vms/{vmid}"
+        privs = perms.get(path_key, perms)
+        if not privs:
+            return True
+        write_privs = {
+            "VM.Config.Options",
+            "VM.Allocate",
+            "VM.Config.Disk",
+            "VM.Config.Network",
+        }
+        return any(privs.get(p) for p in write_privs)
+    except Exception:
+        return True  # Assume write access if permission check is unavailable
+
+
+# ─── LXC Device & Mount Helpers ──────────────────────────────────────────────
+
+# Known device cgroup info for PVE < 8.2 fallback (type, major, minor)
+KNOWN_LXC_DEVICE_CGROUPS = {
+    "/dev/dri/card0": ("c", 226, 0),
+    "/dev/dri/card1": ("c", 226, 1),
+    "/dev/dri/renderD128": ("c", 226, 128),
+    "/dev/dri/renderD129": ("c", 226, 129),
+    "/dev/net/tun": ("c", 10, 200),
+    "/dev/fuse": ("c", 10, 229),
+    "/dev/kvm": ("c", 10, 232),
+}
+
+
+def parse_lxc_dev(dev_str):
+    """Parse a dev[n] config value → dict with path and optional uid/gid/mode."""
+    if not dev_str:
+        return {}
+    parts = str(dev_str).split(",")
+    result = {"path": parts[0].strip()}
+    for part in parts[1:]:
+        part = part.strip()
+        if "=" in part:
+            k, v = part.split("=", 1)
+            result[k.strip()] = v.strip()
+    return result
+
+
+def serialize_lxc_dev(dev_dict):
+    """Serialize a dev[n] dict → PVE config string."""
+    parts = [dev_dict.get("path", "")]
+    for k in ["uid", "gid", "mode"]:
+        v = dev_dict.get(k)
+        if v is not None and str(v) != "":
+            parts.append(f"{k}={v}")
+    return ",".join(p for p in parts if p)
+
+
+def parse_lxc_mp(mp_str):
+    """Parse an mp[n] config value → dict with host_path and options."""
+    if not mp_str:
+        return {}
+    parts = str(mp_str).split(",")
+    result = {"host_path": parts[0].strip()}
+    for part in parts[1:]:
+        part = part.strip()
+        if "=" in part:
+            k, v = part.split("=", 1)
+            result[k.strip()] = v.strip()
+    return result
+
+
+def serialize_lxc_mp(mp_dict):
+    """Serialize an mp[n] dict → PVE config string."""
+    parts = [mp_dict.get("host_path", "")]
+    for k in ["mp", "ro", "backup", "quota", "shared"]:
+        v = mp_dict.get(k)
+        if v is not None and str(v) != "":
+            parts.append(f"{k}={v}")
+    return ",".join(p for p in parts if p)
+
+
+def is_lxc_bind_mount(mp_str):
+    """True if mp[n] value is a host-path bind mount (starts with '/')."""
+    return bool(mp_str) and str(mp_str).strip().startswith("/")
+
+
+def get_pve_version_tuple(node):
+    """Return PVE version as (major, minor, patch) for a node."""
+    meta = connection_metadata.get(node) or {}
+    ver_str = meta.get("pve_version", "")
+    if not ver_str:
+        return (0, 0, 0)
+    try:
+        clean = ver_str.replace("-", ".").split(".")
+        nums = [int(x) for x in clean if x.isdigit()]
+        return tuple((nums + [0, 0, 0])[:3])
+    except (ValueError, AttributeError):
+        return (0, 0, 0)
+
+
+def _next_key_index(config, prefix):
+    """Return the lowest unused numeric index for a config key prefix (dev, mp, lxc…)."""
+    pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$")
+    used = {int(m.group(1)) for k in config for m in [pattern.match(k)] if m}
+    i = 0
+    while i in used:
+        i += 1
+    return i
+
+
+def _proxmox_error_response(e):
+    """Convert a proxmoxer/requests exception to a JSON Flask response."""
+    traceback.print_exc()
+    err = str(e)
+    if "403" in err or "Forbidden" in err:
+        return jsonify({"error": err}), 403
+    if "400" in err or "Bad Request" in err:
+        return jsonify({"error": err}), 400
+    if "404" in err or "Not Found" in err:
+        return jsonify({"error": err}), 404
+    return jsonify({"error": err}), 500
+
+
+def _check_is_root(node):
+    """Return True if the connection for this node authenticated as root@pam."""
+    meta = connection_metadata.get(node) or {}
+    user = meta.get("user", "")
+    return user == "root@pam" or user.split("@")[0] == "root"
+
+
+def _backup_lxc_config(node, vmid, config):
+    """Snapshot current LXC config before any write."""
+    lxc_config_backups[f"{node}:{vmid}"] = {
+        "config": dict(config),
+        "timestamp": datetime.now().isoformat(),
+        "features": config.get("features", ""),
+    }
+
+
+def _restore_advanced_keys(proxmox, node, vmid, backup_config, current_config):
+    """Restore all LXC advanced keys (features, dev[n], lxc[n], mp[n] binds) from backup."""
+    adv_pattern = re.compile(r"^(dev|lxc)\d+$")
+
+    def is_advanced(key, cfg):
+        return (
+            key == "features"
+            or bool(adv_pattern.match(key))
+            or (re.match(r"^mp\d+$", key) and is_lxc_bind_mount(cfg.get(key, "")))
+        )
+
+    backup_adv = {
+        k: v for k, v in backup_config.items() if is_advanced(k, backup_config)
+    }
+    current_adv = {
+        k: v for k, v in current_config.items() if is_advanced(k, current_config)
+    }
+
+    params = {}
+    delete_list = [k for k in current_adv if k not in backup_adv]
+
+    for k, v in backup_adv.items():
+        if current_config.get(k) != v:
+            params[k] = v
+
+    if delete_list:
+        params["delete"] = ",".join(delete_list)
+
+    if params:
+        proxmox.nodes(node).lxc(vmid).config.put(**params)
+
+    return params, delete_list
+
+
+# ─── End Device & Mount Helpers ───────────────────────────────────────────────
+
+# ─── LXC idmap Helpers ───────────────────────────────────────────────────────
+
+
+def parse_lxc_idmap_line(raw_value):
+    """Parse a raw lxc.idmap value into a structured dict.
+
+    Expected format (from lxc[n] raw key): 'lxc.idmap = u 0 100000 65536'
+    Also accepts the bare mapping portion: 'u 0 100000 65536'
+    Returns None if the value is not an idmap line.
+    """
+    raw = str(raw_value).strip()
+    # Strip the 'lxc.idmap = ' prefix if present
+    if "lxc.idmap" in raw:
+        idx = raw.find("=")
+        if idx == -1:
+            return None
+        raw = raw[idx + 1 :].strip()
+
+    parts = raw.split()
+    if len(parts) != 4 or parts[0] not in ("u", "g"):
+        return None
+    try:
+        return {
+            "type": parts[0],  # 'u' or 'g'
+            "ct_id": int(parts[1]),  # start ID inside container
+            "host_id": int(parts[2]),  # start ID on host
+            "count": int(parts[3]),  # count of IDs mapped
+        }
+    except ValueError:
+        return None
+
+
+def serialize_lxc_idmap_line(idmap_dict):
+    """Serialize an idmap dict to the raw lxc.idmap config value string."""
+    return (
+        f"lxc.idmap = {idmap_dict['type']} "
+        f"{idmap_dict['ct_id']} {idmap_dict['host_id']} {idmap_dict['count']}"
+    )
+
+
+def collect_lxc_idmaps(config):
+    """Return all lxc.idmap entries from a container config as a list of dicts.
+
+    Each dict has 'key' (the lxc[n] config key), 'raw', and parsed fields.
+    """
+    result = []
+    lxc_pattern = re.compile(r"^lxc(\d+)$")
+    for key in sorted(
+        config, key=lambda k: int(k[3:]) if lxc_pattern.match(k) else 999
+    ):
+        if not lxc_pattern.match(key):
+            continue
+        raw = str(config[key])
+        if "lxc.idmap" not in raw:
+            continue
+        parsed = parse_lxc_idmap_line(raw)
+        if parsed:
+            parsed["key"] = key
+            parsed["raw"] = raw
+            result.append(parsed)
+    return result
+
+
+# ─── End LXC idmap Helpers ───────────────────────────────────────────────────
+
+# ─── LXC Profile Helpers ─────────────────────────────────────────────────────
+
+
+def compute_profile_diff(profile, config):
+    """Compute what a profile would add to an existing container config.
+
+    Returns a dict with:
+    - features_to_add: list of 'flag=1' strings not yet enabled
+    - features_already_set: list already enabled
+    - devices_to_add: list of device dicts not yet in config
+    - devices_already_present: list already matching a dev[n] or lxc[n] entry
+    - changes_needed: True if any addition is required
+    - devices_require_stop: True if new devices would be added
+    """
+    current_features = parse_lxc_features(config.get("features", ""))
+    profile_features = profile.get("features", {})
+
+    features_to_add = []
+    features_already_set = []
+    for flag, val in profile_features.items():
+        if str(val) in ("1", "true", "True"):
+            if current_features.get(flag) == "1":
+                features_already_set.append(f"{flag}=1")
+            else:
+                features_to_add.append(f"{flag}=1")
+
+    # Collect existing device paths from dev[n] and lxc.mount.entry
+    existing_paths = set()
+    dev_pattern = re.compile(r"^dev\d+$")
+    lxc_pattern = re.compile(r"^lxc\d+$")
+    for key, val in config.items():
+        if dev_pattern.match(key):
+            parsed = parse_lxc_dev(val)
+            if parsed.get("path"):
+                existing_paths.add(parsed["path"])
+        elif lxc_pattern.match(key) and "lxc.mount.entry" in str(val):
+            # Extract path from: lxc.mount.entry = /dev/... dev/... none ...
+            parts = str(val).split()
+            if len(parts) >= 4:
+                existing_paths.add(parts[2])  # source path
+
+    devices_to_add = []
+    devices_already_present = []
+    for dev in profile.get("devices", []):
+        if dev.get("path") in existing_paths:
+            devices_already_present.append(dev)
+        else:
+            devices_to_add.append(dev)
+
+    return {
+        "features_to_add": features_to_add,
+        "features_already_set": features_already_set,
+        "devices_to_add": devices_to_add,
+        "devices_already_present": devices_already_present,
+        "changes_needed": bool(features_to_add or devices_to_add),
+        "devices_require_stop": bool(devices_to_add),
+    }
+
+
+# ─── End LXC Profile Helpers ─────────────────────────────────────────────────
+
+# ─── End LXC helpers ──────────────────────────────────────────────────────────
 
 # ROUTES - Make sure all routes are defined
 
@@ -1885,9 +2350,14 @@ def vm_detail(node, vmid):
             ]
         )
 
-        # Get guest agent disk information for QEMU VMs
+        # Get guest agent disk information for QEMU VMs — only when the agent is
+        # actually enabled, otherwise the agent call stalls the whole page load.
         guest_disk_info = None
-        if vm_type == "qemu" and status.get("status") == "running":
+        if (
+            vm_type == "qemu"
+            and status.get("status") == "running"
+            and is_agent_enabled(config)
+        ):
             guest_disk_info = get_qemu_guest_disk_info(proxmox, node, vmid)
 
         # Check for active migration tasks
@@ -1961,8 +2431,14 @@ def vm_edit(node, vmid):
             vm_info = proxmox.nodes(node).lxc(vmid).status.current.get()
             config = proxmox.nodes(node).lxc(vmid).config.get()
 
+        ci_sshkeys = unquote(config.get("sshkeys", "")) if config.get("sshkeys") else ""
         return render_template(
-            "vm_edit.html", node=node, vm=vm_info, config=config, vm_type=vm_type
+            "vm_edit.html",
+            node=node,
+            vm=vm_info,
+            config=config,
+            vm_type=vm_type,
+            ci_sshkeys=ci_sshkeys,
         )
     except Exception as e:
         flash(f"Error loading VM/Container configuration: {e}", "error")
@@ -2166,11 +2642,17 @@ def create_vm():
                     return redirect(url_for("create_vm"))
 
                 # Clone the VM
-                proxmox.nodes(node).qemu(template_vmid).clone.post(
-                    newid=vmid, name=name, full=1  # Full clone
+                upid = (
+                    proxmox.nodes(node)
+                    .qemu(template_vmid)
+                    .clone.post(newid=vmid, name=name, full=1)  # Full clone
                 )
                 # Update next-id if incremental VMID is enabled
                 update_cluster_next_id(proxmox, vmid)
+                # Apply the guest-agent toggle after the clone finishes (default
+                # off — clones inherit the template's agent setting).
+                agent_enabled = request.form.get("agent") in ("1", "on", "true", "yes")
+                spawn_agent_after_clone(node, node, vmid, upid, agent_enabled)
                 flash(f"VM {name} cloned from template successfully", "success")
 
             elif vm_type == "qemu":
@@ -2198,6 +2680,11 @@ def create_vm():
                     params["ide2"] = f"{iso_image},media=cdrom"
                     # Update boot order to include CD-ROM first for OS installation
                     params["boot"] = "dc"  # CD-ROM first, then disk
+
+                # QEMU guest agent — off by default (avoids slow detail-page loads
+                # when the agent isn't installed in the guest).
+                if request.form.get("agent") in ("1", "on", "true", "yes"):
+                    params["agent"] = "1"
 
                 # Create the VM
                 proxmox.nodes(node).qemu.create(**params)
@@ -2467,10 +2954,15 @@ def cluster():
 def api_nodes():
     """API endpoint to get all cluster nodes"""
     nodes = []
+    seen = set()
     for node_info in cluster_nodes:
-        nodes.append(
-            {"name": node_info["name"], "status": node_info.get("status", "unknown")}
-        )
+        name = node_info["name"]
+        # Guard against duplicate/blank node names reaching the UI: a duplicate
+        # key crashes Alpine's keyed x-for and blanks the whole page.
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        nodes.append({"name": name, "status": node_info.get("status", "unknown")})
     # Sort nodes alphabetically by name
     nodes.sort(key=lambda x: x["name"])
     return jsonify(nodes)
@@ -2876,7 +3368,7 @@ def api_delete_lxc_template(node, volid):
         proxmox.nodes(node).storage(storage).content(volid).delete()
 
         return jsonify(
-            {"success": True, "message": f"Container template deleted successfully"}
+            {"success": True, "message": "Container template deleted successfully"}
         )
 
     except Exception as e:
@@ -3712,6 +4204,39 @@ def api_vm_metrics(node, vmid):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/vm/<node>/<vmid>/status")
+def api_vm_status(node, vmid):
+    """Lightweight current-status endpoint for live polling on the detail page."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        vm_type = "qemu"
+        try:
+            proxmox.nodes(node).qemu(vmid).config.get()
+            status = proxmox.nodes(node).qemu(vmid).status.current.get()
+        except Exception:
+            vm_type = "lxc"
+            status = proxmox.nodes(node).lxc(vmid).status.current.get()
+
+        return jsonify(
+            {
+                "status": status.get("status", "unknown"),
+                "uptime": status.get("uptime", 0),
+                "cpu": status.get("cpu", 0),
+                "mem": status.get("mem", 0),
+                "maxmem": status.get("maxmem", 0),
+                # 'lock' is set on the VM being cloned/migrated/backed up/etc.
+                # (Proxmox reports it on the affected VM itself, source or target.)
+                "lock": status.get("lock", ""),
+                "vm_type": vm_type,
+            }
+        )
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
 # VM Configuration API
 @app.route("/api/vm/<node>/<vmid>/config", methods=["GET", "PUT"])
 def api_vm_config(node, vmid):
@@ -4031,6 +4556,7 @@ def api_vm_clone(node, vmid):
         target_storage = data.get("target_storage", "")
         clone_type = data.get("clone_type", "full")
         description = data.get("description", "")
+        agent_enabled = bool(data.get("agent", False))
 
         # Prepare clone parameters
         clone_params = {
@@ -4051,11 +4577,30 @@ def api_vm_clone(node, vmid):
         if description:
             clone_params["description"] = description
 
-        # Execute clone operation
+        # Execute clone operation (returns the task UPID, filed on the source node)
         result = proxmox.nodes(node).qemu(vmid).clone.post(**clone_params)
 
         # Update next-id if incremental VMID is enabled
         update_cluster_next_id(proxmox, clone_vmid)
+
+        # Track the clone (disk copy → configuring → done) as a job so it shows
+        # in the Jobs panel; the job also applies the guest-agent toggle once the
+        # clone's lock releases.
+        job_id = job_queue.create_job(
+            job_type="clone",
+            description=f"Clone VM {vmid} → {clone_vmid} ({clone_name})",
+            params={
+                "source_node": node,
+                "target_node": target_node,
+                "target_vmid": clone_vmid,
+                "agent": agent_enabled,
+            },
+        )
+        threading.Thread(
+            target=run_clone_job,
+            args=(job_id, node, target_node, clone_vmid, result, agent_enabled),
+            daemon=True,
+        ).start()
 
         return jsonify(
             {
@@ -4064,6 +4609,7 @@ def api_vm_clone(node, vmid):
                 "new_vmid": clone_vmid,
                 "target_node": target_node,
                 "task": result,
+                "job_id": job_id,
             }
         )
 
@@ -4516,6 +5062,54 @@ def wait_for_task(proxmox, node, task_upid, job_id, timeout=600, poll_interval=3
     return {"success": False, "error": "Task timed out"}
 
 
+def run_clone_job(
+    job_id, source_node, target_node, target_vmid, task_upid, agent_enabled
+):
+    """Background job tracking a VM clone: wait for the disk clone task (which
+    Proxmox files under the source node), then apply post-clone configuration
+    (the guest-agent toggle) on the target once its lock is released.
+    """
+    job_queue.set_running(job_id)
+    job_queue.add_step(job_id, "Cloning disk…")
+    job_queue.update_job(job_id, progress=10)
+
+    try:
+        proxmox = get_proxmox_connection(source_node, auto_renew=True)
+        if not proxmox:
+            job_queue.set_failed(job_id, "Failed to connect to source node")
+            return
+
+        # The clone task lives on the source node.
+        result = wait_for_task(
+            proxmox, source_node, task_upid, job_id, timeout=7200, poll_interval=5
+        )
+        if not result.get("success"):
+            job_queue.set_failed(job_id, result.get("error", "Clone task failed"))
+            return
+
+        job_queue.add_step(job_id, "Disk clone finished")
+        job_queue.update_job(job_id, progress=80)
+
+        # Configuring phase: apply the guest-agent toggle on the target,
+        # preserving any extra agent options the clone inherited.
+        job_queue.add_step(job_id, "Applying configuration (guest agent)…")
+        conn = get_proxmox_connection(target_node, auto_renew=True) or proxmox
+        try:
+            cfg = conn.nodes(target_node).qemu(target_vmid).config.get()
+            extra = [p for p in str(cfg.get("agent", "")).split(",")[1:] if p.strip()]
+        except Exception:
+            extra = []
+        flag = "1" if agent_enabled else "0"
+        agent_val = ",".join([flag] + extra) if extra else flag
+        conn.nodes(target_node).qemu(target_vmid).config.put(agent=agent_val)
+
+        job_queue.set_completed(
+            job_id, result={"vmid": target_vmid, "node": target_node}
+        )
+    except Exception as e:
+        job_queue.set_failed(job_id, str(e))
+
+
 def run_cloud_template_job(job_id, node, params):
     """Background job to create a cloud template via Proxmox API"""
     job_queue.set_running(job_id)
@@ -4646,14 +5240,14 @@ def run_cloud_template_job(job_id, node, params):
             if CLOUD_IMAGE_CACHE_MODE == "REUSE":
                 job_queue.add_step(
                     job_id,
-                    f"Image already exists, reusing cached file (CLOUD_IMAGE_CACHE=REUSE)",
+                    "Image already exists, reusing cached file (CLOUD_IMAGE_CACHE=REUSE)",
                 )
                 skip_download = True
             else:
                 # OVERWRITE mode - delete existing file first
                 job_queue.add_step(
                     job_id,
-                    f"Image exists, deleting for fresh download (CLOUD_IMAGE_CACHE=OVERWRITE)",
+                    "Image exists, deleting for fresh download (CLOUD_IMAGE_CACHE=OVERWRITE)",
                 )
                 try:
                     proxmox.nodes(node).storage(download_storage).content(
@@ -4861,7 +5455,7 @@ def run_cloud_template_job(job_id, node, params):
         if skip_download and CLOUD_IMAGE_CACHE_MODE == "REUSE":
             job_queue.add_step(
                 job_id,
-                f"Keeping cached image for future use (CLOUD_IMAGE_CACHE=REUSE)",
+                "Keeping cached image for future use (CLOUD_IMAGE_CACHE=REUSE)",
             )
         else:
             job_queue.add_step(job_id, "Cleaning up temporary files...")
@@ -4980,9 +5574,2090 @@ def api_create_cloud_template(node):
         return jsonify({"error": str(e)}), 500
 
 
+# ─── LXC Advanced Configuration Routes ───────────────────────────────────────
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/features", methods=["GET", "PUT"])
+def api_lxc_features(node, vmid):
+    """Get or update LXC container feature flags (nesting, keyctl, fuse, mount, mknod)."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+        is_running = status.get("status") == "running"
+
+        if request.method == "GET":
+            features_str = config.get("features", "")
+            can_write = check_lxc_write_permission(proxmox, vmid, node)
+            backup_key = f"{node}:{vmid}"
+            backup = lxc_config_backups.get(backup_key)
+            return jsonify(
+                {
+                    "features": parse_lxc_features(features_str),
+                    "features_raw": features_str,
+                    "running": is_running,
+                    "can_write": can_write,
+                    "has_backup": backup is not None,
+                    "backup_timestamp": backup["timestamp"] if backup else None,
+                }
+            )
+
+        # PUT — update features
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        _backup_lxc_config(node, vmid, config)
+
+        new_features_str = serialize_lxc_features(data.get("features", {}))
+        params = {}
+        if new_features_str:
+            params["features"] = new_features_str
+        else:
+            params["delete"] = "features"
+
+        proxmox.nodes(node).lxc(vmid).config.put(**params)
+
+        msg = "Features updated."
+        if is_running:
+            msg += " Restart the container for changes to take effect."
+
+        return jsonify(
+            {
+                "success": True,
+                "message": msg,
+                "features_raw": new_features_str,
+                "restart_required": is_running,
+            }
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/config-snapshot", methods=["GET"])
+def api_lxc_config_snapshot(node, vmid):
+    """Return the last config snapshot taken before a write for this container."""
+    backup_key = f"{node}:{vmid}"
+    backup = lxc_config_backups.get(backup_key)
+    if not backup:
+        return jsonify({"error": "No snapshot available"}), 404
+    return jsonify(
+        {
+            "timestamp": backup["timestamp"],
+            "features": backup.get("features", ""),
+        }
+    )
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/config-restore", methods=["POST"])
+def api_lxc_config_restore(node, vmid):
+    """Restore all LXC advanced config keys from the pre-write snapshot."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    backup_key = f"{node}:{vmid}"
+    backup = lxc_config_backups.get(backup_key)
+    if not backup:
+        return jsonify({"error": "No snapshot available"}), 404
+
+    try:
+        current_config = proxmox.nodes(node).lxc(vmid).config.get()
+        backup_config = backup["config"]
+        _restore_advanced_keys(proxmox, node, vmid, backup_config, current_config)
+        del lxc_config_backups[backup_key]
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Config restored to snapshot from {backup['timestamp']}.",
+                "features_raw": backup_config.get("features", ""),
+            }
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/devices", methods=["GET", "POST"])
+def api_lxc_devices(node, vmid):
+    """List or add device passthrough entries for an LXC container."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+        is_running = status.get("status") == "running"
+        pve_ver = get_pve_version_tuple(node)
+        supports_dev_n = pve_ver >= (8, 2, 0)
+
+        if request.method == "GET":
+            # Enumerate dev[n] entries (PVE 8.2+)
+            devices = []
+            dev_pattern = re.compile(r"^dev(\d+)$")
+            for key in sorted(config):
+                m = dev_pattern.match(key)
+                if m:
+                    parsed = parse_lxc_dev(config[key])
+                    parsed["key"] = key
+                    parsed["type"] = "dev_n"
+                    devices.append(parsed)
+
+            # Enumerate lxc[n] raw entries (PVE < 8.2 or manual)
+            legacy = []
+            lxc_pattern = re.compile(r"^lxc(\d+)$")
+            for key in sorted(config):
+                if lxc_pattern.match(key):
+                    raw = str(config[key])
+                    if "lxc.cgroup2.devices.allow" in raw or "lxc.mount.entry" in raw:
+                        legacy.append({"key": key, "raw": raw})
+
+            can_write = check_lxc_write_permission(proxmox, vmid, node)
+            return jsonify(
+                {
+                    "devices": devices,
+                    "legacy_devices": legacy,
+                    "pve_version": ".".join(str(x) for x in pve_ver),
+                    "pve_supports_dev_n": supports_dev_n,
+                    "running": is_running,
+                    "can_write": can_write,
+                }
+            )
+
+        # POST — add a device
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        if is_running:
+            return (
+                jsonify(
+                    {
+                        "error": "Container must be stopped before adding devices.",
+                        "stop_required": True,
+                    }
+                ),
+                409,
+            )
+
+        device_path = (data.get("path") or "").strip()
+        if not device_path:
+            return jsonify({"error": "Device path is required"}), 400
+
+        _backup_lxc_config(node, vmid, config)
+
+        if supports_dev_n:
+            idx = _next_key_index(config, "dev")
+            dev_value = serialize_lxc_dev(
+                {
+                    "path": device_path,
+                    "uid": data.get("uid") or None,
+                    "gid": data.get("gid") or None,
+                    "mode": data.get("mode") or None,
+                }
+            )
+            proxmox.nodes(node).lxc(vmid).config.put(**{f"dev{idx}": dev_value})
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"Device {device_path} added as dev{idx}.",
+                    "key": f"dev{idx}",
+                }
+            )
+        else:
+            # PVE < 8.2: write cgroup2 allow + mount.entry via lxc[n] raw keys
+            cgroup_info = KNOWN_LXC_DEVICE_CGROUPS.get(device_path)
+            major = data.get("major")
+            minor = data.get("minor")
+            dev_type = data.get("dev_type", "c")
+
+            if cgroup_info:
+                dev_type, major, minor = cgroup_info
+            elif major is None or minor is None:
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                "PVE < 8.2 requires cgroup major:minor for unknown devices. "
+                                "Provide major, minor, dev_type fields."
+                            )
+                        }
+                    ),
+                    400,
+                )
+
+            idx0 = _next_key_index(config, "lxc")
+            # Container path strips leading /dev/ prefix
+            ct_path = device_path.lstrip("/")
+            params = {
+                f"lxc{idx0}": f"lxc.cgroup2.devices.allow = {dev_type} {major}:{minor} rwm",
+                f"lxc{idx0 + 1}": (
+                    f"lxc.mount.entry = {device_path} {ct_path} "
+                    "none bind,optional,create=file"
+                ),
+            }
+            proxmox.nodes(node).lxc(vmid).config.put(**params)
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"Device {device_path} added via cgroup2 (PVE < 8.2 mode).",
+                    "key": f"lxc{idx0}",
+                }
+            )
+
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/devices/<key>", methods=["DELETE"])
+def api_lxc_device_delete(node, vmid, key):
+    """Remove a device passthrough entry by config key."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+
+        if status.get("status") == "running":
+            return (
+                jsonify(
+                    {
+                        "error": "Container must be stopped before removing devices.",
+                        "stop_required": True,
+                    }
+                ),
+                409,
+            )
+
+        if key not in config:
+            return jsonify({"error": f"Key '{key}' not found in container config"}), 404
+
+        _backup_lxc_config(node, vmid, config)
+
+        # For lxc[n] mount.entry lines, also remove the paired cgroup2 allow line
+        delete_keys = [key]
+        lxc_pattern = re.compile(r"^lxc\d+$")
+        if lxc_pattern.match(key) and "lxc.mount.entry" in str(config.get(key, "")):
+            mount_val = str(config[key])
+            # Find the cgroup2 allow line that was written alongside this entry
+            for k, v in config.items():
+                if (
+                    k != key
+                    and lxc_pattern.match(k)
+                    and "lxc.cgroup2.devices.allow" in str(v)
+                ):
+                    # Heuristic: assume cgroup2 allow directly precedes this mount.entry
+                    # (they are always written as a pair)
+                    # A more robust check would track pairs by index proximity
+                    try:
+                        if abs(int(key[3:]) - int(k[3:])) == 1:
+                            delete_keys.append(k)
+                    except ValueError:
+                        pass
+
+        proxmox.nodes(node).lxc(vmid).config.put(delete=",".join(delete_keys))
+        return jsonify({"success": True, "message": f"Device entry {key} removed."})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/mounts", methods=["GET", "POST"])
+def api_lxc_mounts(node, vmid):
+    """List or add bind mount entries (mp[n]) for an LXC container."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+        is_running = status.get("status") == "running"
+
+        if request.method == "GET":
+            mounts = []
+            mp_pattern = re.compile(r"^mp(\d+)$")
+            for key in sorted(config):
+                if mp_pattern.match(key) and is_lxc_bind_mount(config[key]):
+                    parsed = parse_lxc_mp(config[key])
+                    parsed["key"] = key
+                    mounts.append(parsed)
+            can_write = check_lxc_write_permission(proxmox, vmid, node)
+            is_root = _check_is_root(node)
+            return jsonify(
+                {
+                    "mounts": mounts,
+                    "running": is_running,
+                    "can_write": can_write,
+                    "is_root": is_root,
+                }
+            )
+
+        # POST — add a bind mount
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        if is_running:
+            return (
+                jsonify(
+                    {
+                        "error": "Container must be stopped before adding mounts.",
+                        "stop_required": True,
+                    }
+                ),
+                409,
+            )
+
+        host_path = (data.get("host_path") or "").strip()
+        mp = (data.get("mp") or "").strip()
+        if not host_path or not mp:
+            return (
+                jsonify({"error": "host_path and mp (container path) are required"}),
+                400,
+            )
+        if not host_path.startswith("/"):
+            return (
+                jsonify(
+                    {"error": "host_path must be an absolute path starting with /"}
+                ),
+                400,
+            )
+
+        _backup_lxc_config(node, vmid, config)
+
+        idx = _next_key_index(config, "mp")
+        mp_value = serialize_lxc_mp(
+            {
+                "host_path": host_path,
+                "mp": mp,
+                "ro": "1" if data.get("ro") else "0",
+                "backup": "1" if data.get("backup") else "0",
+            }
+        )
+        if not _check_is_root(node):
+            return (
+                jsonify(
+                    {
+                        "error": "Proxmox only allows root@pam to add bind mounts via API. "
+                        "Connect as root@pam to use this feature."
+                    }
+                ),
+                403,
+            )
+
+        proxmox.nodes(node).lxc(vmid).config.put(**{f"mp{idx}": mp_value})
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Mount {host_path} → {mp} added as mp{idx}.",
+                "key": f"mp{idx}",
+            }
+        )
+
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/mounts/<key>", methods=["DELETE"])
+def api_lxc_mount_delete(node, vmid, key):
+    """Remove a bind mount entry by config key."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+
+        if status.get("status") == "running":
+            return (
+                jsonify(
+                    {
+                        "error": "Container must be stopped before removing mounts.",
+                        "stop_required": True,
+                    }
+                ),
+                409,
+            )
+
+        if key not in config:
+            return jsonify({"error": f"Key '{key}' not found in container config"}), 404
+
+        _backup_lxc_config(node, vmid, config)
+        proxmox.nodes(node).lxc(vmid).config.put(delete=key)
+        return jsonify({"success": True, "message": f"Mount {key} removed."})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/idmap", methods=["GET", "POST"])
+def api_lxc_idmap(node, vmid):
+    """List or add lxc.idmap entries for an LXC container."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+        is_running = status.get("status") == "running"
+
+        if request.method == "GET":
+            idmaps = collect_lxc_idmaps(config)
+            can_write = check_lxc_write_permission(proxmox, vmid, node)
+            backup = lxc_config_backups.get(f"{node}:{vmid}")
+            return jsonify(
+                {
+                    "idmaps": idmaps,
+                    "running": is_running,
+                    "can_write": can_write,
+                    "has_backup": backup is not None,
+                }
+            )
+
+        # POST — add an idmap entry
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        if is_running:
+            return (
+                jsonify(
+                    {
+                        "error": "Container must be stopped before modifying idmap.",
+                        "stop_required": True,
+                    }
+                ),
+                409,
+            )
+
+        id_type = data.get("type", "").strip()
+        if id_type not in ("u", "g"):
+            return jsonify({"error": "type must be 'u' (UID) or 'g' (GID)"}), 400
+
+        try:
+            ct_id = int(data["ct_id"])
+            host_id = int(data["host_id"])
+            count = int(data["count"])
+        except (KeyError, ValueError, TypeError):
+            return jsonify({"error": "ct_id, host_id, count must be integers"}), 400
+
+        _backup_lxc_config(node, vmid, config)
+
+        idx = _next_key_index(config, "lxc")
+        raw_value = serialize_lxc_idmap_line(
+            {"type": id_type, "ct_id": ct_id, "host_id": host_id, "count": count}
+        )
+        proxmox.nodes(node).lxc(vmid).config.put(**{f"lxc{idx}": raw_value})
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"idmap entry added: {raw_value}",
+                "key": f"lxc{idx}",
+                "raw": raw_value,
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/idmap/<key>", methods=["DELETE"])
+def api_lxc_idmap_delete(node, vmid, key):
+    """Remove a specific lxc.idmap entry by config key."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+
+        if status.get("status") == "running":
+            return (
+                jsonify(
+                    {
+                        "error": "Container must be stopped before removing idmap.",
+                        "stop_required": True,
+                    }
+                ),
+                409,
+            )
+
+        if key not in config:
+            return jsonify({"error": f"Key '{key}' not found in container config"}), 404
+        if "lxc.idmap" not in str(config[key]):
+            return jsonify({"error": f"Key '{key}' is not an idmap entry"}), 400
+
+        _backup_lxc_config(node, vmid, config)
+        proxmox.nodes(node).lxc(vmid).config.put(delete=key)
+        return jsonify({"success": True, "message": f"idmap entry {key} removed."})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lxc-profiles", methods=["GET"])
+def api_lxc_profiles():
+    """Return all available LXC config profiles."""
+    profiles = [
+        {"id": pid, **{k: v for k, v in p.items()}} for pid, p in LXC_PROFILES.items()
+    ]
+    return jsonify({"profiles": profiles})
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/profile-diff/<profile_id>", methods=["GET"])
+def api_lxc_profile_diff(node, vmid, profile_id):
+    """Compute the diff of applying a profile to the current container config."""
+    if profile_id not in LXC_PROFILES:
+        return jsonify({"error": f"Profile '{profile_id}' not found"}), 404
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+        profile = LXC_PROFILES[profile_id]
+        diff = compute_profile_diff(profile, config)
+        diff["running"] = status.get("status") == "running"
+        diff["profile"] = {"id": profile_id, **profile}
+        diff["pve_supports_dev_n"] = get_pve_version_tuple(node) >= (8, 2, 0)
+        return jsonify(diff)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/lxc/profile-apply/<profile_id>", methods=["POST"])
+def api_lxc_profile_apply(node, vmid, profile_id):
+    """Apply a profile to an LXC container (additive — never removes existing config)."""
+    if profile_id not in LXC_PROFILES:
+        return jsonify({"error": f"Profile '{profile_id}' not found"}), 404
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).lxc(vmid).config.get()
+        status = proxmox.nodes(node).lxc(vmid).status.current.get()
+        is_running = status.get("status") == "running"
+        profile = LXC_PROFILES[profile_id]
+        diff = compute_profile_diff(profile, config)
+
+        if not diff["changes_needed"]:
+            return jsonify(
+                {
+                    "success": True,
+                    "message": "Profile already fully applied — nothing to change.",
+                }
+            )
+
+        if is_running and diff["devices_require_stop"]:
+            return (
+                jsonify(
+                    {
+                        "error": "Container must be stopped before applying device passthrough from this profile.",
+                        "stop_required": True,
+                    }
+                ),
+                409,
+            )
+
+        _backup_lxc_config(node, vmid, config)
+
+        params = {}
+        applied = []
+
+        # Merge features (additive)
+        if diff["features_to_add"]:
+            current_features = parse_lxc_features(config.get("features", ""))
+            for f in diff["features_to_add"]:
+                k = f.split("=")[0]
+                current_features[k] = "1"
+            params["features"] = serialize_lxc_features(current_features)
+            applied.append(f"features: {', '.join(diff['features_to_add'])}")
+
+        # Add devices (additive, PVE 8.2+ only)
+        pve_ver = get_pve_version_tuple(node)
+        if diff["devices_to_add"]:
+            if pve_ver < (8, 2, 0):
+                return (
+                    jsonify(
+                        {"error": "Device passthrough requires PVE 8.2+ (dev[n] API)."}
+                    ),
+                    400,
+                )
+            working_config = dict(config)
+            working_config.update(params)
+            for dev in diff["devices_to_add"]:
+                idx = _next_key_index(working_config, "dev")
+                dev_val = serialize_lxc_dev(
+                    {
+                        "path": dev["path"],
+                        "uid": dev.get("uid") or None,
+                        "gid": dev.get("gid") or None,
+                    }
+                )
+                key = f"dev{idx}"
+                params[key] = dev_val
+                working_config[key] = dev_val
+                applied.append(f"{key}: {dev_val}")
+
+        if params:
+            proxmox.nodes(node).lxc(vmid).config.put(**params)
+
+        msg = f"Profile '{profile['name']}' applied: {'; '.join(applied)}."
+        if is_running and diff["features_to_add"]:
+            msg += " Restart to activate feature changes."
+
+        return jsonify({"success": True, "message": msg, "applied": applied})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─── End LXC Advanced Routes ──────────────────────────────────────────────────
+
+
 @app.errorhandler(404)
 def not_found(error):
     return render_template("404.html"), 404
+
+
+# ---------------------------------------------------------------------------
+# Cloud-init helpers
+# ---------------------------------------------------------------------------
+
+# ───────────────────────────────────────────────────────────────────────────
+# SSH / key management for snippet writes
+#
+# Proxmox has no API to upload snippets, so writing a custom cloud-init snippet
+# to a node requires filesystem access. When ProxUI runs remotely we reach the
+# node over SSH (Tier 2) or, if port 22 is blocked, the node Shell / termproxy
+# over 8006 (Tier 3). ProxUI uses its own generated ed25519 key, installed once
+# into root's cluster-shared authorized_keys.
+# ───────────────────────────────────────────────────────────────────────────
+
+_SSH_DIR = os.path.join(os.path.dirname(CONFIG_FILE_PATH), "ssh")
+_SSH_KEY_PATH = os.path.join(_SSH_DIR, "proxui_ed25519")
+_SSH_KEY_PUB_PATH = _SSH_KEY_PATH + ".pub"
+
+
+class SnippetWriteError(Exception):
+    """Raised when a snippet cannot be written to the node's storage."""
+
+
+def _get_paramiko():
+    """Lazy paramiko import; returns the module or None if not installed."""
+    try:
+        import paramiko
+
+        return paramiko
+    except ImportError:
+        return None
+
+
+def _ssh_key_comment() -> str:
+    """Identifiable comment for ProxUI's public key, e.g. proxui-snippet@host-2026-07-11."""
+    try:
+        host = socket.gethostname() or "proxui"
+    except Exception:
+        host = "proxui"
+    return f"proxui-snippet@{host}-{datetime.now().strftime('%Y-%m-%d')}"
+
+
+def _ensure_ssh_key() -> tuple[str, str]:
+    """Generate ProxUI's ed25519 keypair if missing. Returns (private_path, public_line).
+
+    Uses the `cryptography` backend (a paramiko dependency) since
+    paramiko.Ed25519Key has no generate() helper.
+    """
+    os.makedirs(_SSH_DIR, exist_ok=True)
+    try:
+        os.chmod(_SSH_DIR, 0o700)
+    except OSError:
+        pass
+    if not os.path.exists(_SSH_KEY_PATH):
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+
+        priv = ed25519.Ed25519PrivateKey.generate()
+        priv_bytes = priv.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.OpenSSH,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        pub_b64 = (
+            priv.public_key()
+            .public_bytes(
+                encoding=serialization.Encoding.OpenSSH,
+                format=serialization.PublicFormat.OpenSSH,
+            )
+            .decode()
+        )
+        pub_line = f"{pub_b64} {_ssh_key_comment()}"
+        # Write private key with restrictive perms before writing anything else.
+        fd = os.open(_SSH_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(priv_bytes)
+        with open(_SSH_KEY_PUB_PATH, "w") as f:
+            f.write(pub_line + "\n")
+
+    with open(_SSH_KEY_PUB_PATH) as f:
+        return _SSH_KEY_PATH, f.read().strip()
+
+
+def _ssh_public_key() -> str | None:
+    """Return the public key line if the key exists, else None (without generating)."""
+    try:
+        with open(_SSH_KEY_PUB_PATH) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def _ssh_target_for_node(node: str) -> tuple[str | None, bool]:
+    """Return (host, verify_ssl) to reach a node. Uses the configured API host.
+
+    Writing to the cluster-shared pmxcfs storage only requires reaching any one
+    node, so the configured host is sufficient even with a single API endpoint.
+    """
+    meta = connection_metadata.get(node) or {}
+    return meta.get("host"), meta.get("verify_ssl", True)
+
+
+def _ssh_connect_root(node: str, timeout: int = 20):
+    """Open a paramiko SSHClient to `node` as root using ProxUI's key.
+
+    Returns the connected client, or raises. Caller must close it.
+    """
+    paramiko = _get_paramiko()
+    if not paramiko:
+        raise SnippetWriteError("paramiko is not installed (pip install paramiko).")
+    host, _ = _ssh_target_for_node(node)
+    if not host:
+        raise SnippetWriteError(f"No connection host known for node '{node}'.")
+    if not os.path.exists(_SSH_KEY_PATH):
+        raise SnippetWriteError("ProxUI SSH key is not set up yet.")
+
+    pkey = paramiko.Ed25519Key.from_private_key_file(_SSH_KEY_PATH)
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.WarningPolicy())
+    client.connect(
+        hostname=host,
+        port=22,
+        username="root",
+        pkey=pkey,
+        timeout=timeout,
+        banner_timeout=timeout,
+        auth_timeout=timeout,
+        allow_agent=False,
+        look_for_keys=False,
+    )
+    return client
+
+
+def _ssh_connect_root_password(node: str, password: str, timeout: int = 20):
+    """Open a paramiko SSHClient to `node` as root using a password (for provisioning)."""
+    paramiko = _get_paramiko()
+    if not paramiko:
+        raise SnippetWriteError("paramiko is not installed (pip install paramiko).")
+    host, _ = _ssh_target_for_node(node)
+    if not host:
+        raise SnippetWriteError(f"No connection host known for node '{node}'.")
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.WarningPolicy())
+    try:
+        client.connect(
+            hostname=host,
+            port=22,
+            username="root",
+            password=password,
+            timeout=timeout,
+            banner_timeout=timeout,
+            auth_timeout=timeout,
+            allow_agent=False,
+            look_for_keys=False,
+        )
+    except paramiko.AuthenticationException:
+        raise SnippetWriteError("SSH login as root failed — check root's password.")
+    return client
+
+
+def _sftp_write_file(node: str, remote_path: str, content: str) -> None:
+    """Write `content` to `remote_path` on `node` via SFTP as root, creating parent dirs."""
+    client = _ssh_connect_root(node)
+    try:
+        sftp = client.open_sftp()
+        # Ensure parent directories exist (mkdir -p semantics).
+        parent = os.path.dirname(remote_path)
+        parts = [p for p in parent.split("/") if p]
+        cur = ""
+        for p in parts:
+            cur += "/" + p
+            try:
+                sftp.stat(cur)
+            except IOError:
+                try:
+                    sftp.mkdir(cur)
+                except IOError:
+                    pass  # concurrent create or perms handled by the write below
+        with sftp.open(remote_path, "w") as wf:
+            wf.write(content)
+    finally:
+        client.close()
+
+
+def _sftp_read_file(node: str, remote_path: str) -> str:
+    """Read a file from `node` via SFTP as root. Raises on failure."""
+    client = _ssh_connect_root(node)
+    try:
+        sftp = client.open_sftp()
+        with sftp.open(remote_path, "r") as rf:
+            return rf.read().decode("utf-8", errors="replace")
+    finally:
+        client.close()
+
+
+def _ssh_run_root(node: str, command: str, timeout: int = 30) -> tuple[int, str, str]:
+    """Run a command on `node` as root via SSH. Returns (exit_code, stdout, stderr)."""
+    client = _ssh_connect_root(node, timeout=timeout)
+    try:
+        _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        rc = stdout.channel.recv_exit_status()
+        out = stdout.read().decode("utf-8", errors="replace")
+        err = stderr.read().decode("utf-8", errors="replace")
+        return rc, out, err
+    finally:
+        client.close()
+
+
+def _ssh_port_open(node: str, timeout: float = 4.0) -> bool:
+    """Quick TCP check for SSH (port 22) reachability."""
+    host, _ = _ssh_target_for_node(node)
+    if not host:
+        return False
+    try:
+        with socket.create_connection((host, 22), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# termproxy (node Shell over 8006) — Tier-3 fallback and key provisioning.
+#
+# The node Shell gives a root PTY over the API port, so it works even when SSH
+# (port 22) is blocked. It requires the Sys.Console privilege and password auth
+# (an API token cannot open a console session). We drive the PTY by base64ing
+# the payload and echoing a unique sentinel with the exit code, so we can tell
+# when a command finished and whether it succeeded despite the noisy terminal.
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def _pve_login_ticket(node: str) -> tuple[str, str, str, bool]:
+    """Return (host, PVEAuthCookie ticket, CSRF token, verify_ssl) for a node.
+
+    Requires username/password auth; raises SnippetWriteError otherwise.
+    """
+    meta = connection_metadata.get(node) or {}
+    host = meta.get("host")
+    user = meta.get("user")
+    password = meta.get("password")
+    verify = meta.get("verify_ssl", True)
+    if not host:
+        raise SnippetWriteError(f"No connection host known for node '{node}'.")
+    if not password:
+        raise SnippetWriteError(
+            "The node Shell (termproxy) needs username/password auth — an API "
+            "token can't open a console session."
+        )
+    r = requests.post(
+        f"https://{host}:8006/api2/json/access/ticket",
+        data={"username": user, "password": password},
+        verify=verify,
+        timeout=15,
+    )
+    r.raise_for_status()
+    d = r.json()["data"]
+    return host, d["ticket"], d["CSRFPreventionToken"], verify
+
+
+class _TermSession:
+    """A driven root PTY over a Proxmox termproxy websocket."""
+
+    def __init__(self, ws):
+        self.ws = ws
+
+    def _send_input(self, data: str) -> None:
+        self.ws.send(f"0:{len(data.encode('utf-8'))}:{data}")
+
+    def _drain_until(self, patterns: list, timeout: int = 8) -> tuple[int, str]:
+        """Read until any regex in `patterns` matches. Returns (index, buffer); -1 if none."""
+        compiled = [re.compile(p) for p in patterns]
+        buf = ""
+        deadline = time.time() + timeout
+        try:
+            self.ws.settimeout(min(timeout, 4))
+        except Exception:
+            pass
+        while time.time() < deadline:
+            try:
+                c = self.ws.recv()
+            except websocket.WebSocketTimeoutException:
+                for i, rx in enumerate(compiled):
+                    if rx.search(buf):
+                        return i, buf
+                continue
+            except Exception:
+                break
+            if isinstance(c, (bytes, bytearray)):
+                c = c.decode("utf-8", errors="replace")
+            buf += c
+            for i, rx in enumerate(compiled):
+                if rx.search(buf):
+                    return i, buf
+        return -1, buf
+
+    def _login(self, os_user: str, os_password: str) -> None:
+        """Drive an interactive `login:` prompt with OS credentials."""
+        self._send_input(f"{os_user}\n")
+        idx, _ = self._drain_until([r"[Pp]assword:\s*$"], timeout=8)
+        if idx != 0:
+            raise SnippetWriteError(
+                "termproxy: no password prompt after sending username."
+            )
+        self._send_input(f"{os_password}\n")
+        # Success → shell prompt; failure → 'Login incorrect' then another 'login:'.
+        idx, buf = self._drain_until(
+            [r"[#$]\s*$", r"[Ll]ogin incorrect", r"login:\s*$"], timeout=12
+        )
+        if idx != 0:
+            raise SnippetWriteError(
+                "termproxy: OS login failed (check the root password)."
+            )
+
+    def run(self, command: str, timeout: int = 45) -> tuple[int, str]:
+        """Run a shell command, return (exit_code, captured_output)."""
+        marker = f"__PROXUI_{uuid.uuid4().hex}__"
+        # The echoed command contains `marker "$?"`; only the real output line
+        # contains `marker:<digits>`, so the regex won't match the echo.
+        self._send_input(f"{command}; printf '%s:%s\\n' {marker} \"$?\"\n")
+        pat = re.compile(re.escape(marker) + r":(\d+)")
+        buf = ""
+        deadline = time.time() + timeout
+        try:
+            self.ws.settimeout(min(timeout, 10))
+        except Exception:
+            pass
+        while time.time() < deadline:
+            try:
+                chunk = self.ws.recv()
+            except websocket.WebSocketTimeoutException:
+                continue
+            except Exception:
+                break
+            if isinstance(chunk, (bytes, bytearray)):
+                chunk = chunk.decode("utf-8", errors="replace")
+            if not chunk:
+                continue
+            buf += chunk
+            m = pat.search(buf)
+            if m:
+                return int(m.group(1)), buf
+        raise SnippetWriteError("termproxy: command timed out")
+
+    def write_file(self, remote_path: str, content: str) -> None:
+        """Write content to remote_path by streaming base64 through the PTY."""
+        b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        tmp = f"/tmp/proxui-snip-{uuid.uuid4().hex}.b64"
+        qdir = shlex.quote(os.path.dirname(remote_path) or "/")
+        qfile = shlex.quote(remote_path)
+        qtmp = shlex.quote(tmp)
+        rc, out = self.run(f"mkdir -p {qdir} && : > {qtmp}")
+        if rc != 0:
+            raise SnippetWriteError(
+                f"termproxy: could not prepare {qdir} ({out[-200:].strip()})"
+            )
+        # Append base64 in PTY-safe chunks (well under the ~4 KB line limit).
+        for i in range(0, len(b64), 1024):
+            chunk = b64[i : i + 1024]
+            rc, out = self.run(f"printf '%s' {shlex.quote(chunk)} >> {qtmp}")
+            if rc != 0:
+                raise SnippetWriteError(
+                    f"termproxy: chunk write failed ({out[-200:].strip()})"
+                )
+        rc, out = self.run(f"base64 -d {qtmp} > {qfile} && rm -f {qtmp}")
+        if rc != 0:
+            raise SnippetWriteError(
+                f"termproxy: writing {remote_path} failed ({out[-200:].strip()})"
+            )
+
+    def close(self) -> None:
+        try:
+            self.ws.close()
+        except Exception:
+            pass
+
+
+def _is_root_pam(node: str) -> bool:
+    """True if the API connection for this node authenticates as root@pam."""
+    meta = connection_metadata.get(node) or {}
+    return (meta.get("user") or "") == "root@pam"
+
+
+def _termproxy_open(
+    node: str, os_password: str | None = None, timeout: int = 20
+) -> _TermSession:
+    """Open a root shell on `node` via termproxy over 8006.
+
+    root@pam gets a passwordless root shell. Any other API user hits an
+    interactive OS `login:` prompt, which we drive as root using `os_password`
+    (root's OS password). Raises SnippetWriteError with an actionable message.
+    """
+    from urllib.parse import quote_plus
+
+    host, login_ticket, csrf, verify = _pve_login_ticket(node)
+    r = requests.post(
+        f"https://{host}:8006/api2/json/nodes/{node}/termproxy",
+        headers={
+            "CSRFPreventionToken": csrf,
+            "Cookie": f"PVEAuthCookie={login_ticket}",
+        },
+        verify=verify,
+        timeout=timeout,
+    )
+    if r.status_code == 403:
+        raise SnippetWriteError(
+            "The node Shell was denied — the API user needs the 'Sys.Console' "
+            "privilege on this node to open a console session."
+        )
+    r.raise_for_status()
+    d = r.json()["data"]
+    port, vncticket, tuser = d["port"], d["ticket"], d["user"]
+
+    url = (
+        f"wss://{host}:8006/api2/json/nodes/{node}/vncwebsocket"
+        f"?port={port}&vncticket={quote_plus(vncticket)}"
+    )
+    sslopt = {} if verify else {"cert_reqs": ssl.CERT_NONE, "check_hostname": False}
+    ws = websocket.create_connection(
+        url,
+        header=[f"Cookie: PVEAuthCookie={login_ticket}"],
+        sslopt=sslopt,
+        timeout=timeout,
+    )
+    ws.send(f"{tuser}:{vncticket}\n")
+    first = ws.recv()
+    if isinstance(first, (bytes, bytearray)):
+        first = first.decode("utf-8", errors="replace")
+    if not str(first).startswith("OK"):
+        ws.close()
+        raise SnippetWriteError(f"termproxy handshake rejected: {str(first)[:80]!r}")
+
+    sess = _TermSession(ws)
+    # Either a passwordless root shell (root@pam) or an interactive login prompt.
+    idx, _buf = sess._drain_until([r"login:\s*$", r"[#$]\s*$"], timeout=8)
+    if idx == 1:
+        return sess  # already at a shell
+    if idx == 0:
+        pw = os_password
+        if pw is None and _is_root_pam(node):
+            pw = (connection_metadata.get(node) or {}).get("password")
+        if not pw:
+            sess.close()
+            raise SnippetWriteError(
+                "The node Shell opened an OS login prompt (your API user is not "
+                "root@pam). Provide root's OS password to set up snippet access, "
+                "or install ProxUI's key manually."
+            )
+        try:
+            sess._login("root", pw)
+        except SnippetWriteError:
+            sess.close()
+            raise
+        return sess
+    sess.close()
+    raise SnippetWriteError(
+        "termproxy: unexpected shell state (no login or shell prompt)."
+    )
+
+
+def _install_key_command(pub_line: str) -> str:
+    """Idempotent shell to put ProxUI's pubkey in root's authorized_keys.
+
+    Removes any previous proxui-snippet@ lines first so re-running is clean.
+    """
+    q = shlex.quote(pub_line)
+    return (
+        "mkdir -p /root/.ssh && chmod 700 /root/.ssh && "
+        "touch /root/.ssh/authorized_keys && "
+        "grep -v 'proxui-snippet@' /root/.ssh/authorized_keys > /root/.ssh/.proxui_ak.tmp 2>/dev/null || true && "
+        f"printf '%s\\n' {q} >> /root/.ssh/.proxui_ak.tmp && "
+        "cat /root/.ssh/.proxui_ak.tmp > /root/.ssh/authorized_keys && "
+        "rm -f /root/.ssh/.proxui_ak.tmp && chmod 600 /root/.ssh/authorized_keys && "
+        "echo PROXUI_INSTALLED"
+    )
+
+
+def _provision_ssh_key(node: str, root_password: str | None = None) -> dict:
+    """Install ProxUI's public key into root's authorized_keys on `node`.
+
+    Prefers SSH-as-root-with-password when port 22 is open; otherwise drives the
+    node Shell (termproxy). Then verifies key-based SFTP works and detects whether
+    root's authorized_keys is cluster-shared (pmxcfs). Returns a status dict.
+    """
+    _priv, pub = _ensure_ssh_key()
+    install_cmd = _install_key_command(pub)
+
+    if _ssh_port_open(node) and root_password:
+        client = _ssh_connect_root_password(node, root_password)
+        try:
+            _in, out_s, err_s = client.exec_command(install_cmd, timeout=30)
+            rc = out_s.channel.recv_exit_status()
+            out = out_s.read().decode("utf-8", errors="replace")
+            if rc != 0 or "PROXUI_INSTALLED" not in out:
+                err = err_s.read().decode("utf-8", errors="replace")
+                raise SnippetWriteError(
+                    f"Key install failed: {(err or out)[-200:].strip()}"
+                )
+        finally:
+            client.close()
+        channel = "ssh-password"
+    else:
+        sess = _termproxy_open(node, os_password=root_password)
+        try:
+            rc, out = sess.run(install_cmd)
+            if rc != 0 or "PROXUI_INSTALLED" not in out:
+                raise SnippetWriteError(
+                    f"Key install failed via node Shell: {out[-200:].strip()}"
+                )
+        finally:
+            sess.close()
+        channel = "termproxy"
+
+    result = {
+        "channel": channel,
+        "sftp_ok": False,
+        "shared_authorized_keys": False,
+        "authorized_keys_path": "",
+        "pubkey": pub,
+    }
+    # Verify key-based access works and inspect the authorized_keys target.
+    if _ssh_port_open(node):
+        try:
+            rc, out, _err = _ssh_run_root(
+                node, "readlink -f /root/.ssh/authorized_keys; echo PROXUI_SFTP_OK"
+            )
+            result["sftp_ok"] = "PROXUI_SFTP_OK" in out
+            ak_path = next(
+                (ln.strip() for ln in out.splitlines() if ln.startswith("/")), ""
+            )
+            result["authorized_keys_path"] = ak_path
+            result["shared_authorized_keys"] = "/etc/pve/" in ak_path
+        except Exception as e:
+            result["verify_error"] = str(e)
+    return result
+
+
+# In-memory cache for snippet content (keyed by "node/vmid/type").
+# Populated when ProxUI saves a snippet; used as fallback if filesystem
+# access is unavailable.
+_snippet_cache: dict = {}
+
+# Persistent local store for snippet content. Proxmox has no REST endpoint to
+# read snippet file contents back, and ProxUI usually runs on a different host
+# than the nodes (so it can't read the storage path directly). We keep a copy
+# of every snippet we write here so it can always be shown again after a
+# restart, independent of node filesystem access or the in-memory cache.
+_SNIPPET_STORE_DIR = os.path.join(os.path.dirname(CONFIG_FILE_PATH), "snippets")
+
+
+def _snippet_store_path(node: str, storage: str, filename: str) -> str:
+    safe = f"{node}__{storage}__{filename}".replace("/", "_").replace("..", "_")
+    return os.path.join(_SNIPPET_STORE_DIR, safe)
+
+
+def _store_snippet_local(node: str, storage: str, filename: str, content: str) -> None:
+    try:
+        os.makedirs(_SNIPPET_STORE_DIR, exist_ok=True)
+        with open(_snippet_store_path(node, storage, filename), "w") as f:
+            f.write(content)
+    except OSError as exc:
+        print(f"Warning: could not persist snippet locally: {exc}")
+
+
+def _read_snippet_local(node: str, storage: str, filename: str) -> str | None:
+    try:
+        with open(_snippet_store_path(node, storage, filename)) as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+_CLOUD_INIT_LIST_KEYS = frozenset(
+    {
+        "users",
+        "packages",
+        "runcmd",
+        "bootcmd",
+        "write_files",
+        "ssh_authorized_keys",
+        "groups",
+        "fs_setup",
+        "mounts",
+        "cloud_config_modules",
+        "cloud_final_modules",
+        "cloud_init_modules",
+    }
+)
+_CLOUD_INIT_BOOL_KEYS = frozenset(
+    {
+        "package_update",
+        "package_upgrade",
+        "package_reboot_if_required",
+        "disable_root",
+        "ssh_pwauth",
+        "resize_rootfs",
+        "manage_resolv_conf",
+    }
+)
+_CLOUD_INIT_STR_KEYS = frozenset(
+    {
+        "hostname",
+        "fqdn",
+        "timezone",
+        "locale",
+        "final_message",
+        "locale_configfile",
+        "byobu_by_default",
+        "merge_how",
+    }
+)
+_CLOUD_INIT_DICT_KEYS = frozenset(
+    {
+        "apt",
+        "yum_repos",
+        "ntp",
+        "power_state",
+        "resolv_conf",
+        "network",
+        "ca_certs",
+        "chpasswd",
+        "puppet",
+        "chef",
+        "ansible",
+        "datasource",
+        "ssh_keys",
+        "disk_setup",
+        "snap",
+        "keyboard",
+        "growpart",
+        "swap",
+        "phone_home",
+        "random_seed",
+        "reporting",
+        "output",
+        "wireguard",
+        "ubuntu_advantage",
+        "landscape",
+    }
+)
+_CLOUD_INIT_KNOWN = (
+    _CLOUD_INIT_LIST_KEYS
+    | _CLOUD_INIT_BOOL_KEYS
+    | _CLOUD_INIT_STR_KEYS
+    | _CLOUD_INIT_DICT_KEYS
+    | {"manage_etc_hosts"}
+)
+
+
+def _validate_cloud_init_yaml(content: str) -> tuple[list, list]:
+    """Return (errors, warnings) for cloud-init YAML content."""
+    errors: list = []
+    warnings: list = []
+
+    content = content.strip()
+    if not content:
+        errors.append("Content is empty.")
+        return errors, warnings
+
+    lines = content.splitlines()
+    first = lines[0].strip()
+    if first != "#cloud-config":
+        if first.startswith("#"):
+            warnings.append(f"First line is '{first}', expected '#cloud-config'.")
+        else:
+            errors.append("First line must be '#cloud-config'.")
+
+    try:
+        data = yaml.safe_load(content)
+    except yaml.YAMLError as exc:
+        errors.append(f"YAML syntax error: {exc}")
+        return errors, warnings
+
+    if data is None:
+        warnings.append("Config is effectively empty (only comment lines).")
+        return errors, warnings
+
+    if not isinstance(data, dict):
+        errors.append(f"Top-level value must be a mapping, got {type(data).__name__}.")
+        return errors, warnings
+
+    for key, value in data.items():
+        if key in _CLOUD_INIT_LIST_KEYS and not isinstance(value, list):
+            errors.append(f"'{key}' must be a list, got {type(value).__name__}.")
+        elif key in _CLOUD_INIT_BOOL_KEYS and not isinstance(value, bool):
+            errors.append(f"'{key}' must be true/false, got {type(value).__name__}.")
+        elif key in _CLOUD_INIT_STR_KEYS and not isinstance(value, str):
+            errors.append(f"'{key}' must be a string, got {type(value).__name__}.")
+        elif key in _CLOUD_INIT_DICT_KEYS and not isinstance(value, dict):
+            errors.append(f"'{key}' must be a mapping, got {type(value).__name__}.")
+        elif key not in _CLOUD_INIT_KNOWN:
+            warnings.append(
+                f"Unknown key '{key}' (may be valid for your cloud-init version)."
+            )
+
+    if "users" in data and isinstance(data["users"], list):
+        for i, u in enumerate(data["users"]):
+            if u == "default":
+                continue
+            if not isinstance(u, dict):
+                errors.append(f"users[{i}] must be a mapping.")
+            else:
+                if "name" not in u:
+                    errors.append(f"users[{i}] missing required 'name' field.")
+                sk = u.get("ssh_authorized_keys")
+                if sk is not None and not isinstance(sk, list):
+                    errors.append(f"users[{i}].ssh_authorized_keys must be a list.")
+
+    if "write_files" in data and isinstance(data["write_files"], list):
+        for i, f in enumerate(data["write_files"]):
+            if not isinstance(f, dict):
+                errors.append(f"write_files[{i}] must be a mapping.")
+            elif "path" not in f:
+                errors.append(f"write_files[{i}] missing required 'path' field.")
+
+    if "runcmd" in data and isinstance(data["runcmd"], list):
+        for i, cmd in enumerate(data["runcmd"]):
+            if not isinstance(cmd, (str, list)):
+                errors.append(f"runcmd[{i}] must be a string or list of strings.")
+
+    return errors, warnings
+
+
+def _get_storage_path(node: str, storage: str) -> str | None:
+    """Return the filesystem base path of a Proxmox storage, or None.
+
+    Uses the configured `path` (dir storage) and falls back to the /mnt/pve/<name>
+    convention for the network filesystem types that mount there.
+    """
+    try:
+        proxmox = get_proxmox_connection(node, auto_renew=True)
+        cfg = next(
+            (s for s in proxmox.storage.get() if s.get("storage") == storage), {}
+        )
+        path = cfg.get("path", "")
+        if path:
+            return path
+        if cfg.get("type") in ("nfs", "cifs", "cephfs", "glusterfs"):
+            return f"/mnt/pve/{storage}"
+        return None
+    except Exception:
+        return None
+
+
+def _snippet_remote_path(node: str, storage: str, filename: str) -> str | None:
+    """Return {storage_path}/snippets/{filename} for a node, or None if unknown."""
+    base = _get_storage_path(node, storage)
+    return os.path.join(base, "snippets", filename) if base else None
+
+
+def _read_snippet(
+    node: str, storage: str, filename: str, snippet_type: str = "user"
+) -> str | None:
+    """Read snippet content: node filesystem, SFTP, local store, then cache.
+
+    SFTP is the authoritative remote source once ProxUI's key is installed; the
+    local store is the fallback when the node is unreachable or after a restart
+    (which clears the in-memory cache).
+    """
+    path = _get_storage_path(node, storage)
+    if path:
+        try:
+            with open(os.path.join(path, "snippets", filename)) as f:
+                return f.read()
+        except OSError:
+            pass
+    # Remote read via SFTP (authoritative — reflects the file actually on the node).
+    if os.path.exists(_SSH_KEY_PATH) and _ssh_port_open(node):
+        remote = _snippet_remote_path(node, storage, filename)
+        if remote:
+            try:
+                return _sftp_read_file(node, remote)
+            except Exception:
+                pass
+    local = _read_snippet_local(node, storage, filename)
+    if local is not None:
+        return local
+    return _snippet_cache.get(f"{node}/{storage}/{snippet_type}")
+
+
+def _write_snippet(
+    node: str, storage: str, filename: str, content: str, snippet_type: str = "user"
+) -> str:
+    """Write a snippet file to the storage's snippets/ directory. Returns the tier used.
+
+    Proxmox has no REST API to upload snippets, so we place the file directly, in
+    order of preference:
+      1. local filesystem  — ProxUI runs on the node / storage is mounted
+      2. SFTP as root       — remote, port 22 open, ProxUI key installed
+      3. node Shell (root@pam) — remote, port 22 blocked, passwordless console
+    The content is always kept in the local store first so nothing is lost, and a
+    clear SnippetWriteError explains what to do if no channel works.
+    """
+    # Keep a copy no matter what happens next.
+    _snippet_cache[f"{node}/{storage}/{snippet_type}"] = content
+    _store_snippet_local(node, storage, filename, content)
+
+    path = _get_storage_path(node, storage)
+    remote_path = os.path.join(path, "snippets", filename) if path else None
+
+    # Tier 1: local filesystem.
+    if path:
+        try:
+            snippets_dir = os.path.join(path, "snippets")
+            os.makedirs(snippets_dir, exist_ok=True)
+            with open(os.path.join(snippets_dir, filename), "w") as f:
+                f.write(content)
+            return "local"
+        except OSError:
+            pass
+
+    if not remote_path:
+        raise SnippetWriteError(
+            f"Storage '{storage}' on node '{node}' has no resolvable filesystem "
+            f"path, so the snippet can't be written. Pick a directory/NFS/CephFS "
+            f"storage. Your content is saved in ProxUI."
+        )
+
+    errors = []
+
+    # Tier 2: SFTP as root with ProxUI's key.
+    if os.path.exists(_SSH_KEY_PATH) and _ssh_port_open(node):
+        try:
+            _sftp_write_file(node, remote_path, content)
+            return "sftp"
+        except Exception as e:
+            errors.append(f"SFTP: {e}")
+
+    # Tier 3: node Shell (only usable without a prompt for root@pam here, since a
+    # normal save has no OS password to offer).
+    if _is_root_pam(node):
+        try:
+            sess = _termproxy_open(node)
+            try:
+                sess.write_file(remote_path, content)
+            finally:
+                sess.close()
+            return "termproxy"
+        except Exception as e:
+            errors.append(f"node Shell: {e}")
+
+    hint = (
+        "Set up snippet access (install ProxUI's SSH key) from the Cloud-Init tab, "
+        "or run ProxUI where it can reach the storage. Your content is saved in ProxUI."
+    )
+    detail = (" [" + "; ".join(errors) + "]") if errors else ""
+    raise SnippetWriteError(
+        f"Couldn't write the snippet to {remote_path} on node '{node}'.{detail} {hint}"
+    )
+
+
+def _parse_cicustom(cicustom: str) -> dict:
+    """Parse 'user=local:snippets/f.yaml,network=...' into a dict."""
+    result: dict = {}
+    for part in (cicustom or "").split(","):
+        part = part.strip()
+        if "=" in part:
+            k, _, v = part.partition("=")
+            result[k.strip()] = v.strip()
+    return result
+
+
+def _build_cicustom(parts: dict) -> str:
+    return ",".join(f"{k}={v}" for k, v in parts.items() if v)
+
+
+# ---------------------------------------------------------------------------
+# Cloud-init API routes
+# ---------------------------------------------------------------------------
+
+
+@app.route("/api/snippets/ssh/status")
+def api_snippets_ssh_status():
+    """Report ProxUI's SSH-key state for snippet writes."""
+    pub = _ssh_public_key()
+    node = request.args.get("node")
+    resp = {
+        "paramiko_available": _get_paramiko() is not None,
+        "key_exists": pub is not None,
+        "pubkey": pub or "",
+        "comment": (pub.split()[-1] if pub and len(pub.split()) >= 3 else ""),
+    }
+    if node:
+        resp["ssh_port_open"] = _ssh_port_open(node)
+        resp["root_pam"] = _is_root_pam(node)
+        # Does key-based SFTP already work?
+        resp["sftp_ok"] = False
+        if pub and resp["ssh_port_open"]:
+            try:
+                rc, out, _ = _ssh_run_root(node, "echo PROXUI_SFTP_OK")
+                resp["sftp_ok"] = "PROXUI_SFTP_OK" in out
+            except Exception:
+                resp["sftp_ok"] = False
+    return jsonify(resp)
+
+
+@app.route("/api/snippets/ssh/setup", methods=["POST"])
+def api_snippets_ssh_setup():
+    """Generate (if needed) and install ProxUI's public key into root's authorized_keys.
+
+    Body: { node, root_password? }. root_password is required unless the API user
+    is root@pam (passwordless node Shell).
+    """
+    data = request.get_json() or {}
+    node = data.get("node")
+    root_password = data.get("root_password") or None
+    if not node:
+        return jsonify({"error": "node is required"}), 400
+    if not get_proxmox_connection(node, auto_renew=True):
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        result = _provision_ssh_key(node, root_password=root_password)
+        result["success"] = True
+        result["message"] = (
+            "SSH key installed. Snippet writes will use SFTP as root."
+            if result.get("sftp_ok")
+            else "SSH key installed (verification limited — port 22 may be closed)."
+        )
+        return jsonify(result)
+    except SnippetWriteError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+def _any_proxmox():
+    """Return any working Proxmox connection, or None."""
+    if not proxmox_nodes:
+        return None
+    return get_proxmox_connection(next(iter(proxmox_nodes)), auto_renew=True)
+
+
+@app.route("/api/snippets/storages")
+def api_snippets_storages():
+    """List cluster storages for snippet placement, flagged shared / snippets-enabled.
+
+    Returns filesystem-type storages (only those can hold snippets), so the UI can
+    prefer shared ones and offer to enable snippets on a chosen storage.
+    """
+    node = request.args.get("node")
+    proxmox = get_proxmox_connection(node, auto_renew=True) if node else _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        out = []
+        for s in proxmox.storage.get():
+            stype = s.get("type", "")
+            content = [c for c in (s.get("content") or "").split(",") if c]
+            out.append(
+                {
+                    "storage": s.get("storage"),
+                    "type": stype,
+                    "shared": bool(s.get("shared", 0)),
+                    "snippets_enabled": "snippets" in content,
+                    "filesystem": stype
+                    in ("dir", "nfs", "cifs", "cephfs", "glusterfs"),
+                    "path": s.get("path", ""),
+                }
+            )
+        return jsonify(out)
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/snippets/storage/create", methods=["POST"])
+def api_snippets_storage_create():
+    """Create a cluster-shared snippet storage on pmxcfs (/etc/pve/<name>).
+
+    Files written there replicate to all nodes, so snippets survive VM migration.
+    Uses the Proxmox API, falling back to `pvesm` over root SSH.
+    """
+    data = request.get_json() or {}
+    node = data.get("node")
+    name = (data.get("name") or "proxui-snippets").strip()
+    path = data.get("path") or f"/etc/pve/{name}"
+    proxmox = get_proxmox_connection(node, auto_renew=True) if node else _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        existing = {s.get("storage") for s in proxmox.storage.get()}
+        if name in existing:
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"Storage '{name}' already exists.",
+                    "storage": name,
+                }
+            )
+        try:
+            proxmox.storage.post(
+                storage=name,
+                type="dir",
+                path=path,
+                content="snippets",
+                shared=1,
+                mkdir=1,
+            )
+        except Exception as api_err:
+            # Fall back to root SSH (e.g. API user lacks Datastore.Allocate).
+            if not node:
+                raise api_err
+            cmd = (
+                f"mkdir -p {shlex.quote(path)} && "
+                f"pvesm add dir {shlex.quote(name)} --path {shlex.quote(path)} "
+                f"--content snippets --shared 1"
+            )
+            rc, out, err = _ssh_run_root(node, cmd)
+            if rc != 0:
+                return (
+                    jsonify(
+                        {
+                            "error": f"Could not create storage: {(err or out)[-200:].strip()}"
+                        }
+                    ),
+                    400,
+                )
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Created shared snippet storage '{name}' at {path} (replicated across the cluster).",
+                "storage": name,
+            }
+        )
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/snippets/storage/enable-snippets", methods=["POST"])
+def api_snippets_storage_enable():
+    """Add the 'snippets' content type to an existing storage (API, or pvesm via SSH)."""
+    data = request.get_json() or {}
+    node = data.get("node")
+    storage = data.get("storage")
+    if not storage:
+        return jsonify({"error": "storage is required"}), 400
+    proxmox = get_proxmox_connection(node, auto_renew=True) if node else _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        cur = next(
+            (s for s in proxmox.storage.get() if s.get("storage") == storage), None
+        )
+        if not cur:
+            return jsonify({"error": f"Storage '{storage}' not found"}), 404
+        content = [c for c in (cur.get("content") or "").split(",") if c]
+        if "snippets" in content:
+            return jsonify(
+                {
+                    "success": True,
+                    "message": "snippets already enabled.",
+                    "storage": storage,
+                }
+            )
+        content.append("snippets")
+        joined = ",".join(content)
+        try:
+            proxmox.storage(storage).put(content=joined)
+        except Exception as api_err:
+            if not node:
+                raise api_err
+            rc, out, err = _ssh_run_root(
+                node,
+                f"pvesm set {shlex.quote(storage)} --content {shlex.quote(joined)}",
+            )
+            if rc != 0:
+                return (
+                    jsonify(
+                        {
+                            "error": f"Could not enable snippets: {(err or out)[-200:].strip()}"
+                        }
+                    ),
+                    400,
+                )
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Enabled snippets on '{storage}'.",
+                "storage": storage,
+            }
+        )
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/node/<node>/storages/snippets")
+def api_node_snippet_storages(node):
+    """List storages on this node that have the snippets content type enabled."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        storages = proxmox.nodes(node).storage.get()
+        result = [
+            {
+                "storage": s["storage"],
+                "type": s.get("type", ""),
+                "active": s.get("active", 1),
+            }
+            for s in storages
+            if "snippets" in s.get("content", "").split(",")
+            and s.get("enabled", 1) != 0
+        ]
+        return jsonify(result)
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/cloudinit")
+def api_vm_cloudinit_get(node, vmid):
+    """Return all cloud-init related config for a QEMU VM."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        config = proxmox.nodes(node).qemu(vmid).config.get()
+        sshkeys_raw = config.get("sshkeys", "")
+        cicustom = config.get("cicustom", "")
+        ci_parts = _parse_cicustom(cicustom)
+
+        # Try to read user snippet content if attached
+        snippet_content = None
+        snippet_storage = ""
+        snippet_filename = ""
+        user_val = ci_parts.get("user", "")
+        if user_val and ":" in user_val:
+            snippet_storage, _, snippet_path = user_val.partition(":")
+            snippet_filename = snippet_path.split("/")[-1]
+            snippet_content = _read_snippet(
+                node, snippet_storage, snippet_filename, "user"
+            )
+
+        return jsonify(
+            {
+                "ciuser": config.get("ciuser", ""),
+                "sshkeys": unquote(sshkeys_raw) if sshkeys_raw else "",
+                "nameserver": config.get("nameserver", ""),
+                "searchdomain": config.get("searchdomain", ""),
+                "ipconfig0": config.get("ipconfig0", ""),
+                "cicustom": cicustom,
+                "ci_parts": ci_parts,
+                "snippet_content": snippet_content,
+                "snippet_storage": snippet_storage,
+                "snippet_filename": snippet_filename,
+            }
+        )
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+def _regenerate_cloudinit_drive(proxmox, node, vmid) -> bool:
+    """Best-effort regenerate of the cloud-init drive (qm cloudinit update).
+
+    Returns True on success. Non-fatal: a VM may have no cloud-init disk, or the
+    node may be momentarily busy — callers surface the flag rather than failing
+    the whole operation, since the config change itself already succeeded.
+    """
+    try:
+        proxmox.nodes(node).qemu(vmid).cloudinit.put()
+        return True
+    except Exception as e:
+        app.logger.warning("cloud-init drive regen failed for %s/%s: %s", node, vmid, e)
+        return False
+
+
+@app.route("/api/vm/<node>/<vmid>/cloudinit/regenerate", methods=["POST"])
+def api_vm_cloudinit_regenerate(node, vmid):
+    """Regenerate the VM's cloud-init drive from its current config (qm cloudinit update).
+
+    Refreshes the small cidata disk without a stop/start. Note: an
+    already-provisioned guest still won't re-run per-instance modules until
+    'cloud-init clean' + reboot inside the guest.
+    """
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        proxmox.nodes(node).qemu(vmid).cloudinit.put()
+        return jsonify(
+            {
+                "success": True,
+                "message": "Cloud-init drive regenerated. Reboot the VM to apply; an "
+                "already-provisioned guest may also need 'cloud-init clean' first.",
+            }
+        )
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/cloudinit/native", methods=["PUT"])
+def api_vm_cloudinit_native(node, vmid):
+    """Update native Proxmox cloud-init fields (ciuser, sshkeys, nameserver, etc.)."""
+    data = request.get_json() or {}
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        params: dict = {}
+        if "ciuser" in data:
+            params["ciuser"] = data["ciuser"] or ""
+        if "sshkeys" in data:
+            raw = (data["sshkeys"] or "").strip()
+            params["sshkeys"] = quote(raw, safe="") if raw else ""
+        if "nameserver" in data:
+            params["nameserver"] = data["nameserver"] or ""
+        if "searchdomain" in data:
+            params["searchdomain"] = data["searchdomain"] or ""
+        if "ipconfig0" in data:
+            params["ipconfig0"] = data["ipconfig0"] or ""
+        if not params:
+            return jsonify({"error": "No fields to update"}), 400
+        proxmox.nodes(node).qemu(vmid).config.put(**params)
+        return jsonify({"success": True, "message": "Cloud-init settings saved."})
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/cloudinit/validate", methods=["POST"])
+def api_vm_cloudinit_validate(node, vmid):
+    """Validate cloud-init YAML content."""
+    data = request.get_json() or {}
+    content = data.get("content", "")
+    if not content:
+        return jsonify(
+            {"valid": False, "errors": ["Content is empty."], "warnings": []}
+        )
+    errors, warnings = _validate_cloud_init_yaml(content)
+    return jsonify({"valid": len(errors) == 0, "errors": errors, "warnings": warnings})
+
+
+@app.route("/api/vm/<node>/<vmid>/cloudinit/snippet", methods=["POST"])
+def api_vm_cloudinit_snippet_save(node, vmid):
+    """Save a cloud-init snippet to storage and attach it to the VM via cicustom."""
+    data = request.get_json() or {}
+    storage = data.get("storage", "")
+    filename = (data.get("filename") or f"{vmid}-user-data.yaml").strip()
+    content = data.get("content", "")
+    snippet_type = data.get("type", "user")
+
+    if not storage:
+        return jsonify({"error": "storage is required"}), 400
+    if not content:
+        return jsonify({"error": "content is required"}), 400
+    if not filename.endswith((".yaml", ".yml", ".cfg")):
+        filename += ".yaml"
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        tier = _write_snippet(node, storage, filename, content, snippet_type)
+    except SnippetWriteError as e:
+        # File couldn't be placed on the node — don't attach a dangling cicustom.
+        return jsonify({"error": str(e)}), 400
+
+    try:
+        volid = f"{storage}:snippets/{filename}"
+
+        # Merge into existing cicustom
+        config = proxmox.nodes(node).qemu(vmid).config.get()
+        ci_parts = _parse_cicustom(config.get("cicustom", ""))
+        ci_parts[snippet_type] = volid
+        proxmox.nodes(node).qemu(vmid).config.put(cicustom=_build_cicustom(ci_parts))
+
+        # Regenerate the cloud-init drive so the new snippet is on the disk the
+        # guest reads at next boot. Changing cicustom alone leaves a running VM
+        # serving its old (stale) drive until it's regenerated or cold-booted.
+        # Proxmox derives instance-id from the user-data, so a content change
+        # bumps the instance-id and cloud-init re-runs per-instance modules.
+        regenerated = _regenerate_cloudinit_drive(proxmox, node, vmid)
+
+        via = {
+            "local": "local filesystem",
+            "sftp": "SFTP",
+            "termproxy": "node Shell",
+        }.get(tier, tier)
+        if regenerated:
+            msg = (
+                f"Snippet saved (via {via}) and attached as {snippet_type} ({volid}). "
+                "Cloud-init drive regenerated — reboot the VM to apply."
+            )
+        else:
+            msg = (
+                f"Snippet saved (via {via}) and attached as {snippet_type} ({volid}). "
+                'Could not regenerate the drive automatically — use "Regenerate drive", '
+                "then reboot the VM to apply."
+            )
+        return jsonify(
+            {
+                "success": True,
+                "message": msg,
+                "volid": volid,
+                "cicustom": _build_cicustom(ci_parts),
+                "tier": tier,
+                "regenerated": regenerated,
+            }
+        )
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/cloudinit/snippet", methods=["DELETE"])
+def api_vm_cloudinit_snippet_detach(node, vmid):
+    """Detach a cloud-init snippet type from the VM's cicustom config."""
+    data = request.get_json() or {}
+    snippet_type = data.get("type", "user")
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        config = proxmox.nodes(node).qemu(vmid).config.get()
+        ci_parts = _parse_cicustom(config.get("cicustom", ""))
+        if snippet_type not in ci_parts:
+            return jsonify({"error": f"No {snippet_type} snippet attached"}), 400
+        del ci_parts[snippet_type]
+        new_cicustom = _build_cicustom(ci_parts)
+        if new_cicustom:
+            proxmox.nodes(node).qemu(vmid).config.put(cicustom=new_cicustom)
+        else:
+            proxmox.nodes(node).qemu(vmid).config.put(delete="cicustom")
+        _snippet_cache.pop(f"{node}/{data.get('storage', '')}/user", None)
+        # Regenerate so the drive reflects the detach (back to native ci* config
+        # when nothing custom remains) on next reboot.
+        regenerated = _regenerate_cloudinit_drive(proxmox, node, vmid)
+        msg = f"{snippet_type} snippet detached."
+        if regenerated:
+            msg += " Cloud-init drive regenerated — reboot the VM to apply."
+        return jsonify({"success": True, "message": msg, "regenerated": regenerated})
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/agent", methods=["PUT"])
+def api_vm_agent(node, vmid):
+    """Enable or disable the QEMU guest agent, preserving any existing agent options."""
+    data = request.get_json()
+    if data is None or "enabled" not in data:
+        return jsonify({"error": "enabled field is required"}), 400
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        config = proxmox.nodes(node).qemu(vmid).config.get()
+        current = str(config.get("agent", "0"))
+        # Preserve any key=value options that follow the enabled flag
+        parts = current.split(",")
+        extra = [p for p in parts[1:] if p.strip()]
+        flag = "1" if data["enabled"] else "0"
+        agent_val = ",".join([flag] + extra) if extra else flag
+        proxmox.nodes(node).qemu(vmid).config.put(agent=agent_val)
+        state = "enabled" if data["enabled"] else "disabled"
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Guest agent {state}. Takes effect on next VM start.",
+            }
+        )
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/reset-password", methods=["POST"])
+def api_vm_reset_password(node, vmid):
+    """Reset root password: LXC via pct exec, QEMU via guest agent with cipassword fallback."""
+    data = request.get_json()
+    if not data or not data.get("password"):
+        return jsonify({"error": "Password is required"}), 400
+
+    password = data["password"]
+    vm_type = data.get("vm_type", "qemu")
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        if vm_type == "lxc":
+            status = proxmox.nodes(node).lxc(vmid).status.current.get()
+            if status.get("status") != "running":
+                return (
+                    jsonify({"error": "Container must be running to reset password"}),
+                    400,
+                )
+            proxmox.nodes(node).lxc(vmid).exec.post(
+                command=["chpasswd"],
+                stdin=f"root:{password}\n",
+            )
+            return jsonify(
+                {"success": True, "message": "Root password updated successfully"}
+            )
+        else:
+            # Try guest agent first (immediate effect), fall back to cipassword (next reboot)
+            status = proxmox.nodes(node).qemu(vmid).status.current.get()
+            is_running = status.get("status") == "running"
+            if is_running:
+                try:
+                    proxmox.nodes(node).qemu(vmid).agent.exec.post(
+                        command=["chpasswd"],
+                        **{"input-data": f"root:{password}\n"},
+                    )
+                    return jsonify(
+                        {
+                            "success": True,
+                            "message": "Root password updated successfully via guest agent",
+                        }
+                    )
+                except Exception:
+                    pass  # agent not available — fall through to cipassword
+
+            proxmox.nodes(node).qemu(vmid).config.put(cipassword=password)
+            return jsonify(
+                {
+                    "success": True,
+                    "message": "Password set via cloud-init (cipassword). It will apply on next reboot or cloud-init run.",
+                    "reboot_required": True,
+                }
+            )
+    except Exception as e:
+        return _proxmox_error_response(e)
 
 
 @app.errorhandler(500)

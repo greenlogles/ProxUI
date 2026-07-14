@@ -20,6 +20,7 @@
 
             const csrfToken = "{{ csrf_token() }}";
             window.PROXUI_CSRF_TOKEN = csrfToken;
+            window.DEMO_MODE = {{ 'true' if demo_mode else 'false' }};
 
             const originalFetch = window.fetch.bind(window);
             const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS', 'TRACE']);
@@ -64,11 +65,29 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="{{ url_for('static', filename='script.js') }}"></script>
+    <script type="module">
+      import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
+      import { globalJobs, clusterSwitcher } from "{{ url_for('static', filename='js/chrome.js') }}";
+      window.ProxUtils = ProxUtils;
+      function registerChrome() {
+        window.Alpine.data('globalJobs', globalJobs);
+        window.Alpine.data('clusterSwitcher', clusterSwitcher);
+      }
+      if (window.Alpine) registerChrome();
+      else document.addEventListener('alpine:init', registerChrome);
+    </script>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    {#
+      App chrome. Structured into regions so a top→left sidebar redesign is
+      mostly CSS: `.app-navbar` is the shell, `.app-nav-primary` holds the page
+      links, `.app-nav-utility` holds theme/jobs/cluster. All behaviour is in
+      self-contained Alpine components (no getElementById), so these regions can
+      be repositioned freely.
+    #}
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark app-navbar">
         <div class="container-fluid">
-            <a class="navbar-brand" href="{{ url_for('index') }}">
+            <a class="navbar-brand app-brand" href="{{ url_for('index') }}">
                 <i class="bi bi-server"></i> Proxmox Manager
             </a>
             <span class="badge bg-secondary fw-normal small">{{ app_version }}</span>
@@ -76,74 +95,133 @@
                 <span class="navbar-toggler-icon"></span>
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav">
+                <ul class="navbar-nav app-nav-primary">
+                    {% set _nav = [
+                        ('index', 'bi-speedometer2', 'Dashboard'),
+                        ('vms', 'bi-pc-display', 'VMs & Containers'),
+                        ('create_vm', 'bi-plus-circle', 'Create VM'),
+                        ('tasks', 'bi-list-task', 'Tasks'),
+                        ('storages', 'bi-hdd', 'Storage'),
+                        ('networks', 'bi-diagram-3', 'Networks'),
+                        ('isos_templates', 'bi-disc', 'ISOs & Templates'),
+                        ('cluster', 'bi-diagram-2', 'Cluster'),
+                    ] %}
+                    {% for endpoint, icon, label in _nav %}
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('index') }}">
-                            <i class="bi bi-speedometer2"></i> Dashboard
+                        <a class="nav-link {% if request.endpoint == endpoint %}active{% endif %}" href="{{ url_for(endpoint) }}">
+                            <i class="bi {{ icon }}"></i> {{ label }}
                         </a>
                     </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('vms') }}">
-                            <i class="bi bi-pc-display"></i> VMs & Containers
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('create_vm') }}">
-                            <i class="bi bi-plus-circle"></i> Create VM
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('tasks') }}">
-                            <i class="bi bi-list-task"></i> Tasks
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('storages') }}">
-                            <i class="bi bi-hdd"></i> Storage
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('networks') }}">
-                            <i class="bi bi-diagram-3"></i> Networks
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('isos_templates') }}">
-                            <i class="bi bi-disc"></i> ISOs & Templates
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('cluster') }}">
-                            <i class="bi bi-diagram-2"></i> Cluster
-                        </a>
-                    </li>
+                    {% endfor %}
                 </ul>
-                
-                <!-- Jobs & Cluster Selector -->
-                <div class="navbar-nav ms-auto d-flex align-items-center">
-                    <button class="btn btn-sm btn-outline-light theme-toggle me-3" id="themeToggle" type="button" title="Toggle dark mode" aria-label="Toggle dark mode">
-                        <i class="bi bi-moon-stars" id="themeToggleIcon"></i>
+
+                <!-- Utility region: theme toggle, background jobs, cluster selector -->
+                <div class="navbar-nav ms-auto d-flex align-items-center app-nav-utility">
+                    <!-- Theme toggle -->
+                    <button class="btn btn-sm btn-outline-light theme-toggle me-3" type="button"
+                            x-data="{ dark: (document.documentElement.getAttribute('data-theme') || 'light') === 'dark' }"
+                            @click="window.ProxUITheme.toggle(); dark = !dark"
+                            :title="dark ? 'Switch to light mode' : 'Switch to dark mode'"
+                            :aria-label="dark ? 'Switch to light mode' : 'Switch to dark mode'">
+                        <i class="bi" :class="dark ? 'bi-sun' : 'bi-moon-stars'"></i>
                     </button>
 
-                    <!-- Background Jobs Dropdown -->
-                    <div class="nav-item dropdown me-3">
-                        <a class="nav-link position-relative" href="#" id="jobsDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false" title="Background Jobs">
+                    <!-- Background Jobs -->
+                    <div class="nav-item dropdown me-3" x-data="globalJobs">
+                        <a class="nav-link position-relative" href="#" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false" title="Background Jobs"
+                           :class="{ 'jobs-active': activeJobs.length }">
                             <i class="bi bi-list-task fs-5"></i>
-                            <span id="jobsBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display: none; font-size: 0.6rem;">
-                                0
-                            </span>
+                            <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
+                                  style="font-size: 0.6rem;" x-show="activeJobs.length" x-text="activeJobs.length"></span>
                         </a>
-                        <div class="dropdown-menu dropdown-menu-end shadow" aria-labelledby="jobsDropdown" style="min-width: 400px; max-height: 500px; overflow-y: auto;">
+                        <div class="dropdown-menu dropdown-menu-end shadow" style="min-width: 400px; max-height: 500px; overflow-y: auto;">
                             <div class="dropdown-header d-flex justify-content-between align-items-center">
                                 <span><i class="bi bi-list-task"></i> Background Jobs</span>
-                                <button class="btn btn-sm btn-link p-0" onclick="refreshGlobalJobs()" title="Refresh">
+                                <button class="btn btn-sm btn-link p-0" @click.prevent="refresh()" title="Refresh">
                                     <i class="bi bi-arrow-clockwise"></i>
                                 </button>
                             </div>
                             <div class="dropdown-divider"></div>
-                            <div id="globalJobsList" class="px-2">
-                                <div class="text-center text-muted py-3">
+                            <div class="px-2">
+                                <div x-show="!recentJobs.length" class="text-center text-muted py-3">
                                     <i class="bi bi-check-circle"></i> No active jobs
+                                </div>
+                                <template x-for="job in recentJobs" :key="job.id">
+                                    <div class="card mb-2" :class="'border-' + statusInfo(job.status).color">
+                                        <div class="card-body py-2 px-3">
+                                            <div class="d-flex justify-content-between align-items-start">
+                                                <div class="flex-grow-1">
+                                                    <div class="d-flex align-items-center gap-2 mb-1">
+                                                        <span class="badge" :class="'bg-' + statusInfo(job.status).color">
+                                                            <i class="bi" :class="statusInfo(job.status).icon"></i>
+                                                            <span x-text="statusInfo(job.status).label"></span>
+                                                        </span>
+                                                        <small class="text-truncate" style="max-width: 200px;"
+                                                               :title="job.description" x-text="job.description"></small>
+                                                    </div>
+                                                    <small class="text-muted d-block text-truncate" x-text="job.current_step || 'Waiting...'"></small>
+                                                    <div x-show="job.status === 'running'" class="progress mt-1" style="height: 4px;">
+                                                        <div class="progress-bar progress-bar-striped progress-bar-animated" :style="'width: ' + job.progress + '%'"></div>
+                                                    </div>
+                                                    <small x-show="job.error" class="text-danger mt-1" style="display: block;">
+                                                        <i class="bi bi-exclamation-triangle"></i> <span x-text="errorSnippet(job)"></span>
+                                                    </small>
+                                                </div>
+                                                <button class="btn btn-sm btn-link text-secondary p-0 ms-2" @click.prevent="showDetails(job.id)" title="Details">
+                                                    <i class="bi bi-info-circle"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+
+                        <!-- Job details modal (Alpine-controlled) -->
+                        <div class="modal fade" :class="{ show: detailsOpen }" tabindex="-1"
+                             style="display: none;" :style="detailsOpen ? 'display:block; background:rgba(0,0,0,.5)' : ''"
+                             x-show="detailsOpen" @click.self="closeDetails()">
+                            <div class="modal-dialog modal-lg">
+                                <div class="modal-content" x-show="selectedJob">
+                                    <div class="modal-header">
+                                        <h5 class="modal-title"><i class="bi bi-info-circle"></i> Job Details</h5>
+                                        <button type="button" class="btn-close" @click="closeDetails()"></button>
+                                    </div>
+                                    <div class="modal-body" x-show="selectedJob">
+                                        <div class="mb-3" x-show="selectedJob">
+                                            <strong>Job ID:</strong> <span x-text="selectedJob?.id"></span><br>
+                                            <strong>Type:</strong> <span x-text="selectedJob?.type"></span><br>
+                                            <strong>Status:</strong>
+                                            <span class="badge" :class="'bg-' + statusInfo(selectedJob?.status).color" x-text="statusInfo(selectedJob?.status).label"></span><br>
+                                            <strong>Progress:</strong> <span x-text="selectedJob?.progress"></span>%<br>
+                                            <strong>Created:</strong> <span x-text="selectedJob?.created_at"></span><br>
+                                            <template x-if="selectedJob?.started_at"><span><strong>Started:</strong> <span x-text="selectedJob.started_at"></span><br></span></template>
+                                            <template x-if="selectedJob?.completed_at"><span><strong>Completed:</strong> <span x-text="selectedJob.completed_at"></span><br></span></template>
+                                        </div>
+                                        <div class="mb-3">
+                                            <strong>Steps:</strong>
+                                            <div class="bg-dark text-light p-2 rounded mt-1" style="max-height: 300px; overflow-y: auto;">
+                                                <template x-if="!(selectedJob?.steps && selectedJob.steps.length)">
+                                                    <div class="text-muted">No steps recorded</div>
+                                                </template>
+                                                <template x-for="(step, i) in (selectedJob?.steps || [])" :key="i">
+                                                    <div class="small font-monospace" x-text="step"></div>
+                                                </template>
+                                            </div>
+                                        </div>
+                                        <div x-show="selectedJob?.error" class="alert alert-danger">
+                                            <strong>Error:</strong> <span x-text="selectedJob?.error"></span>
+                                        </div>
+                                        <div x-show="selectedJob?.result" class="alert alert-success">
+                                            <strong>Result:</strong> Template created with VMID <span x-text="selectedJob?.result?.vmid"></span>
+                                        </div>
+                                    </div>
+                                    <div class="modal-footer">
+                                        <button type="button" class="btn btn-danger" x-show="selectedJob && selectedJob.status !== 'running'"
+                                                @click="deleteJob(selectedJob.id)"><i class="bi bi-trash"></i> Delete</button>
+                                        <button type="button" class="btn btn-secondary" @click="closeDetails()">Close</button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -151,20 +229,20 @@
 
                 {% if all_clusters|length >= 1 %}
                     <!-- Cluster Selector -->
-                    <div class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" id="clusterDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                    <div class="nav-item dropdown"
+                         x-data="clusterSwitcher('{{ current_cluster.id }}', {{ current_cluster.name | tojson | forceescape }}, {{ all_clusters | map(attribute='id') | list | tojson | forceescape }})">
+                        <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
                             <i class="bi bi-diagram-2 me-2"></i>
-                            <span id="currentClusterName">{{ current_cluster.name }}</span>
+                            <span x-text="currentName">{{ current_cluster.name }}</span>
                         </a>
-                        <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="clusterDropdown">
+                        <ul class="dropdown-menu dropdown-menu-end">
                             <li><h6 class="dropdown-header"><i class="bi bi-diagram-2"></i> Switch Cluster</h6></li>
                             <li><hr class="dropdown-divider"></li>
                             {% for cluster in all_clusters %}
                             <li>
-                                <a class="dropdown-item cluster-option {% if cluster.id == current_cluster.id %}active{% endif %}" 
-                                   href="#" 
-                                   data-cluster-id="{{ cluster.id }}"
-                                   data-cluster-name="{{ cluster.name }}">
+                                <a class="dropdown-item d-flex align-items-center {% if cluster.id == current_cluster.id %}active{% endif %}"
+                                   href="#"
+                                   @click.prevent="switchTo('{{ cluster.id }}', {{ cluster.name | tojson | forceescape }})">
                                     {% if cluster.id == current_cluster.id %}
                                         <i class="bi bi-check-circle-fill text-success me-2"></i>
                                     {% else %}
@@ -181,6 +259,47 @@
                                 </a>
                             </li>
                         </ul>
+
+                        <!-- Cluster switching overlay + stale-cluster prompt (Alpine-controlled).
+                             x-if (not x-show) because the overlay uses d-flex, whose
+                             `display: flex !important` would defeat x-show's inline display:none. -->
+                        <template x-if="switching">
+                            <div class="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center"
+                                 style="background: rgba(0,0,0,.5); z-index: 9999;">
+                                <div class="bg-white rounded p-4 text-center">
+                                    <div class="spinner-border text-primary mb-2" role="status"></div>
+                                    <div x-text="switchingText">Switching…</div>
+                                    <button class="btn btn-sm btn-outline-secondary mt-3" @click="cancelSwitch()">Cancel</button>
+                                </div>
+                            </div>
+                        </template>
+                        <div class="modal fade" :class="{ show: staleOpen }" tabindex="-1"
+                             style="display: none;" :style="staleOpen ? 'display:block; background:rgba(0,0,0,.5)' : ''" x-show="staleOpen">
+                            <div class="modal-dialog">
+                                <div class="modal-content">
+                                    <div class="modal-header">
+                                        <h5 class="modal-title"><i class="bi bi-exclamation-triangle-fill text-warning me-2"></i>Cluster Not Found</h5>
+                                        <button type="button" class="btn-close" @click="staleOpen = false"></button>
+                                    </div>
+                                    <div class="modal-body">
+                                        <p>The previously selected cluster no longer exists. Please choose a cluster to connect to:</p>
+                                        <div class="list-group">
+                                            {% for cluster in all_clusters %}
+                                            <button type="button" class="list-group-item list-group-item-action d-flex align-items-center"
+                                                    @click="staleOpen = false; switchTo('{{ cluster.id }}', {{ cluster.name | tojson | forceescape }})">
+                                                <i class="bi bi-diagram-2 me-2"></i>{{ cluster.name }}
+                                            </button>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                    <div class="modal-footer">
+                                        <a href="{{ url_for('connect') }}" class="btn btn-outline-secondary btn-sm">
+                                            <i class="bi bi-gear me-1"></i>Manage Clusters
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 {% endif %}
                 </div>
@@ -189,21 +308,19 @@
     </nav>
 
     {% if demo_mode %}
-    <div class="demo-banner alert alert-info alert-dismissible mb-0 rounded-0 py-2" role="alert" id="demoBanner">
+    <div class="demo-banner alert alert-info alert-dismissible mb-0 rounded-0 py-2" role="alert"
+         x-data="{ dismissed: sessionStorage.getItem('demoBannerDismissed') === 'true' }"
+         x-show="!dismissed" x-cloak>
         <div class="container-fluid d-flex align-items-center justify-content-center gap-2">
             <i class="bi bi-info-circle-fill"></i>
             <span>{{ demo_message }}</span>
-            <button type="button" class="btn-close btn-close-sm ms-2" data-bs-dismiss="alert" aria-label="Close" onclick="sessionStorage.setItem('demoBannerDismissed', 'true')"></button>
+            <button type="button" class="btn-close btn-close-sm ms-2" aria-label="Close"
+                    @click="dismissed = true; sessionStorage.setItem('demoBannerDismissed', 'true')"></button>
         </div>
     </div>
-    <script>
-        if (sessionStorage.getItem('demoBannerDismissed') === 'true') {
-            document.getElementById('demoBanner').style.display = 'none';
-        }
-    </script>
     {% endif %}
 
-    <div class="container-fluid mt-3">
+    <div class="container-fluid mt-3 app-main">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -221,468 +338,23 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
     
-    <!-- Demo Mode & Error Handling -->
-    <script>
-    const DEMO_MODE = {{ 'true' if demo_mode else 'false' }};
-
-    // Global function to handle API errors with demo-friendly messages
-    function handleApiError(error, response) {
-        let message = error.message || 'An error occurred';
-
-        // Check if it's a permission error in demo mode
-        if (DEMO_MODE && response && (response.status === 403 || response.status === 401)) {
-            message = 'Demo mode: This action requires write permissions that are not available in the demo.';
-        } else if (response && response.status === 403) {
-            message = 'Permission denied: You do not have permission to perform this action.';
-        }
-
-        return message;
-    }
-
-    // Wrapper for fetch that adds demo-friendly error handling
-    async function apiFetch(url, options = {}) {
-        const response = await fetch(url, options);
-
-        if (!response.ok) {
-            let errorMessage;
-            try {
-                const data = await response.json();
-                errorMessage = data.error || data.message || response.statusText;
-            } catch {
-                errorMessage = response.statusText;
-            }
-
-            // Enhance error message for demo mode
-            if (DEMO_MODE && (response.status === 403 || response.status === 401)) {
-                errorMessage = 'Demo mode: This action requires write permissions that are not available in the demo.';
-            }
-
-            const error = new Error(errorMessage);
-            error.status = response.status;
-            error.response = response;
-            throw error;
-        }
-
-        return response;
-    }
-
-    // Show a toast notification for errors
-    function showErrorToast(message) {
-        const toast = document.createElement('div');
-        toast.className = 'position-fixed bottom-0 end-0 p-3';
-        toast.style.zIndex = '9999';
-        toast.innerHTML = `
-            <div class="toast show" role="alert">
-                <div class="toast-header bg-danger text-white">
-                    <i class="bi bi-exclamation-triangle me-2"></i>
-                    <strong class="me-auto">${DEMO_MODE ? 'Demo Mode' : 'Error'}</strong>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast"></button>
-                </div>
-                <div class="toast-body">
-                    ${escapeHtmlGlobal(message)}
-                </div>
-            </div>
-        `;
-        document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 6000);
-    }
-    </script>
-
-    <!-- Stale Cluster Modal -->
-    <div class="modal fade" id="staleClusterModal" tabindex="-1" aria-labelledby="staleClusterModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="staleClusterModalLabel">
-                        <i class="bi bi-exclamation-triangle-fill text-warning me-2"></i>Cluster Not Found
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <p>The previously selected cluster no longer exists. Please choose a cluster to connect to:</p>
-                    <div class="list-group" id="staleClusterList">
-                        {% for cluster in all_clusters %}
-                        <button type="button"
-                                class="list-group-item list-group-item-action d-flex align-items-center stale-cluster-pick"
-                                data-cluster-id="{{ cluster.id }}"
-                                data-cluster-name="{{ cluster.name }}">
-                            <i class="bi bi-diagram-2 me-2"></i>{{ cluster.name }}
-                        </button>
-                        {% endfor %}
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <a href="{{ url_for('connect') }}" class="btn btn-outline-secondary btn-sm">
-                        <i class="bi bi-gear me-1"></i>Manage Clusters
-                    </a>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Cluster Switching JavaScript -->
-    <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        const clusterOptions = document.querySelectorAll('.cluster-option');
-        const currentClusterName = document.getElementById('currentClusterName');
-        
-        // Build set of known cluster IDs from the DOM
-        const knownClusterIds = new Set(
-            Array.from(clusterOptions).map(el => el.dataset.clusterId)
-        );
-
-        // Load saved cluster preference from localStorage
-        const savedClusterId = localStorage.getItem('selectedClusterId');
-        if (savedClusterId && savedClusterId !== '{{ current_cluster.id }}') {
-            if (!knownClusterIds.has(savedClusterId)) {
-                // Stale cluster — clear storage and prompt user
-                localStorage.removeItem('selectedClusterId');
-                localStorage.removeItem('selectedClusterName');
-                if (knownClusterIds.size > 0) {
-                    showStaleClusterModal();
-                }
-            } else {
-                // Auto-switch to saved cluster if it's different from current
-                switchToCluster(savedClusterId);
-            }
-        }
-        
-        // Add click handlers for stale cluster modal picks
-        document.querySelectorAll('.stale-cluster-pick').forEach(btn => {
-            btn.addEventListener('click', function() {
-                const modal = bootstrap.Modal.getInstance(document.getElementById('staleClusterModal'));
-                if (modal) modal.hide();
-                switchToCluster(this.dataset.clusterId, this.dataset.clusterName);
-            });
-        });
-
-        // Add click handlers for cluster switching
-        clusterOptions.forEach(option => {
-            option.addEventListener('click', function(e) {
-                e.preventDefault();
-                
-                const clusterId = this.dataset.clusterId;
-                const clusterName = this.dataset.clusterName;
-                
-                // Don't switch if it's the current cluster
-                if (this.classList.contains('active')) {
-                    return;
-                }
-                
-                switchToCluster(clusterId, clusterName);
-            });
-        });
-        
-        function switchToCluster(clusterId, clusterName = null) {
-            // Show loading state
-            if (currentClusterName) {
-                currentClusterName.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Switching...';
-            }
-            
-            // Show loading overlay
-            showLoadingOverlay('Switching to cluster...');
-            
-            // Make API call to switch cluster
-            fetch(`/api/switch-cluster/${clusterId}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    // Save cluster preference
-                    localStorage.setItem('selectedClusterId', clusterId);
-                    localStorage.setItem('selectedClusterName', data.cluster.name);
-                    
-                    // Show success message
-                    showNotification(`Switched to ${data.cluster.name}`, 'success');
-                    
-                    // Reload the page to refresh all data
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 1000);
-                } else {
-                    hideLoadingOverlay();
-                    showNotification(data.error || 'Failed to switch cluster', 'error');
-                    
-                    // Reset cluster name
-                    if (currentClusterName) {
-                        currentClusterName.textContent = '{{ current_cluster.name }}';
-                    }
-                }
-            })
-            .catch(error => {
-                hideLoadingOverlay();
-                console.error('Error switching cluster:', error);
-                showNotification('Network error while switching cluster', 'error');
-                
-                // Reset cluster name
-                if (currentClusterName) {
-                    currentClusterName.textContent = '{{ current_cluster.name }}';
-                }
-            });
-        }
-        
-        function showStaleClusterModal() {
-            const modal = document.getElementById('staleClusterModal');
-            if (modal) {
-                new bootstrap.Modal(modal).show();
-            }
-        }
-
-        function showLoadingOverlay(message = 'Loading...') {
-            let overlay = document.getElementById('loadingOverlay');
-            if (!overlay) {
-                overlay = document.createElement('div');
-                overlay.id = 'loadingOverlay';
-                overlay.className = 'position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center';
-                overlay.style.backgroundColor = 'rgba(0,0,0,0.5)';
-                overlay.style.zIndex = '9999';
-                overlay.innerHTML = `
-                    <div class="bg-white rounded p-4 text-center">
-                        <div class="spinner-border text-primary mb-2" role="status"></div>
-                        <div>${escapeHtmlGlobal(message)}</div>
-                    </div>
-                `;
-                document.body.appendChild(overlay);
-            }
-            overlay.style.display = 'flex';
-        }
-        
-        function hideLoadingOverlay() {
-            const overlay = document.getElementById('loadingOverlay');
-            if (overlay) {
-                overlay.style.display = 'none';
-            }
-        }
-        
-        function showNotification(message, type = 'info') {
-            // Create notification element
-            const notification = document.createElement('div');
-            notification.className = `alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show position-fixed`;
-            notification.style.top = '20px';
-            notification.style.right = '20px';
-            notification.style.zIndex = '10000';
-            notification.innerHTML = `
-                ${escapeHtmlGlobal(message)}
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            `;
-            
-            document.body.appendChild(notification);
-            
-            // Auto-remove after 5 seconds
-            setTimeout(() => {
-                if (notification.parentNode) {
-                    notification.parentNode.removeChild(notification);
-                }
-            }, 5000);
-        }
-    });
-    </script>
-    
-    <!-- Global Jobs JavaScript -->
-    <script>
-    let globalJobsInterval = null;
-
-    document.addEventListener('DOMContentLoaded', function() {
-        // Start polling for jobs
-        loadGlobalJobs();
-        globalJobsInterval = setInterval(loadGlobalJobs, 3000);
-    });
-
-    async function loadGlobalJobs() {
-        try {
-            const response = await fetch('/api/jobs');
-            const jobs = await response.json();
-
-            const jobsList = document.getElementById('globalJobsList');
-            const jobsBadge = document.getElementById('jobsBadge');
-            const jobsDropdown = document.getElementById('jobsDropdown');
-
-            // Filter active jobs (queued or running)
-            const activeJobs = jobs.filter(job => job.status === 'queued' || job.status === 'running');
-
-            // Filter recent jobs (completed/failed within last hour)
-            const recentJobs = jobs.filter(job => {
-                if (job.status === 'queued' || job.status === 'running') return true;
-                const completedAt = job.completed_at ? new Date(job.completed_at) : null;
-                if (completedAt) {
-                    const hourAgo = new Date(Date.now() - 3600000);
-                    return completedAt > hourAgo;
-                }
-                return false;
-            });
-
-            // Update badge
-            if (activeJobs.length > 0) {
-                jobsBadge.textContent = activeJobs.length;
-                jobsBadge.style.display = 'block';
-                jobsDropdown.classList.add('jobs-active');
-            } else {
-                jobsBadge.style.display = 'none';
-                jobsDropdown.classList.remove('jobs-active');
-            }
-
-            // Update dropdown content
-            if (recentJobs.length === 0) {
-                jobsList.innerHTML = `
-                    <div class="text-center text-muted py-3">
-                        <i class="bi bi-check-circle"></i> No active jobs
-                    </div>
-                `;
-                return;
-            }
-
-            let html = '';
-            for (const job of recentJobs) {
-                const statusInfo = getJobStatusInfo(job.status);
-                const progressBar = job.status === 'running' ? `
-                    <div class="progress mt-1" style="height: 4px;">
-                        <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: ${job.progress}%"></div>
-                    </div>
-                ` : '';
-
-                html += `
-                    <div class="card mb-2 border-${statusInfo.color}">
-                        <div class="card-body py-2 px-3">
-                            <div class="d-flex justify-content-between align-items-start">
-                                <div class="flex-grow-1">
-                                    <div class="d-flex align-items-center gap-2 mb-1">
-                                        <span class="badge bg-${statusInfo.color}">${statusInfo.icon} ${statusInfo.label}</span>
-                                        <small class="text-truncate" style="max-width: 200px;" title="${escapeHtmlGlobal(job.description)}">${escapeHtmlGlobal(job.description)}</small>
-                                    </div>
-                                    <small class="text-muted d-block text-truncate">${job.current_step || 'Waiting...'}</small>
-                                    ${progressBar}
-                                    ${job.error ? `<small class="text-danger d-block mt-1"><i class="bi bi-exclamation-triangle"></i> ${escapeHtmlGlobal(job.error).substring(0, 50)}...</small>` : ''}
-                                </div>
-                                <button class="btn btn-sm btn-link text-secondary p-0 ms-2" onclick="showGlobalJobDetails('${job.id}')" title="Details">
-                                    <i class="bi bi-info-circle"></i>
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                `;
-            }
-
-            jobsList.innerHTML = html;
-
-        } catch (error) {
-            console.error('Error loading jobs:', error);
-        }
-    }
-
-    function refreshGlobalJobs() {
-        loadGlobalJobs();
-    }
-
-    function getJobStatusInfo(status) {
-        switch (status) {
-            case 'queued':
-                return { color: 'secondary', icon: '<i class="bi bi-clock"></i>', label: 'Queued' };
-            case 'running':
-                return { color: 'primary', icon: '<i class="bi bi-hourglass-split"></i>', label: 'Running' };
-            case 'completed':
-                return { color: 'success', icon: '<i class="bi bi-check-circle"></i>', label: 'Done' };
-            case 'failed':
-                return { color: 'danger', icon: '<i class="bi bi-x-circle"></i>', label: 'Failed' };
-            default:
-                return { color: 'secondary', icon: '', label: status };
-        }
-    }
-
-    function escapeHtmlGlobal(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    async function showGlobalJobDetails(jobId) {
-        try {
-            const response = await fetch(`/api/jobs/${jobId}`);
-            const job = await response.json();
-
-            if (job.error && !job.steps) {
-                alert('Job not found');
-                return;
-            }
-
-            const statusInfo = getJobStatusInfo(job.status);
-            let stepsHtml = job.steps && job.steps.length > 0
-                ? job.steps.map(s => `<div class="small font-monospace">${escapeHtmlGlobal(s)}</div>`).join('')
-                : '<div class="text-muted">No steps recorded</div>';
-
-            const modalHtml = `
-                <div class="modal fade" id="globalJobDetailsModal" tabindex="-1">
-                    <div class="modal-dialog modal-lg">
-                        <div class="modal-content">
-                            <div class="modal-header">
-                                <h5 class="modal-title"><i class="bi bi-info-circle"></i> Job Details</h5>
-                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                            </div>
-                            <div class="modal-body">
-                                <div class="mb-3">
-                                    <strong>Job ID:</strong> ${job.id}<br>
-                                    <strong>Type:</strong> ${job.type}<br>
-                                    <strong>Status:</strong> <span class="badge bg-${statusInfo.color}">${statusInfo.label}</span><br>
-                                    <strong>Progress:</strong> ${job.progress}%<br>
-                                    <strong>Created:</strong> ${job.created_at}<br>
-                                    ${job.started_at ? `<strong>Started:</strong> ${job.started_at}<br>` : ''}
-                                    ${job.completed_at ? `<strong>Completed:</strong> ${job.completed_at}<br>` : ''}
-                                </div>
-                                <div class="mb-3">
-                                    <strong>Steps:</strong>
-                                    <div class="bg-dark text-light p-2 rounded mt-1" style="max-height: 300px; overflow-y: auto;">
-                                        ${stepsHtml}
-                                    </div>
-                                </div>
-                                ${job.error ? `<div class="alert alert-danger"><strong>Error:</strong> ${escapeHtmlGlobal(job.error)}</div>` : ''}
-                                ${job.result ? `<div class="alert alert-success"><strong>Result:</strong> Template created with VMID ${job.result.vmid}</div>` : ''}
-                            </div>
-                            <div class="modal-footer">
-                                ${job.status !== 'running' ? `<button type="button" class="btn btn-danger" onclick="deleteGlobalJob('${job.id}')"><i class="bi bi-trash"></i> Delete</button>` : ''}
-                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-
-            // Remove existing modal if any
-            const existingModal = document.getElementById('globalJobDetailsModal');
-            if (existingModal) existingModal.remove();
-
-            document.body.insertAdjacentHTML('beforeend', modalHtml);
-            const modal = new bootstrap.Modal(document.getElementById('globalJobDetailsModal'));
-            modal.show();
-
-        } catch (error) {
-            alert('Error loading job details: ' + error.message);
-        }
-    }
-
-    async function deleteGlobalJob(jobId) {
-        if (!confirm('Delete this job from the list?')) return;
-
-        try {
-            const response = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
-            const result = await response.json();
-
-            if (result.success) {
-                const modal = bootstrap.Modal.getInstance(document.getElementById('globalJobDetailsModal'));
-                if (modal) modal.hide();
-                loadGlobalJobs();
-            } else {
-                alert(result.error || 'Failed to delete job');
-            }
-        } catch (error) {
-            alert('Error deleting job: ' + error.message);
-        }
-    }
-    </script>
 
     <style>
+    /* Hide Alpine-controlled elements until Alpine initializes (prevents flash). */
+    [x-cloak] { display: none !important; }
+
+    /* ── App shell hooks ──────────────────────────────────────────────────
+       The chrome is structured into regions so a top→left sidebar redesign is
+       CSS-only. Today `.app-navbar` renders as Bootstrap's top bar; to move it
+       to a left sidebar, target these classes (no markup changes needed):
+         .app-navbar      → position: fixed; left/top/bottom: 0; width: 240px;
+                            flex-direction: column; align-items: stretch;
+         .app-nav-primary → flex-direction: column; (stacks the page links)
+         .app-nav-utility → margin-top: auto; (pins theme/jobs/cluster to bottom)
+         .app-main        → margin-left: 240px; (main content beside the sidebar)
+       On narrow screens keep the current collapsed top-bar behaviour.
+       ──────────────────────────────────────────────────────────────────── */
+
     /* Pulsing animation for active jobs indicator */
     .jobs-active {
         animation: pulse-jobs 2s infinite;
@@ -715,5 +387,6 @@
     </style>
 
     {% block scripts %}{% endblock %}
+    <script defer src="{{ url_for('static', filename='js/alpine.min.js') }}"></script>
 </body>
 </html>

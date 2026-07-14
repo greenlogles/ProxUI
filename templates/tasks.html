@@ -3,12 +3,13 @@
 {% block title %}Tasks - Proxmox Manager{% endblock %}
 
 {% block content %}
+<div x-data="tasksPage()">
 <div class="row">
     <div class="col-12">
         <div class="d-flex justify-content-between align-items-center">
             <h1><i class="bi bi-list-task"></i> Recent Tasks</h1>
-            <button class="btn btn-outline-primary" id="refreshTasks" title="Refresh Tasks">
-                <i class="bi bi-arrow-clockwise"></i> Refresh
+            <button class="btn btn-outline-primary" @click="refresh()" :disabled="loading" title="Refresh Tasks">
+                <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i> Refresh
             </button>
         </div>
         <p class="text-muted">All recent tasks from the cluster</p>
@@ -21,257 +22,182 @@
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">Cluster Tasks</h5>
                 <div class="d-flex gap-2">
-                    <select class="form-select form-select-sm" id="taskFilter" style="width: auto;">
+                    <select class="form-select form-select-sm" style="width: auto;"
+                            x-model="filter" @change="applyFilter()">
                         <option value="all">All Tasks</option>
                         <option value="running">Running</option>
                         <option value="ok">Completed</option>
                         <option value="error">Failed</option>
                     </select>
-                    <select class="form-select form-select-sm" id="taskLimit" style="width: auto;">
+                    <select class="form-select form-select-sm" style="width: auto;"
+                            x-model.number="limit" @change="load()">
                         <option value="50">Last 50</option>
                         <option value="100">Last 100</option>
                         <option value="200">Last 200</option>
                     </select>
                 </div>
             </div>
-            <div class="card-body p-0" id="tasksContainer">
-                <div class="text-center p-4">
-                    <div class="spinner-border spinner-border-sm" role="status">
-                        <span class="visually-hidden">Loading...</span>
+            <div class="card-body p-0">
+                <template x-if="loading && filteredTasks.length === 0">
+                    <div class="text-center p-4">
+                        <div class="spinner-border spinner-border-sm" role="status"></div>
+                        Loading tasks...
                     </div>
-                    Loading tasks...
+                </template>
+                <template x-if="error">
+                    <div class="text-danger p-4">
+                        <i class="bi bi-exclamation-triangle"></i> Error loading tasks
+                    </div>
+                </template>
+                <template x-if="!loading && !error && filteredTasks.length === 0">
+                    <div class="text-muted p-4">
+                        <i class="bi bi-info-circle"></i>
+                        <span x-text="filter === 'all' ? 'No tasks found' : 'No tasks match the current filter'"></span>
+                    </div>
+                </template>
+                <div x-show="filteredTasks.length > 0" class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Task</th>
+                                <th>Node</th>
+                                <th>Description</th>
+                                <th>User</th>
+                                <th>Status</th>
+                                <th>Started</th>
+                                <th>Duration</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="task in filteredTasks" :key="task.upid || (task.node + task.type + task.starttime)">
+                                <tr>
+                                    <td>
+                                        <strong x-text="taskName(task)"></strong>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-secondary" x-text="task.node || 'Unknown'"></span>
+                                    </td>
+                                    <td>
+                                        <template x-if="task.id && (task.type || '').startsWith('qm')">
+                                            <span>VM <a :href="vmLink(task)" class="text-decoration-none" x-text="task.id"></a></span>
+                                        </template>
+                                        <template x-if="task.id && (task.type || '').startsWith('vz')">
+                                            <span>CT <a :href="vmLink(task)" class="text-decoration-none" x-text="task.id"></a></span>
+                                        </template>
+                                        <template x-if="!task.id || (!(task.type || '').startsWith('qm') && !(task.type || '').startsWith('vz'))">
+                                            <span x-text="task.id || ''"></span>
+                                        </template>
+                                    </td>
+                                    <td x-text="task.user || ''"></td>
+                                    <td>
+                                        <span class="badge" :class="'bg-' + taskStatusClass(task)"
+                                              x-text="task.status || (task.endtime ? 'unknown' : 'running')"></span>
+                                    </td>
+                                    <td>
+                                        <small class="text-muted" x-text="task.start_time_formatted || 'Unknown'"></small>
+                                    </td>
+                                    <td>
+                                        <small class="text-muted" x-text="taskDuration(task)"></small>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
     </div>
 </div>
+</div>{# end x-data="tasksPage" #}
 {% endblock %}
 
 {% block scripts %}
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    const tasksContainer = document.getElementById('tasksContainer');
-    const refreshTasksBtn = document.getElementById('refreshTasks');
-    const taskFilter = document.getElementById('taskFilter');
-    const taskLimit = document.getElementById('taskLimit');
-    
-    let allTasks = [];
+<script type="module">
+  import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
 
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text == null ? '' : String(text);
-        return div.innerHTML;
-    }
-    
-    // Fetch all tasks from cluster
-    function fetchClusterTasks() {
-        const limit = taskLimit.value;
-        
-        fetch(`/api/tasks?limit=${limit}`)
-            .then(response => response.json())
-            .then(data => {
-                allTasks = data;
-                displayFilteredTasks();
-            })
-            .catch(error => {
-                console.error('Error fetching cluster tasks:', error);
-                tasksContainer.innerHTML = '<div class="text-danger p-4"><i class="bi bi-exclamation-triangle"></i> Error loading tasks</div>';
-            });
-    }
-    
-    // Display filtered tasks
-    function displayFilteredTasks() {
-        const filter = taskFilter.value;
-        
-        let filteredTasks = allTasks;
-        if (filter !== 'all') {
-            filteredTasks = allTasks.filter(task => {
-                const status = task.status?.toLowerCase() || '';
-                if (filter === 'running') {
-                    // Task is running if it has no end time or explicitly marked as running
-                    return status.includes('running') || !task.endtime;
-                } else if (filter === 'ok') {
-                    return status.includes('ok') || status === 'stopped';
-                } else if (filter === 'error') {
-                    return status.includes('error') || status.includes('failed');
-                }
-                return true;
-            });
-        }
-        
-        displayTasks(filteredTasks);
-    }
-    
-    // Display tasks in the container
-    function displayTasks(tasks) {
-        if (!Array.isArray(tasks)) {
-            tasksContainer.innerHTML = '<div class="text-muted p-4"><i class="bi bi-info-circle"></i> No tasks found</div>';
-            return;
-        }
-        
-        if (tasks.length === 0) {
-            tasksContainer.innerHTML = '<div class="text-muted p-4"><i class="bi bi-info-circle"></i> No tasks match the current filter</div>';
-            return;
-        }
-        
-        const taskTypeNames = {
-            'qmstart': 'Start VM',
-            'qmstop': 'Stop VM', 
-            'qmshutdown': 'Shutdown VM',
-            'qmreset': 'Reset VM',
-            'qmreboot': 'Reboot VM',
-            'qmigrate': 'Migrate VM',
-            'qmclone': 'Clone VM',
-            'qmcreate': 'Create VM',
-            'qmdestroy': 'Destroy VM',
-            'qmtemplate': 'Create VM template',
-            'vzstart': 'Start Container',
-            'vzstop': 'Stop Container',
-            'vzshutdown': 'Shutdown Container',
-            'vzmigrate': 'Migrate Container',
-            'vzclone': 'Clone Container',
-            'vzcreate': 'Create Container',
-            'vzdestroy': 'Destroy Container',
-            'vzdump': 'Backup Container',
-            'download': 'Download ISO',
-            'aptupdate': 'Update package database',
-            'startall': 'Bulk start VMs and Containers',
-            'stopall': 'Bulk stop VMs and Containers',
-            'srvreload': 'SRV networking - reload',
-            'vncproxy': 'VNC Console',
-            'clusterjoin': 'Add node to cluster',
-            'resize': 'Disk resize'
-        };
-        
-        
-        let tasksHtml = '<div class="table-responsive">';
-        tasksHtml += '<table class="table table-hover mb-0">';
-        tasksHtml += `
-            <thead class="table-light">
-                <tr>
-                    <th>Task</th>
-                    <th>Node</th>
-                    <th>Description</th>
-                    <th>User</th>
-                    <th>Status</th>
-                    <th>Started</th>
-                    <th>Duration</th>
-                </tr>
-            </thead>
-            <tbody>
-        `;
+  const ALLOWED_STATUS = new Set(['primary', 'secondary', 'success', 'danger', 'warning', 'info', 'dark']);
 
-        tasks.forEach(task => {
-            const taskId = task.id || '';
-            const taskType = task.type || 'unknown';
-            const taskStatus = task.status || (!task.endtime ? 'running' : 'unknown');
-            const startTime = task.start_time_formatted || 'Unknown';
-            const endTime = task.end_time_formatted;
-            const allowedStatusClasses = new Set(['primary', 'secondary', 'success', 'danger', 'warning', 'info', 'dark']);
-            const statusClass = allowedStatusClasses.has(task.status_class) ? task.status_class : 'secondary';
-            const node = task.node || 'Unknown';
-            const vmid = task.id || '';
-            
-            // Calculate duration if both start and end times exist
-            let duration = '';
-            if (task.starttime && task.endtime) {
-                const durationSeconds = task.endtime - task.starttime;
-                if (durationSeconds < 60) {
-                    duration = `${durationSeconds}s`;
-                } else if (durationSeconds < 3600) {
-                    duration = `${Math.floor(durationSeconds / 60)}m ${durationSeconds % 60}s`;
-                } else {
-                    const hours = Math.floor(durationSeconds / 3600);
-                    const minutes = Math.floor((durationSeconds % 3600) / 60);
-                    duration = `${hours}h ${minutes}m`;
-                }
-            } else if (task.starttime && !task.endtime && taskStatus.toLowerCase().includes('running')) {
-                const now = Math.floor(Date.now() / 1000);
-                const runningSeconds = now - task.starttime;
-                if (runningSeconds < 60) {
-                    duration = `${runningSeconds}s`;
-                } else if (runningSeconds < 3600) {
-                    duration = `${Math.floor(runningSeconds / 60)}m`;
-                } else {
-                    const hours = Math.floor(runningSeconds / 3600);
-                    const minutes = Math.floor((runningSeconds % 3600) / 60);
-                    duration = `${hours}h ${minutes}m`;
-                }
-            }
-            
-            const displayName = escapeHtml(taskTypeNames[taskType] || taskType.toUpperCase());
-            
-            // Create VM/Container link if VMID exists
-            let vmidDisplay = escapeHtml(vmid);
-            if (vmid && taskType.startsWith('qm')) {
-                vmidDisplay = `VM <a href="/vm/${encodeURIComponent(node)}/${encodeURIComponent(vmid)}" class="text-decoration-none">${escapeHtml(vmid)}</a>`;
-            }
-            if (vmid &&  taskType.startsWith('vz')) {
-                vmidDisplay = `CT <a href="/vm/${encodeURIComponent(node)}/${encodeURIComponent(vmid)}" class="text-decoration-none">${escapeHtml(vmid)}</a>`;
-            }
-            
-            tasksHtml += `
-                <tr>
-                    <td>
-                        <div>
-                            <strong>${displayName}</strong>
-                        </div>
-                    </td>
-                    <td>
-                        <span class="badge bg-secondary">${escapeHtml(node)}</span>
-                    </td>
-                    <td>${vmidDisplay}</td>
-                    <td>${escapeHtml(task.user)}</td>
-                    <td>
-                        <span class="badge bg-${statusClass}">${escapeHtml(taskStatus)}</span>
-                    </td>
-                    <td>
-                        <small class="text-muted">${escapeHtml(startTime)}</small>
-                    </td>
-                    <td>
-                        <small class="text-muted">${escapeHtml(duration)}</small>
-                    </td>
-                </tr>
-            `;
+  function tasksPage() {
+    return {
+      allTasks: [], filteredTasks: [], _poller: null,
+      filter: 'all',
+      limit: 50,
+      loading: true,
+      error: '',
+
+      taskName(task) {
+        return ProxUtils.taskTypeName(task.type);
+      },
+
+      taskStatusClass(task) {
+        return ALLOWED_STATUS.has(task.status_class) ? task.status_class : 'secondary';
+      },
+
+      vmLink(task) {
+        return `/vm/${encodeURIComponent(task.node)}/${encodeURIComponent(task.id)}`;
+      },
+
+      taskDuration(task) {
+        if (!task.starttime) return '';
+        if (task.endtime) {
+          const secs = task.endtime - task.starttime;
+          if (secs < 60) return `${secs}s`;
+          if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+          return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+        }
+        const status = (task.status || '').toLowerCase();
+        if (status.includes('running') || !task.endtime) {
+          const secs = Math.floor(Date.now() / 1000) - task.starttime;
+          if (secs < 60) return `${secs}s`;
+          if (secs < 3600) return `${Math.floor(secs / 60)}m`;
+          return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+        }
+        return '';
+      },
+
+      applyFilter() {
+        if (this.filter === 'all') {
+          this.filteredTasks = this.allTasks;
+          return;
+        }
+        this.filteredTasks = this.allTasks.filter(task => {
+          const s = (task.status || '').toLowerCase();
+          if (this.filter === 'running') return s.includes('running') || !task.endtime;
+          if (this.filter === 'ok') return s.includes('ok') || s === 'stopped';
+          if (this.filter === 'error') return s.includes('error') || s.includes('failed');
+          return true;
         });
-        
-        tasksHtml += '</tbody></table></div>';
-        tasksContainer.innerHTML = tasksHtml;
-    }
-    
-    // Event listeners
-    refreshTasksBtn.addEventListener('click', function() {
-        const originalHtml = this.innerHTML;
-        this.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i> Refreshing...';
-        this.disabled = true;
-        
-        fetchClusterTasks();
-        
-        setTimeout(() => {
-            this.innerHTML = originalHtml;
-            this.disabled = false;
-        }, 1000);
-    });
-    
-    taskFilter.addEventListener('change', displayFilteredTasks);
-    taskLimit.addEventListener('change', fetchClusterTasks);
-    
-    // Initial load
-    fetchClusterTasks();
-    
-    // Auto-refresh every 30 seconds
-    setInterval(fetchClusterTasks, 30000);
-});
+      },
+
+      async load() {
+        this.loading = true;
+        this.error = '';
+        try {
+          const data = await ProxUtils.apiJson(`/api/tasks?limit=${this.limit}`);
+          this.allTasks = Array.isArray(data) ? data : [];
+          this.applyFilter();
+        } catch (e) {
+          this.error = e.message;
+        } finally {
+          this.loading = false;
+        }
+      },
+
+      refresh() { this.load(); },
+
+      init() {
+        this.load();
+        this._poller = ProxUtils.createAdaptivePoller(() => this.load(), 30000);
+      },
+
+      destroy() { this._poller?.destroy(); },
+    };
+  }
+
+  function register() {
+    window.Alpine.data('tasksPage', tasksPage);
+  }
+  if (window.Alpine) register();
+  else document.addEventListener('alpine:init', register);
 </script>
-
-<style>
-.spin {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-</style>
 {% endblock %}

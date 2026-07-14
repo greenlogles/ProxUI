@@ -85,17 +85,52 @@
 <!-- Node Metrics -->
 <div class="row mt-4">
     <div class="col-12">
-        <div class="card">
+        <div class="card" x-data="dashboardNodes()">
             <div class="card-header d-flex justify-content-between align-items-center py-2">
                 <h5 class="mb-0"><i class="bi bi-hdd-rack"></i> Node Status</h5>
-                <button class="btn btn-sm btn-outline-primary" id="refreshNodes" title="Refresh">
-                    <i class="bi bi-arrow-clockwise"></i>
+                <button class="btn btn-sm btn-outline-primary" @click="refresh()" :disabled="loading" title="Refresh">
+                    <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
                 </button>
             </div>
-            <div class="card-body py-2" id="nodesContainer">
-                <div class="text-center py-3">
-                    <div class="spinner-border spinner-border-sm" role="status"></div>
-                    Loading node metrics...
+            <div class="card-body py-2">
+                <template x-if="loading && nodes.length === 0">
+                    <div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div> Loading node metrics...</div>
+                </template>
+                <template x-if="error">
+                    <div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> Error: <span x-text="error"></span></div>
+                </template>
+                <template x-if="!loading && !error && nodes.length === 0">
+                    <div class="text-muted p-3">No nodes available</div>
+                </template>
+                <div class="row g-3" x-show="nodes.length > 0">
+                    <template x-for="node in nodes" :key="node.name">
+                        <div class="col-md-6 col-lg-4">
+                            <div class="border rounded p-2" :class="!node.online && 'bg-light'">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <strong>
+                                        <i class="bi bi-hdd-network" :class="node.online ? 'text-success' : 'text-danger'"></i>
+                                        <span x-text="node.name || 'Unknown'"></span>
+                                    </strong>
+                                    <span x-show="!node.online" class="badge bg-danger">Offline</span>
+                                    <small x-show="node.online" class="text-muted"><i class="bi bi-clock"></i> <span x-text="fmtUptime(node.uptime)"></span></small>
+                                </div>
+                                <div class="row g-2 small" x-show="node.online">
+                                    <div class="col-6">
+                                        <div class="text-muted mb-1">CPU <span x-text="cpuPct(node)"></span>%</div>
+                                        <div class="progress" style="height:6px;">
+                                            <div class="progress-bar" :class="'bg-' + cpuColor(node)" :style="`width:${cpuPct(node)}%`"></div>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="text-muted mb-1">Mem <span x-text="memUsedGB(node)"></span>/<span x-text="memTotalGB(node)"></span> GB</div>
+                                        <div class="progress" style="height:6px;">
+                                            <div class="progress-bar" :class="'bg-' + memColor(node)" :style="`width:${memPct(node)}%`"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
                 </div>
             </div>
         </div>
@@ -205,24 +240,49 @@
 <div class="row">
     <!-- Recent Tasks -->
     <div class="col-md-6 mb-4">
-        <div class="card">
+        <div class="card" x-data="dashboardTasks()">
             <div class="card-header d-flex justify-content-between align-items-center py-2">
                 <h5 class="mb-0"><i class="bi bi-list-task"></i> Recent Tasks</h5>
                 <div class="d-flex gap-2">
-                    <button class="btn btn-sm btn-outline-primary" id="refreshTasks" title="Refresh Tasks">
-                        <i class="bi bi-arrow-clockwise"></i>
+                    <button class="btn btn-sm btn-outline-primary" @click="refresh()" :disabled="loading" title="Refresh Tasks">
+                        <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
                     </button>
-                    <a href="{{ url_for('tasks') }}" class="btn btn-sm btn-outline-secondary">
-                        View All
-                    </a>
+                    <a href="{{ url_for('tasks') }}" class="btn btn-sm btn-outline-secondary">View All</a>
                 </div>
             </div>
-            <div class="card-body p-0" id="tasksContainer" style="max-height: 350px; overflow-y: auto;">
-                <div class="text-center p-4">
-                    <div class="spinner-border spinner-border-sm" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                    Loading recent tasks...
+            <div class="card-body p-0" style="max-height:350px;overflow-y:auto;">
+                <template x-if="loading && tasks.length === 0">
+                    <div class="text-center p-4"><div class="spinner-border spinner-border-sm" role="status"></div> Loading recent tasks...</div>
+                </template>
+                <template x-if="error">
+                    <div class="text-danger p-4"><i class="bi bi-exclamation-triangle"></i> Error loading tasks</div>
+                </template>
+                <template x-if="!loading && !error && tasks.length === 0">
+                    <div class="text-muted p-4"><i class="bi bi-info-circle"></i> No recent tasks</div>
+                </template>
+                <div class="list-group list-group-flush" x-show="tasks.length > 0">
+                    <template x-for="task in tasks" :key="task.upid || (task.node + task.type + task.starttime)">
+                        <div class="list-group-item list-group-item-action">
+                            <div class="d-flex w-100 justify-content-between align-items-start">
+                                <div>
+                                    <h6 class="mb-1" x-text="displayName(task)"></h6>
+                                    <p class="mb-1 text-muted small">
+                                        Node: <span class="badge bg-secondary" x-text="task.node || 'Unknown'"></span>
+                                        <template x-if="task.id && isVmTask(task)">
+                                            <span> | VM/CT <a :href="vmLink(task)" class="text-decoration-none" x-text="task.id"></a></span>
+                                        </template>
+                                        <template x-if="task.id && !isVmTask(task)">
+                                            <span> | <span x-text="task.id"></span></span>
+                                        </template>
+                                    </p>
+                                </div>
+                                <div>
+                                    <span class="badge" :class="'bg-' + statusClass(task)" x-text="task.status || 'unknown'"></span><br>
+                                    <small class="text-muted" x-text="task.start_time_formatted || 'Unknown'"></small>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
                 </div>
             </div>
         </div>
@@ -231,255 +291,66 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    const tasksContainer = document.getElementById('tasksContainer');
-    const refreshTasksBtn = document.getElementById('refreshTasks');
-    const nodesContainer = document.getElementById('nodesContainer');
-    const refreshNodesBtn = document.getElementById('refreshNodes');
+<script type="module">
+  import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
 
-    // Format uptime
-    function formatUptime(seconds) {
-        const days = Math.floor(seconds / 86400);
-        const hours = Math.floor((seconds % 86400) / 3600);
-        if (days > 0) return `${days}d ${hours}h`;
-        const mins = Math.floor((seconds % 3600) / 60);
-        return `${hours}h ${mins}m`;
-    }
+  const ALLOWED_STATUS = new Set(['primary','secondary','success','danger','warning','info','dark']);
 
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text == null ? '' : String(text);
-        return div.innerHTML;
-    }
+  function dashboardNodes() {
+    return {
+      nodes: [], loading: true, error: '', _poller: null,
+      fmtUptime: ProxUtils.formatUptime,
+      cpuPct(n)     { return (n.cpu * 100).toFixed(1); },
+      memPct(n)     { return ((n.mem_used / n.mem_total) * 100).toFixed(1); },
+      memUsedGB(n)  { return (n.mem_used / 1073741824).toFixed(1); },
+      memTotalGB(n) { return (n.mem_total / 1073741824).toFixed(1); },
+      cpuColor(n)   { const p = +this.cpuPct(n); return p > 80 ? 'danger' : p > 60 ? 'warning' : 'success'; },
+      memColor(n)   { const p = +this.memPct(n); return p > 80 ? 'danger' : p > 60 ? 'warning' : 'info'; },
+      async load() {
+        this.loading = true; this.error = '';
+        try { this.nodes = await ProxUtils.apiJson('/api/nodes/status'); }
+        catch (e) { this.error = e.message; }
+        finally { this.loading = false; }
+      },
+      refresh() { this.load(); },
+      init() {
+        this.load();
+        this._poller = ProxUtils.createAdaptivePoller(() => this.load(), 10000);
+      },
+      destroy() { this._poller?.destroy(); },
+    };
+  }
 
-    // Fetch node metrics
-    function fetchNodeMetrics() {
-        fetch('/api/nodes/status')
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                return response.json();
-            })
-            .then(nodes => {
-                displayNodeMetrics(nodes);
-            })
-            .catch(error => {
-                console.error('Error fetching node metrics:', error);
-                nodesContainer.innerHTML = `<div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> Error: ${escapeHtml(error.message)}</div>`;
-            });
-    }
-
-    // Display node metrics
-    function displayNodeMetrics(nodes) {
-        if (!Array.isArray(nodes) || nodes.length === 0) {
-            nodesContainer.innerHTML = '<div class="text-muted p-3">No nodes available</div>';
-            return;
+  function dashboardTasks() {
+    return {
+      tasks: [], loading: true, error: '', _poller: null,
+      displayName(t) { return ProxUtils.taskTypeName(t.type); },
+      statusClass(t) { return ALLOWED_STATUS.has(t.status_class) ? t.status_class : 'secondary'; },
+      isVmTask(t)    { const ty = t.type || ''; return ty.startsWith('qm') || ty.startsWith('vz'); },
+      vmLink(t)      { return `/vm/${encodeURIComponent(t.node)}/${encodeURIComponent(t.id)}`; },
+      async load() {
+        this.loading = true; this.error = '';
+        try {
+          const data = await ProxUtils.apiJson('/api/tasks?limit=8');
+          this.tasks = Array.isArray(data) ? data.slice(0, 8) : [];
         }
+        catch (e) { this.error = e.message; }
+        finally { this.loading = false; }
+      },
+      refresh() { this.load(); },
+      init() {
+        this.load();
+        this._poller = ProxUtils.createAdaptivePoller(() => this.load(), 30000);
+      },
+      destroy() { this._poller?.destroy(); },
+    };
+  }
 
-        let html = '<div class="row g-3">';
-
-        nodes.forEach(node => {
-            const nodeName = escapeHtml(node.name || 'Unknown');
-            if (!node.online) {
-                html += `
-                    <div class="col-md-6 col-lg-4">
-                        <div class="border rounded p-2 bg-light">
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <strong><i class="bi bi-hdd-network text-danger"></i> ${nodeName}</strong>
-                                <span class="badge bg-danger">Offline</span>
-                            </div>
-                        </div>
-                    </div>
-                `;
-                return;
-            }
-
-            // Calculate percentages (same as cluster page)
-            const cpuPercent = (node.cpu * 100).toFixed(1);
-            const memPercent = ((node.mem_used / node.mem_total) * 100).toFixed(1);
-            const memUsedGB = (node.mem_used / 1024 / 1024 / 1024).toFixed(1);
-            const memTotalGB = (node.mem_total / 1024 / 1024 / 1024).toFixed(1);
-
-            const cpuColor = cpuPercent > 80 ? 'danger' : cpuPercent > 60 ? 'warning' : 'success';
-            const memColor = memPercent > 80 ? 'danger' : memPercent > 60 ? 'warning' : 'info';
-
-            html += `
-                <div class="col-md-6 col-lg-4">
-                    <div class="border rounded p-2">
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <strong><i class="bi bi-hdd-network text-success"></i> ${nodeName}</strong>
-                            <small class="text-muted"><i class="bi bi-clock"></i> ${formatUptime(node.uptime)}</small>
-                        </div>
-                        <div class="row g-2 small">
-                            <div class="col-6">
-                                <div class="text-muted mb-1">CPU ${cpuPercent}%</div>
-                                <div class="progress" style="height: 6px;">
-                                    <div class="progress-bar bg-${cpuColor}" style="width: ${cpuPercent}%"></div>
-                                </div>
-                            </div>
-                            <div class="col-6">
-                                <div class="text-muted mb-1">Mem ${memUsedGB}/${memTotalGB} GB</div>
-                                <div class="progress" style="height: 6px;">
-                                    <div class="progress-bar bg-${memColor}" style="width: ${memPercent}%"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-        });
-
-        html += '</div>';
-        nodesContainer.innerHTML = html;
-    }
-
-    // Refresh nodes button
-    refreshNodesBtn.addEventListener('click', function() {
-        const icon = this.querySelector('i');
-        icon.classList.add('spin');
-        this.disabled = true;
-
-        fetchNodeMetrics();
-
-        setTimeout(() => {
-            icon.classList.remove('spin');
-            this.disabled = false;
-        }, 1000);
-    });
-
-    // Initial node metrics load
-    fetchNodeMetrics();
-
-    // Auto-refresh node metrics every 10 seconds
-    setInterval(fetchNodeMetrics, 10000);
-
-    // Fetch recent tasks for dashboard
-    function fetchRecentTasks() {
-        fetch('/api/tasks?limit=8')
-            .then(response => response.json())
-            .then(data => {
-                displayDashboardTasks(data);
-            })
-            .catch(error => {
-                console.error('Error fetching recent tasks:', error);
-                tasksContainer.innerHTML = '<div class="text-danger p-4"><i class="bi bi-exclamation-triangle"></i> Error loading tasks</div>';
-            });
-    }
-    
-    // Display tasks on dashboard
-    function displayDashboardTasks(tasks) {
-        if (!Array.isArray(tasks) || tasks.length === 0) {
-            tasksContainer.innerHTML = '<div class="text-muted p-4"><i class="bi bi-info-circle"></i> No recent tasks</div>';
-            return;
-        }
-        
-        const taskTypeNames = {
-            'qmstart': 'Start VM',
-            'qmstop': 'Stop VM', 
-            'qmshutdown': 'Shutdown VM',
-            'qmreset': 'Reset VM',
-            'qmreboot': 'Reboot VM',
-            'qmigrate': 'Migrate VM',
-            'qmclone': 'Clone VM',
-            'qmcreate': 'Create VM',
-            'qmdestroy': 'Destroy VM',
-            'qmtemplate': 'Create VM template',
-            'vzstart': 'Start Container',
-            'vzstop': 'Stop Container',
-            'vzshutdown': 'Shutdown Container',
-            'vzmigrate': 'Migrate Container',
-            'vzclone': 'Clone Container',
-            'vzcreate': 'Create Container',
-            'vzdestroy': 'Destroy Container',
-            'vzdump': 'Backup Container',
-            'download': 'Download ISO',
-            'aptupdate': 'Update package database',
-            'startall': 'Bulk start VMs and Containers',
-            'stopall': 'Bulk stop VMs and Containers',
-            'srvreload': 'SRV networking - reload',
-            'vncproxy': 'VNC Console',
-            'clusterjoin': 'Add node to cluster',
-            'resize': 'Disk resize'
-        };
-        
-        
-        let tasksHtml = '<div class="list-group list-group-flush">';
-        
-        tasks.forEach((task, index) => {
-            if (index >= 8) return; // Limit to 8 tasks for dashboard
-            
-            const taskType = task.type || 'unknown';
-            const taskStatus = task.status || 'unknown';
-            const startTime = task.start_time_formatted || 'Unknown';
-            const allowedStatusClasses = new Set(['primary', 'secondary', 'success', 'danger', 'warning', 'info', 'dark']);
-            const statusClass = allowedStatusClasses.has(task.status_class) ? task.status_class : 'secondary';
-            const node = task.node || 'Unknown';
-            const vmid = task.id || '';
-            
-            const displayName = escapeHtml(taskTypeNames[taskType] || taskType.toUpperCase());
-            
-            // Create VM/Container link if VMID exists
-            let vmidDisplay = escapeHtml(vmid);
-            if (vmid && (taskType.startsWith('qm') || taskType.startsWith('vz'))) {
-                vmidDisplay = `VM/CT <a href="/vm/${encodeURIComponent(node)}/${encodeURIComponent(vmid)}" class="text-decoration-none">${escapeHtml(vmid)}</a>`;
-            }
-            
-            tasksHtml += `
-                <div class="list-group-item list-group-item-action">
-                    <div class="d-flex w-100 justify-content-between align-items-start">
-                        <div>
-                            <h6 class="mb-1">${displayName}</h6>
-                            <p class="mb-1 text-muted small">
-                                Node: <span class="badge bg-secondary">${escapeHtml(node)}</span>
-                                ${vmid ? `| ${vmidDisplay}` : ''}
-                            </p>
-                            
-                        </div>
-                        <div>
-                            <span class="badge bg-${statusClass}">${escapeHtml(taskStatus)}</span></br>
-                            <small class="text-muted">${escapeHtml(startTime)}</small>
-                        </div>
-                    </div>
-                </div>
-            `;
-        });
-        
-        tasksHtml += '</div>';
-        tasksContainer.innerHTML = tasksHtml;
-    }
-    
-    // Refresh tasks button
-    refreshTasksBtn.addEventListener('click', function() {
-        const originalHtml = this.innerHTML;
-        this.innerHTML = '<i class="bi bi-arrow-clockwise spin"></i>';
-        this.disabled = true;
-        
-        fetchRecentTasks();
-        
-        setTimeout(() => {
-            this.innerHTML = originalHtml;
-            this.disabled = false;
-        }, 1000);
-    });
-    
-    // Initial load
-    fetchRecentTasks();
-    
-    // Auto-refresh every 30 seconds
-    setInterval(fetchRecentTasks, 30000);
-});
+  function register() {
+    window.Alpine.data('dashboardNodes', dashboardNodes);
+    window.Alpine.data('dashboardTasks', dashboardTasks);
+  }
+  if (window.Alpine) register();
+  else document.addEventListener('alpine:init', register);
 </script>
-
-<style>
-.spin {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-</style>
 {% endblock %}
