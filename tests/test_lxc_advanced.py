@@ -86,7 +86,9 @@ class TestLxcFeaturesApi(unittest.TestCase):
         app.all_clusters["test-cluster"] = {
             "id": "test-cluster",
             "name": "Test Cluster",
-            "nodes": [{"host": "192.168.1.100", "user": "root@pam", "password": "test"}],
+            "nodes": [
+                {"host": "192.168.1.100", "user": "root@pam", "password": "test"}
+            ],
         }
         app.current_cluster_id = "test-cluster"
 
@@ -128,7 +130,9 @@ class TestLxcFeaturesApi(unittest.TestCase):
         self.assertTrue(data["can_write"])
 
     def test_get_features_running_container(self):
-        self.mock_proxmox.nodes.return_value.lxc.return_value.config.get.return_value = {}
+        self.mock_proxmox.nodes.return_value.lxc.return_value.config.get.return_value = (
+            {}
+        )
         self.mock_proxmox.nodes.return_value.lxc.return_value.status.current.get.return_value = {
             "status": "running"
         }
@@ -146,7 +150,9 @@ class TestLxcFeaturesApi(unittest.TestCase):
         self.mock_proxmox.nodes.return_value.lxc.return_value.status.current.get.return_value = {
             "status": "stopped"
         }
-        self.mock_proxmox.nodes.return_value.lxc.return_value.config.put.return_value = None
+        self.mock_proxmox.nodes.return_value.lxc.return_value.config.put.return_value = (
+            None
+        )
 
         token = self._csrf()
         resp = self.client.put(
@@ -168,7 +174,9 @@ class TestLxcFeaturesApi(unittest.TestCase):
         self.mock_proxmox.nodes.return_value.lxc.return_value.status.current.get.return_value = {
             "status": "stopped"
         }
-        self.mock_proxmox.nodes.return_value.lxc.return_value.config.put.return_value = None
+        self.mock_proxmox.nodes.return_value.lxc.return_value.config.put.return_value = (
+            None
+        )
 
         token = self._csrf()
         self.client.put(
@@ -178,14 +186,20 @@ class TestLxcFeaturesApi(unittest.TestCase):
             headers={"X-CSRF-Token": token},
         )
         self.assertIn("test-node:200", app.lxc_config_backups)
-        self.assertEqual(app.lxc_config_backups["test-node:200"]["features"], "nesting=1")
+        self.assertEqual(
+            app.lxc_config_backups["test-node:200"]["features"], "nesting=1"
+        )
 
     def test_put_features_running_sets_restart_required(self):
-        self.mock_proxmox.nodes.return_value.lxc.return_value.config.get.return_value = {}
+        self.mock_proxmox.nodes.return_value.lxc.return_value.config.get.return_value = (
+            {}
+        )
         self.mock_proxmox.nodes.return_value.lxc.return_value.status.current.get.return_value = {
             "status": "running"
         }
-        self.mock_proxmox.nodes.return_value.lxc.return_value.config.put.return_value = None
+        self.mock_proxmox.nodes.return_value.lxc.return_value.config.put.return_value = (
+            None
+        )
 
         token = self._csrf()
         resp = self.client.put(
@@ -223,7 +237,9 @@ class TestLxcFeaturesApi(unittest.TestCase):
         self.mock_proxmox.nodes.return_value.lxc.return_value.config.get.return_value = {
             "features": "nesting=1,keyctl=1"
         }
-        self.mock_proxmox.nodes.return_value.lxc.return_value.config.put.return_value = None
+        self.mock_proxmox.nodes.return_value.lxc.return_value.config.put.return_value = (
+            None
+        )
 
         token = self._csrf()
         resp = self.client.post(
@@ -243,8 +259,12 @@ class TestLxcFeaturesApi(unittest.TestCase):
             "timestamp": "2026-06-24T00:00:00",
             "features": "",
         }
-        self.mock_proxmox.nodes.return_value.lxc.return_value.config.get.return_value = {}
-        self.mock_proxmox.nodes.return_value.lxc.return_value.config.put.return_value = None
+        self.mock_proxmox.nodes.return_value.lxc.return_value.config.get.return_value = (
+            {}
+        )
+        self.mock_proxmox.nodes.return_value.lxc.return_value.config.put.return_value = (
+            None
+        )
 
         token = self._csrf()
         self.client.post(
@@ -375,13 +395,19 @@ class TestLxcDevicesApi(unittest.TestCase):
         app.connection_metadata.clear()
         app.lxc_config_backups.clear()
         app.all_clusters["test-cluster"] = {
-            "id": "test-cluster", "name": "Test", "nodes": [{"host": "192.168.1.100", "user": "root@pam", "password": "test"}],
+            "id": "test-cluster",
+            "name": "Test",
+            "nodes": [
+                {"host": "192.168.1.100", "user": "root@pam", "password": "test"}
+            ],
         }
         app.current_cluster_id = "test-cluster"
         app.connection_metadata["test-node"] = {"pve_version": "8.2.4"}
         self.mock = Mock()
         app.proxmox_nodes["test-node"] = self.mock
-        app.cluster_nodes.append({"name": "test-node", "status": "online", "connection": self.mock})
+        app.cluster_nodes.append(
+            {"name": "test-node", "status": "online", "connection": self.mock}
+        )
 
     def tearDown(self):
         app.proxmox_nodes.clear()
@@ -398,7 +424,9 @@ class TestLxcDevicesApi(unittest.TestCase):
 
     def test_list_devices_empty(self):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         self.mock.access.permissions.get.return_value = {"VM.Config.Options": 1}
         resp = self.client.get("/api/vm/test-node/100/lxc/devices")
         self.assertEqual(resp.status_code, 200)
@@ -410,7 +438,9 @@ class TestLxcDevicesApi(unittest.TestCase):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {
             "dev0": "/dev/dri/renderD128,gid=104,uid=0"
         }
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         self.mock.access.permissions.get.return_value = {"VM.Config.Options": 1}
         resp = self.client.get("/api/vm/test-node/100/lxc/devices")
         data = resp.get_json()
@@ -420,7 +450,9 @@ class TestLxcDevicesApi(unittest.TestCase):
 
     def test_add_device_pve82(self):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         self.mock.nodes.return_value.lxc.return_value.config.put.return_value = None
         token = self._csrf()
         resp = self.client.post(
@@ -436,7 +468,9 @@ class TestLxcDevicesApi(unittest.TestCase):
 
     def test_add_device_rejected_if_running(self):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "running"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "running"
+        }
         token = self._csrf()
         resp = self.client.post(
             "/api/vm/test-node/100/lxc/devices",
@@ -451,7 +485,9 @@ class TestLxcDevicesApi(unittest.TestCase):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {
             "dev0": "/dev/dri/renderD128,gid=104"
         }
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         self.mock.nodes.return_value.lxc.return_value.config.put.return_value = None
         token = self._csrf()
         resp = self.client.delete(
@@ -462,8 +498,12 @@ class TestLxcDevicesApi(unittest.TestCase):
         self.assertTrue(resp.get_json()["success"])
 
     def test_delete_device_rejected_if_running(self):
-        self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {"dev0": "/dev/dri/card0"}
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "running"}
+        self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {
+            "dev0": "/dev/dri/card0"
+        }
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "running"
+        }
         token = self._csrf()
         resp = self.client.delete(
             "/api/vm/test-node/100/lxc/devices/dev0",
@@ -482,13 +522,22 @@ class TestLxcMountsApi(unittest.TestCase):
         app.connection_metadata.clear()
         app.lxc_config_backups.clear()
         app.all_clusters["test-cluster"] = {
-            "id": "test-cluster", "name": "Test", "nodes": [{"host": "192.168.1.100", "user": "root@pam", "password": "test"}],
+            "id": "test-cluster",
+            "name": "Test",
+            "nodes": [
+                {"host": "192.168.1.100", "user": "root@pam", "password": "test"}
+            ],
         }
         app.current_cluster_id = "test-cluster"
-        app.connection_metadata["test-node"] = {"pve_version": "9.0.0", "user": "root@pam"}
+        app.connection_metadata["test-node"] = {
+            "pve_version": "9.0.0",
+            "user": "root@pam",
+        }
         self.mock = Mock()
         app.proxmox_nodes["test-node"] = self.mock
-        app.cluster_nodes.append({"name": "test-node", "status": "online", "connection": self.mock})
+        app.cluster_nodes.append(
+            {"name": "test-node", "status": "online", "connection": self.mock}
+        )
 
     def tearDown(self):
         app.proxmox_nodes.clear()
@@ -505,7 +554,9 @@ class TestLxcMountsApi(unittest.TestCase):
 
     def test_list_mounts_empty(self):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         self.mock.access.permissions.get.return_value = {"VM.Config.Options": 1}
         resp = self.client.get("/api/vm/test-node/100/lxc/mounts")
         data = resp.get_json()
@@ -516,7 +567,9 @@ class TestLxcMountsApi(unittest.TestCase):
             "mp0": "/mnt/data,mp=/data,ro=0",
             "mp1": "local-lvm:subvol-100-disk-0,mp=/var/lib,size=8G",
         }
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         self.mock.access.permissions.get.return_value = {"VM.Config.Options": 1}
         resp = self.client.get("/api/vm/test-node/100/lxc/mounts")
         data = resp.get_json()
@@ -525,12 +578,21 @@ class TestLxcMountsApi(unittest.TestCase):
 
     def test_add_mount_success(self):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         self.mock.nodes.return_value.lxc.return_value.config.put.return_value = None
         token = self._csrf()
         resp = self.client.post(
             "/api/vm/test-node/100/lxc/mounts",
-            data=json.dumps({"host_path": "/mnt/nvme/data", "mp": "/data", "ro": False, "backup": False}),
+            data=json.dumps(
+                {
+                    "host_path": "/mnt/nvme/data",
+                    "mp": "/data",
+                    "ro": False,
+                    "backup": False,
+                }
+            ),
             content_type="application/json",
             headers={"X-CSRF-Token": token},
         )
@@ -541,7 +603,9 @@ class TestLxcMountsApi(unittest.TestCase):
 
     def test_add_mount_rejected_if_running(self):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "running"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "running"
+        }
         token = self._csrf()
         resp = self.client.post(
             "/api/vm/test-node/100/lxc/mounts",
@@ -553,7 +617,9 @@ class TestLxcMountsApi(unittest.TestCase):
 
     def test_add_mount_requires_absolute_host_path(self):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         token = self._csrf()
         resp = self.client.post(
             "/api/vm/test-node/100/lxc/mounts",
@@ -567,7 +633,9 @@ class TestLxcMountsApi(unittest.TestCase):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {
             "mp0": "/mnt/data,mp=/data"
         }
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         self.mock.nodes.return_value.lxc.return_value.config.put.return_value = None
         token = self._csrf()
         resp = self.client.delete(
@@ -596,7 +664,9 @@ class TestParseLxcIdmap(unittest.TestCase):
         self.assertIsNone(app.parse_lxc_idmap_line("lxc.idmap = x 0 0 1"))
 
     def test_non_idmap_line(self):
-        self.assertIsNone(app.parse_lxc_idmap_line("lxc.cgroup2.devices.allow = c 226:128 rwm"))
+        self.assertIsNone(
+            app.parse_lxc_idmap_line("lxc.cgroup2.devices.allow = c 226:128 rwm")
+        )
 
     def test_empty(self):
         self.assertIsNone(app.parse_lxc_idmap_line(""))
@@ -632,17 +702,23 @@ class TestLxcIdmapApi(unittest.TestCase):
         app.connection_metadata.clear()
         app.lxc_config_backups.clear()
         app.all_clusters["test-cluster"] = {
-            "id": "test-cluster", "name": "T",
+            "id": "test-cluster",
+            "name": "T",
             "nodes": [{"host": "192.168.1.100", "user": "root@pam", "password": "t"}],
         }
         app.current_cluster_id = "test-cluster"
         self.mock = Mock()
         app.proxmox_nodes["test-node"] = self.mock
-        app.cluster_nodes.append({"name": "test-node", "status": "online", "connection": self.mock})
+        app.cluster_nodes.append(
+            {"name": "test-node", "status": "online", "connection": self.mock}
+        )
 
     def tearDown(self):
-        app.proxmox_nodes.clear(); app.cluster_nodes.clear(); app.all_clusters.clear()
-        app.connection_metadata.clear(); app.lxc_config_backups.clear()
+        app.proxmox_nodes.clear()
+        app.cluster_nodes.clear()
+        app.all_clusters.clear()
+        app.connection_metadata.clear()
+        app.lxc_config_backups.clear()
         app.current_cluster_id = None
 
     def _csrf(self):
@@ -655,7 +731,9 @@ class TestLxcIdmapApi(unittest.TestCase):
             "lxc0": "lxc.idmap = u 0 100000 65536",
             "lxc1": "lxc.idmap = g 0 100000 65536",
         }
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         self.mock.access.permissions.get.return_value = {"VM.Config.Options": 1}
         resp = self.client.get("/api/vm/test-node/100/lxc/idmap")
         data = resp.get_json()
@@ -663,12 +741,16 @@ class TestLxcIdmapApi(unittest.TestCase):
 
     def test_add_idmap_success(self):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         self.mock.nodes.return_value.lxc.return_value.config.put.return_value = None
         token = self._csrf()
         resp = self.client.post(
             "/api/vm/test-node/100/lxc/idmap",
-            data=json.dumps({"type": "u", "ct_id": 0, "host_id": 100000, "count": 65536}),
+            data=json.dumps(
+                {"type": "u", "ct_id": 0, "host_id": 100000, "count": 65536}
+            ),
             content_type="application/json",
             headers={"X-CSRF-Token": token},
         )
@@ -679,11 +761,15 @@ class TestLxcIdmapApi(unittest.TestCase):
 
     def test_add_idmap_rejected_if_running(self):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "running"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "running"
+        }
         token = self._csrf()
         resp = self.client.post(
             "/api/vm/test-node/100/lxc/idmap",
-            data=json.dumps({"type": "u", "ct_id": 0, "host_id": 100000, "count": 65536}),
+            data=json.dumps(
+                {"type": "u", "ct_id": 0, "host_id": 100000, "count": 65536}
+            ),
             content_type="application/json",
             headers={"X-CSRF-Token": token},
         )
@@ -691,11 +777,15 @@ class TestLxcIdmapApi(unittest.TestCase):
 
     def test_add_idmap_invalid_type(self):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         token = self._csrf()
         resp = self.client.post(
             "/api/vm/test-node/100/lxc/idmap",
-            data=json.dumps({"type": "x", "ct_id": 0, "host_id": 100000, "count": 65536}),
+            data=json.dumps(
+                {"type": "x", "ct_id": 0, "host_id": 100000, "count": 65536}
+            ),
             content_type="application/json",
             headers={"X-CSRF-Token": token},
         )
@@ -705,7 +795,9 @@ class TestLxcIdmapApi(unittest.TestCase):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {
             "lxc0": "lxc.idmap = u 0 100000 65536"
         }
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         self.mock.nodes.return_value.lxc.return_value.config.put.return_value = None
         token = self._csrf()
         resp = self.client.delete(
@@ -719,7 +811,9 @@ class TestLxcIdmapApi(unittest.TestCase):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {
             "lxc0": "lxc.cgroup2.devices.allow = c 226:128 rwm"
         }
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         token = self._csrf()
         resp = self.client.delete(
             "/api/vm/test-node/100/lxc/idmap/lxc0",
@@ -789,12 +883,19 @@ class TestLxcProfilesApi(unittest.TestCase):
         app.all_clusters["test-cluster"] = {
             "id": "test-cluster",
             "name": "Test Cluster",
-            "nodes": [{"host": "192.168.1.100", "user": "root@pam", "password": "test"}],
+            "nodes": [
+                {"host": "192.168.1.100", "user": "root@pam", "password": "test"}
+            ],
         }
         app.current_cluster_id = "test-cluster"
         app.proxmox_nodes["test-node"] = self.mock
-        app.cluster_nodes.append({"name": "test-node", "status": "online", "connection": self.mock})
-        app.connection_metadata["test-node"] = {"pve_version": "8.2.4", "user": "root@pam"}
+        app.cluster_nodes.append(
+            {"name": "test-node", "status": "online", "connection": self.mock}
+        )
+        app.connection_metadata["test-node"] = {
+            "pve_version": "8.2.4",
+            "user": "root@pam",
+        }
 
         # Inject test profiles
         self._orig_profiles = app.LXC_PROFILES
@@ -837,7 +938,9 @@ class TestLxcProfilesApi(unittest.TestCase):
 
     def test_profile_diff_no_config(self):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         resp = self.client.get("/api/vm/test-node/100/lxc/profile-diff/jellyfin")
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
@@ -849,7 +952,9 @@ class TestLxcProfilesApi(unittest.TestCase):
             "features": "nesting=1",
             "dev0": "/dev/dri/renderD128,gid=104,uid=0",
         }
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         resp = self.client.get("/api/vm/test-node/100/lxc/profile-diff/jellyfin")
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
@@ -861,7 +966,9 @@ class TestLxcProfilesApi(unittest.TestCase):
 
     def test_profile_apply_success(self):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         self.mock.nodes.return_value.lxc.return_value.config.put.return_value = None
         token = self._csrf()
         resp = self.client.post(
@@ -878,7 +985,9 @@ class TestLxcProfilesApi(unittest.TestCase):
             "features": "nesting=1",
             "dev0": "/dev/dri/renderD128,gid=104,uid=0",
         }
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "stopped"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "stopped"
+        }
         token = self._csrf()
         resp = self.client.post(
             "/api/vm/test-node/100/lxc/profile-apply/jellyfin",
@@ -901,7 +1010,9 @@ class TestLxcProfilesApi(unittest.TestCase):
 
     def test_profile_apply_requires_stop_when_running(self):
         self.mock.nodes.return_value.lxc.return_value.config.get.return_value = {}
-        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {"status": "running"}
+        self.mock.nodes.return_value.lxc.return_value.status.current.get.return_value = {
+            "status": "running"
+        }
         token = self._csrf()
         resp = self.client.post(
             "/api/vm/test-node/100/lxc/profile-apply/jellyfin",
