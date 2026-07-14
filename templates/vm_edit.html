@@ -644,13 +644,17 @@
                             (cloud-init would lose it). Prefer a shared storage, or
                             <a href="#" @click.prevent="createSharedStorage()">create a shared /etc/pve snippet storage</a>.
                         </div>
-                        <!-- Chosen storage lacks the snippets content type -->
-                        <div x-show="selectedStorage && !selectedStorage.snippets_enabled"
-                             class="alert alert-info py-2 small mb-2 d-flex align-items-center gap-2">
-                            <span>Storage <code x-text="selectedStorage && selectedStorage.storage"></code>
-                                doesn't allow snippets yet.</span>
-                            <button class="btn btn-sm btn-outline-primary py-0 ms-auto"
-                                    @click="enableSnippets()" :disabled="setupBusy">Enable snippets</button>
+                        <!-- Chosen storage lacks the snippets content type.
+                             x-show lives on a wrapper without .d-flex: Bootstrap's
+                             `.d-flex { display: flex !important }` would otherwise
+                             override the inline `display:none` x-show sets. -->
+                        <div x-show="selectedStorage && !selectedStorage.snippets_enabled">
+                            <div class="alert alert-info py-2 small mb-2 d-flex align-items-center gap-2">
+                                <span>Storage <code x-text="selectedStorage && selectedStorage.storage"></code>
+                                    doesn't allow snippets yet.</span>
+                                <button class="btn btn-sm btn-outline-primary py-0 ms-auto"
+                                        @click="enableSnippets()" :disabled="setupBusy">Enable snippets</button>
+                            </div>
                         </div>
                         <!-- Access status + actions -->
                         <div class="d-flex align-items-center gap-2 flex-wrap small">
