@@ -2971,7 +2971,7 @@ function cloudInit(node, vmid) {
     nativeBusy: false, nativeError: '', nativeSuccess: '',
     // Snippet fields
     cicustom: {{ config.get('cicustom', '') | tojson }},
-    snippetStorages: [], snippetStorage: '', snippetStoragesLoaded: false,
+    snippetStorages: [], snippetStorage: '', sshStatusLoaded: false,
     snippetFilename: `${vmid}-user-data.yaml`,
     snippetContent: '',
     template: '',
@@ -3076,10 +3076,13 @@ function cloudInit(node, vmid) {
     },
 
     async initSnippetTab() {
-      if (!this.snippetStoragesLoaded) {
-        await this.loadStorages();
+      // Always refresh the storage list on tab open so a storage that was
+      // created or had snippets enabled after the page loaded (here or in the
+      // Proxmox UI) is reflected without a full page reload.
+      await this.loadStorages(this.snippetStorage);
+      if (!this.sshStatusLoaded) {
         await this.loadSshStatus();
-        this.snippetStoragesLoaded = true;
+        this.sshStatusLoaded = true;
       }
       // Load existing snippet content if attached and not yet loaded
       if (this.cicustom && !this.snippetContent) {

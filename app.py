@@ -1110,6 +1110,38 @@ def get_qemu_guest_disk_info(proxmox, node, vmid):
         return None
 
 
+def get_lxc_disk_info(status):
+    """Build rootfs disk-usage info for an LXC container from status/current.
+
+    Containers have no guest agent, but the host reports the container's rootfs
+    usage directly — the same value 'pct df' shows for the rootfs mountpoint.
+    Only the rootfs is exposed via the API; per-mountpoint usage (mp0, mp1, …)
+    that 'pct df' also prints has no REST equivalent.
+
+    Returns a one-element list shaped like get_qemu_guest_disk_info so the same
+    template UI can render it, or None when usage is unavailable.
+    """
+    total_bytes = status.get("maxdisk") or 0
+    used_bytes = status.get("disk") or 0
+    if total_bytes <= 0:
+        return None
+
+    return [
+        {
+            "name": "rootfs",
+            "mountpoint": "/",
+            "type": "rootfs",
+            "used_bytes": used_bytes,
+            "total_bytes": total_bytes,
+            "disk_name": "rootfs",
+            "used_percent": (used_bytes / total_bytes) * 100,
+            "used_gb": used_bytes / (1024**3),
+            "total_gb": total_bytes / (1024**3),
+            "free_gb": (total_bytes - used_bytes) / (1024**3),
+        }
+    ]
+
+
 def is_agent_enabled(config):
     """True if a VM config's 'agent' value has the guest agent enabled.
 
@@ -2359,6 +2391,10 @@ def vm_detail(node, vmid):
             and is_agent_enabled(config)
         ):
             guest_disk_info = get_qemu_guest_disk_info(proxmox, node, vmid)
+        elif vm_type == "lxc" and status.get("status") == "running":
+            # Containers have no guest agent; the host reports rootfs usage
+            # directly via status/current (same as 'pct df' rootfs row).
+            guest_disk_info = get_lxc_disk_info(status)
 
         # Check for active migration tasks
         migration_info = None

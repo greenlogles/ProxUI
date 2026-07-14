@@ -15,6 +15,7 @@ from app import (
     cluster_nodes,
     get_all_vms_and_containers,
     get_all_vms_and_containers_fallback,
+    get_lxc_disk_info,
     get_qemu_guest_disk_info,
     parse_ssh_keys,
     parse_vm_configuration,
@@ -227,6 +228,30 @@ class TestVMManagement(unittest.TestCase):
         result = get_qemu_guest_disk_info(mock_proxmox, "test-node", "100")
 
         self.assertIsNone(result)
+
+    def test_get_lxc_disk_info_success(self):
+        """Test LXC rootfs disk info derived from status/current"""
+        status = {
+            "status": "running",
+            "disk": 1181116006,  # ~1.1GB used
+            "maxdisk": 20937965568,  # ~19.5GB total
+        }
+
+        result = get_lxc_disk_info(status)
+
+        self.assertEqual(len(result), 1)
+        disk = result[0]
+        self.assertEqual(disk["mountpoint"], "/")
+        self.assertEqual(disk["type"], "rootfs")
+        self.assertEqual(disk["used_bytes"], 1181116006)
+        self.assertEqual(disk["total_bytes"], 20937965568)
+        self.assertAlmostEqual(disk["used_percent"], 5.64, places=1)
+        self.assertAlmostEqual(disk["total_gb"], 19.5, places=1)
+
+    def test_get_lxc_disk_info_no_maxdisk(self):
+        """Test LXC disk info returns None when total size is unknown"""
+        self.assertIsNone(get_lxc_disk_info({"status": "running", "disk": 0}))
+        self.assertIsNone(get_lxc_disk_info({"status": "running", "maxdisk": 0}))
 
     def test_parse_vm_configuration(self):
         """Test VM configuration parsing"""
