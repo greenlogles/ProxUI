@@ -3069,6 +3069,10 @@ function cloudInit(node, vmid) {
           body: JSON.stringify({ node, storage: this.selectedStorage.storage }),
         });
         this.setupOk = true; this.setupMsg = r.message || 'Snippets enabled.';
+        // Optimistically flip the flag so the alert clears immediately even if
+        // the user stays on the tab, then reconcile with the server.
+        const s = this.snippetStorages.find(x => x.storage === this.snippetStorage);
+        if (s) s.snippets_enabled = true;
         await this.loadStorages(this.snippetStorage);
       } catch(e) {
         this.setupOk = false; this.setupMsg = e.message || 'Could not enable snippets';
