@@ -8,12 +8,21 @@ ProxUI isn't a replacement for Proxmox web interface, but a light-weight additio
 
 ### Virtual Machine Management
 - Represents VM and container status and performance metrics in more readable way
+- Live VM status and resource metrics polling on the detail page
 - Creation VMs and containers from templates
 - **Cloud VM Templates**: Create VM templates from popular cloud images (Ubuntu, Debian, Rocky, Alma, Fedora) with cloud-init support
+- **Cloud-init editing**: Native cloud-init settings plus custom snippets written to nodes over SSH, with a storage picker and migration warnings
 - Built-in configuration editor
-- QEMU Guest Agent integration for disk usage monitoring
+- QEMU Guest Agent: disk usage monitoring plus an opt-in per-VM toggle (off by default for new VMs)
+- Reset the guest root password from the Edit page
 - Consolidated configuration single-page view incluing cloud-init params (like ssh keys)
 - Background job queue for long-running operations with real-time progress tracking
+
+### LXC / Container Advanced Configuration
+- Container feature flags (nesting, keyctl, fuse, mount) with a safety layer
+- Device passthrough and bind mounts
+- Unprivileged container idmap editor
+- Reusable LXC configuration profiles
 
 ### Storage Management
 - Unified storage view across all cluster nodes
