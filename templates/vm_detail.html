@@ -8,6 +8,7 @@
 <div x-data="vmStatus"
      data-node="{{ node }}" data-vmid="{{ vmid }}"
      data-status="{{ status.status }}"
+     data-lock="{{ status.lock or '' }}"
      data-uptime="{{ status.uptime or 0 }}"
      data-cpu="{{ status.cpu or 0 }}"
      data-mem="{{ status.mem or 0 }}"
@@ -24,32 +25,33 @@
             </div>
             <div class="d-flex flex-wrap gap-2 align-items-center">
                 <!-- Power Actions — all forms present; visibility flips with the live
-                     status (:class object syntax; Jinja sets the initial class). -->
+                     status (:class object syntax; Jinja sets the initial class).
+                     Hidden while the VM is locked (clone/migrate/etc.). -->
                 <div class="btn-group" role="group">
                     <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='start') }}"
-                          class="d-inline {{ '' if status.status == 'stopped' else 'd-none' }}"
-                          :class="{ 'd-none': !isStopped }">
+                          class="d-inline {{ '' if (status.status == 'stopped' and not status.lock) else 'd-none' }}"
+                          :class="{ 'd-none': !isStopped || busy }">
                         <button type="submit" class="btn btn-success">
                             <i class="bi bi-play-fill"></i> Start
                         </button>
                     </form>
                     <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='shutdown') }}"
-                          class="d-inline {{ 'd-none' if status.status == 'stopped' else '' }}"
-                          :class="{ 'd-none': isStopped }">
+                          class="d-inline {{ 'd-none' if (status.status == 'stopped' or status.lock) else '' }}"
+                          :class="{ 'd-none': isStopped || busy }">
                         <button type="submit" class="btn btn-warning">
                             <i class="bi bi-power"></i> Shutdown
                         </button>
                     </form>
                     <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='stop') }}"
-                          class="d-inline {{ 'd-none' if status.status == 'stopped' else '' }}"
-                          :class="{ 'd-none': isStopped }">
+                          class="d-inline {{ 'd-none' if (status.status == 'stopped' or status.lock) else '' }}"
+                          :class="{ 'd-none': isStopped || busy }">
                         <button type="submit" class="btn btn-danger" onclick="return confirm('Force stop {{ 'container' if vm_type == 'lxc' else 'VM' }}?')">
                             <i class="bi bi-stop-fill"></i> Stop
                         </button>
                     </form>
                     <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='reset') }}"
-                          class="d-inline {{ 'd-none' if status.status == 'stopped' else '' }}"
-                          :class="{ 'd-none': isStopped }">
+                          class="d-inline {{ 'd-none' if (status.status == 'stopped' or status.lock) else '' }}"
+                          :class="{ 'd-none': isStopped || busy }">
                         <button type="submit" class="btn btn-outline-warning" onclick="return confirm('Reset {{ 'container' if vm_type == 'lxc' else 'VM' }}?')">
                             <i class="bi bi-arrow-clockwise"></i>
                         </button>
@@ -58,10 +60,10 @@
 
                 <!-- Console (QEMU and LXC) -->
                 <a href="{{ url_for('vm_console', node=node, vmid=vmid) }}"
-                   class="btn btn-outline-info {{ 'disabled' if status.status != 'running' else '' }}"
-                   :class="{ 'disabled': !isRunning }"
-                   :aria-disabled="!isRunning"
-                   :tabindex="isRunning ? null : '-1'"
+                   class="btn btn-outline-info {{ 'disabled' if (status.status != 'running' or status.lock) else '' }}"
+                   :class="{ 'disabled': !isRunning || busy }"
+                   :aria-disabled="!isRunning || busy"
+                   :tabindex="(isRunning && !busy) ? null : '-1'"
                    :title="isRunning ? '' : '{{ 'VM' if vm_type == 'qemu' else 'Container' }} must be running'">
                     <i class="bi bi-display"></i> Console
                 </a>
@@ -111,7 +113,11 @@
         <div class="d-flex flex-wrap align-items-center gap-4">
             <div class="d-flex align-items-center gap-2">
                 <span class="text-muted small">Status:</span>
-                <span class="badge" :class="statusClass" x-text="statusLabel"></span>
+                <span class="badge d-inline-flex align-items-center gap-1" :class="statusClass">
+                    <span class="spinner-border spinner-border-sm" style="width:.7rem;height:.7rem;"
+                          :class="busy ? '' : 'd-none'"></span>
+                    <span x-text="statusLabel"></span>
+                </span>
             </div>
             <div class="d-flex align-items-center gap-2">
                 <span class="text-muted small">Uptime:</span>
@@ -562,7 +568,8 @@
 
 <!-- Delete Modal -->
 <div class="modal fade" id="deleteModal" tabindex="-1"
-     x-data="vmDelete('{{ node }}', '{{ vmid }}')" data-status="{{ status.status }}">
+     x-data="vmDelete('{{ node }}', '{{ vmid }}')"
+     data-status="{{ status.status }}" data-lock="{{ status.lock or '' }}">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
@@ -593,15 +600,14 @@
                     </div>
                 </div>
 
-                <div class="alert alert-warning" :class="isStopped ? 'd-none' : ''">
-                    <i class="bi bi-exclamation-triangle"></i>
-                    {{ 'Container' if vm_type == 'lxc' else 'VM' }} must be stopped before deletion. Current status: <strong x-text="status"></strong>
+                <div class="alert alert-warning" :class="canDelete ? 'd-none' : ''">
+                    <i class="bi bi-exclamation-triangle"></i> <span x-text="warnMsg"></span>
                 </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-danger" @click="run()"
-                        :disabled="deleting || !isStopped">
+                        :disabled="deleting || !canDelete">
                     <span x-show="deleting" class="spinner-border spinner-border-sm me-1" role="status"></span>
                     <span x-show="!deleting"><i class="bi bi-trash"></i></span>
                     Delete {{ 'Container' if vm_type == 'lxc' else 'VM' }}
@@ -772,18 +778,26 @@ function vmMetrics(node, vmid) {
 function vmDelete(node, vmid) {
   return {
     deleting: false, statusMsg: '', statusType: 'info',
-    status: '',
+    status: '', lock: '',
+    get busy() { return !!this.lock; },
     get isStopped() { return this.status === 'stopped'; },
+    // Can only delete a stopped VM that isn't mid-operation (clone/migrate/…).
+    get canDelete() { return this.isStopped && !this.busy; },
+    get warnMsg() {
+      if (this.busy) return `Busy: ${lockLabel(this.lock)} Wait for the operation to finish.`;
+      return `Must be stopped before deletion. Current status: ${this.status}.`;
+    },
     init() {
       this.status = this.$el.dataset.status || '';
-      // Re-check status whenever the dialog opens so the "must be stopped" gate
-      // reflects the current power state, not the page-load state.
+      this.lock = this.$el.dataset.lock || '';
+      // Re-check status whenever the dialog opens so the gate reflects the
+      // current power/lock state, not the page-load state.
       this.$el.addEventListener('show.bs.modal', () => this.refreshStatus());
     },
     async refreshStatus() {
       try {
         const d = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/status`);
-        if (d && !d.error) this.status = d.status;
+        if (d && !d.error) { this.status = d.status; this.lock = d.lock || ''; }
       } catch (e) { /* keep last known status */ }
     },
     async run() {
@@ -850,16 +864,37 @@ function lxcSummary() {
 }
 {% endif %}
 
+// Friendly labels for Proxmox VM locks (set on the VM during clone/migrate/etc).
+const LOCK_LABELS = {
+  clone: 'Cloning…', migrate: 'Migrating…', backup: 'Backing up…',
+  snapshot: 'Snapshotting…', 'snapshot-delete': 'Deleting snapshot…',
+  rollback: 'Rolling back…', create: 'Creating…', destroyed: 'Destroyed',
+  suspending: 'Suspending…', suspended: 'Suspended', mounted: 'Mounted',
+  disk: 'Disk operation…', fstrim: 'Trimming disk…',
+};
+function lockLabel(lock) {
+  if (!lock) return '';
+  return LOCK_LABELS[lock] || (lock.charAt(0).toUpperCase() + lock.slice(1) + '…');
+}
+
 // Status bar: seeded from the server (data-* attributes on the card), then
-// polled every 5s — same pattern as vmMetrics/vmTasks — so start/stop reflect
-// without a manual page refresh.
+// polled every 5s — same pattern as vmMetrics/vmTasks — so start/stop and
+// lock states (clone/migrate/…) reflect without a manual page refresh.
 function vmStatus() {
   return {
-    node: '', vmid: '', status: '', uptime: 0, cpu: 0, mem: 0, maxmem: 0, _poller: null,
+    node: '', vmid: '', status: '', lock: '', uptime: 0, cpu: 0, mem: 0, maxmem: 0, _poller: null,
+    // A lock means Proxmox is busy on this VM (clone/migrate/backup/…).
+    get busy() { return !!this.lock; },
     get isRunning() { return this.status === 'running'; },
     get isStopped() { return this.status === 'stopped'; },
-    get statusLabel() { return this.isRunning ? 'Running' : this.isStopped ? 'Stopped' : (this.status || 'unknown'); },
-    get statusClass() { return this.isRunning ? 'bg-success' : this.isStopped ? 'bg-danger' : 'bg-warning'; },
+    get statusLabel() {
+      if (this.busy) return lockLabel(this.lock);
+      return this.isRunning ? 'Running' : this.isStopped ? 'Stopped' : (this.status || 'unknown');
+    },
+    get statusClass() {
+      if (this.busy) return 'bg-info text-dark';
+      return this.isRunning ? 'bg-success' : this.isStopped ? 'bg-danger' : 'bg-warning';
+    },
     get cpuPct() { return Math.round((this.cpu || 0) * 1000) / 10; },
     get memPct() { return this.maxmem ? Math.round((this.mem / this.maxmem) * 1000) / 10 : 0; },
     get uptimeText() { return this.isRunning ? ProxUtils.formatUptime(this.uptime) : '—'; },
@@ -871,15 +906,21 @@ function vmStatus() {
       try {
         const d = await ProxUtils.apiJson(`/api/vm/${this.node}/${this.vmid}/status`);
         if (d && !d.error) {
-          this.status = d.status; this.uptime = d.uptime;
-          this.cpu = d.cpu; this.mem = d.mem; this.maxmem = d.maxmem;
+          this.status = d.status; this.lock = d.lock || '';
+          this.uptime = d.uptime; this.cpu = d.cpu; this.mem = d.mem; this.maxmem = d.maxmem;
         }
-      } catch (e) { /* transient — keep last known state */ }
+      } catch (e) {
+        // If the VM vanished mid-operation (e.g. a clone failed and Proxmox
+        // removed the target), stop showing a stale "busy" state.
+        if (e && e.status === 404) { this.status = 'unavailable'; this.lock = ''; }
+        // Otherwise transient — keep last known state.
+      }
     },
     init() {
       const ds = this.$el.dataset;
       this.node = ds.node; this.vmid = ds.vmid;
       this.status = ds.status;
+      this.lock = ds.lock || '';
       this.uptime = Number(ds.uptime) || 0;
       this.cpu = Number(ds.cpu) || 0;
       this.mem = Number(ds.mem) || 0;

@@ -4211,6 +4211,9 @@ def api_vm_status(node, vmid):
                 "cpu": status.get("cpu", 0),
                 "mem": status.get("mem", 0),
                 "maxmem": status.get("maxmem", 0),
+                # 'lock' is set on the VM being cloned/migrated/backed up/etc.
+                # (Proxmox reports it on the affected VM itself, source or target.)
+                "lock": status.get("lock", ""),
                 "vm_type": vm_type,
             }
         )
@@ -4558,15 +4561,30 @@ def api_vm_clone(node, vmid):
         if description:
             clone_params["description"] = description
 
-        # Execute clone operation
+        # Execute clone operation (returns the task UPID, filed on the source node)
         result = proxmox.nodes(node).qemu(vmid).clone.post(**clone_params)
-
-        # Apply the guest-agent toggle after the clone finishes (default off —
-        # clones inherit the source's agent setting).
-        spawn_agent_after_clone(node, target_node, clone_vmid, result, agent_enabled)
 
         # Update next-id if incremental VMID is enabled
         update_cluster_next_id(proxmox, clone_vmid)
+
+        # Track the clone (disk copy → configuring → done) as a job so it shows
+        # in the Jobs panel; the job also applies the guest-agent toggle once the
+        # clone's lock releases.
+        job_id = job_queue.create_job(
+            job_type="clone",
+            description=f"Clone VM {vmid} → {clone_vmid} ({clone_name})",
+            params={
+                "source_node": node,
+                "target_node": target_node,
+                "target_vmid": clone_vmid,
+                "agent": agent_enabled,
+            },
+        )
+        threading.Thread(
+            target=run_clone_job,
+            args=(job_id, node, target_node, clone_vmid, result, agent_enabled),
+            daemon=True,
+        ).start()
 
         return jsonify(
             {
@@ -4575,6 +4593,7 @@ def api_vm_clone(node, vmid):
                 "new_vmid": clone_vmid,
                 "target_node": target_node,
                 "task": result,
+                "job_id": job_id,
             }
         )
 
@@ -5025,6 +5044,54 @@ def wait_for_task(proxmox, node, task_upid, job_id, timeout=600, poll_interval=3
         waited += poll_interval
 
     return {"success": False, "error": "Task timed out"}
+
+
+def run_clone_job(
+    job_id, source_node, target_node, target_vmid, task_upid, agent_enabled
+):
+    """Background job tracking a VM clone: wait for the disk clone task (which
+    Proxmox files under the source node), then apply post-clone configuration
+    (the guest-agent toggle) on the target once its lock is released.
+    """
+    job_queue.set_running(job_id)
+    job_queue.add_step(job_id, "Cloning disk…")
+    job_queue.update_job(job_id, progress=10)
+
+    try:
+        proxmox = get_proxmox_connection(source_node, auto_renew=True)
+        if not proxmox:
+            job_queue.set_failed(job_id, "Failed to connect to source node")
+            return
+
+        # The clone task lives on the source node.
+        result = wait_for_task(
+            proxmox, source_node, task_upid, job_id, timeout=7200, poll_interval=5
+        )
+        if not result.get("success"):
+            job_queue.set_failed(job_id, result.get("error", "Clone task failed"))
+            return
+
+        job_queue.add_step(job_id, "Disk clone finished")
+        job_queue.update_job(job_id, progress=80)
+
+        # Configuring phase: apply the guest-agent toggle on the target,
+        # preserving any extra agent options the clone inherited.
+        job_queue.add_step(job_id, "Applying configuration (guest agent)…")
+        conn = get_proxmox_connection(target_node, auto_renew=True) or proxmox
+        try:
+            cfg = conn.nodes(target_node).qemu(target_vmid).config.get()
+            extra = [p for p in str(cfg.get("agent", "")).split(",")[1:] if p.strip()]
+        except Exception:
+            extra = []
+        flag = "1" if agent_enabled else "0"
+        agent_val = ",".join([flag] + extra) if extra else flag
+        conn.nodes(target_node).qemu(target_vmid).config.put(agent=agent_val)
+
+        job_queue.set_completed(
+            job_id, result={"vmid": target_vmid, "node": target_node}
+        )
+    except Exception as e:
+        job_queue.set_failed(job_id, str(e))
 
 
 def run_cloud_template_job(job_id, node, params):
