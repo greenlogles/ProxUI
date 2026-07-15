@@ -6468,11 +6468,24 @@ def _sftp_read_file(node: str, remote_path: str) -> str:
         client.close()
 
 
-def _ssh_run_root(node: str, command: str, timeout: int = 30) -> tuple[int, str, str]:
-    """Run a command on `node` as root via SSH. Returns (exit_code, stdout, stderr)."""
+def _ssh_run_root(
+    node: str, command: str, timeout: int = 30, stdin_data: str | None = None
+) -> tuple[int, str, str]:
+    """Run a command on `node` as root via SSH. Returns (exit_code, stdout, stderr).
+
+    If stdin_data is given it is written to the command's stdin (e.g. to feed
+    `chpasswd`) so secrets never appear on the command line.
+    """
     client = _ssh_connect_root(node, timeout=timeout)
     try:
-        _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        if stdin_data is not None:
+            stdin.write(stdin_data)
+            stdin.flush()
+            try:
+                stdin.channel.shutdown_write()
+            except Exception:
+                pass
         rc = stdout.channel.recv_exit_status()
         out = stdout.read().decode("utf-8", errors="replace")
         err = stderr.read().decode("utf-8", errors="replace")
@@ -7636,6 +7649,65 @@ def api_vm_agent(node, vmid):
         return _proxmox_error_response(e)
 
 
+def _reset_lxc_root_password(node: str, vmid: str, password: str) -> str:
+    """Set an LXC container's root password by running chpasswd via `pct exec`.
+
+    Proxmox has no REST API to exec inside a container (unlike QEMU's guest
+    agent), so we run `pct exec <vmid> -- chpasswd` on the node over the same
+    channels the snippet writer uses, feeding `root:<password>` on stdin so the
+    secret never lands in the process list or shell history:
+      1. SSH as root  — ProxUI's key installed and port 22 open (stdin pipe)
+      2. node Shell    — root@pam console, via a short-lived temp file
+    Returns the channel used, or raises SnippetWriteError with what to fix.
+    """
+    payload = f"root:{password}\n"
+    qvmid = shlex.quote(str(vmid))
+    errors = []
+
+    # Tier 1: SSH as root with ProxUI's key — password stays on the stdin pipe.
+    if os.path.exists(_SSH_KEY_PATH) and _ssh_port_open(node):
+        try:
+            rc, out, err = _ssh_run_root(
+                node, f"pct exec {qvmid} -- chpasswd", stdin_data=payload
+            )
+            if rc == 0:
+                return "ssh"
+            errors.append(f"SSH: {(err or out)[-200:].strip()}")
+        except Exception as e:
+            errors.append(f"SSH: {e}")
+
+    # Tier 2: node Shell (root@pam) — write the payload to a temp file, feed it to
+    # chpasswd, then remove it.
+    if _is_root_pam(node):
+        try:
+            sess = _termproxy_open(node)
+            try:
+                tmp = f"/tmp/proxui-pw-{uuid.uuid4().hex}"
+                qtmp = shlex.quote(tmp)
+                sess.write_file(tmp, payload)
+                rc, out = sess.run(
+                    f"pct exec {qvmid} -- chpasswd < {qtmp}; "
+                    f"rc=$?; rm -f {qtmp}; exit $rc"
+                )
+                if rc == 0:
+                    return "termproxy"
+                errors.append(f"node Shell: {out[-200:].strip()}")
+            finally:
+                sess.close()
+        except Exception as e:
+            errors.append(f"node Shell: {e}")
+
+    detail = (
+        "; ".join(errors)
+        if errors
+        else (
+            "no usable channel — set up ProxUI SSH access to the node "
+            "(Cloud-Init → Custom Snippet → Set up access), or connect as root@pam."
+        )
+    )
+    raise SnippetWriteError(f"Could not reset the container password: {detail}")
+
+
 @app.route("/api/vm/<node>/<vmid>/reset-password", methods=["POST"])
 def api_vm_reset_password(node, vmid):
     """Reset root password: LXC via pct exec, QEMU via guest agent with cipassword fallback."""
@@ -7658,12 +7730,15 @@ def api_vm_reset_password(node, vmid):
                     jsonify({"error": "Container must be running to reset password"}),
                     400,
                 )
-            proxmox.nodes(node).lxc(vmid).exec.post(
-                command=["chpasswd"],
-                stdin=f"root:{password}\n",
-            )
+            try:
+                channel = _reset_lxc_root_password(node, vmid, password)
+            except SnippetWriteError as e:
+                return jsonify({"error": str(e)}), 400
             return jsonify(
-                {"success": True, "message": "Root password updated successfully"}
+                {
+                    "success": True,
+                    "message": f"Root password updated successfully (via {channel}).",
+                }
             )
         else:
             # Try guest agent first (immediate effect), fall back to cipassword (next reboot)
