@@ -5,7 +5,12 @@ WORKDIR /app
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt && \
-    apt-get update && apt-get install -y --no-install-recommends curl gosu && \
+    # Drop pip/setuptools from the runtime image: not needed to run the app, and
+    # setuptools vendors jaraco.context which trips vulnerability scanners.
+    pip uninstall -y pip setuptools && \
+    # curl is for the HEALTHCHECK. gosu is intentionally omitted — entrypoint.sh
+    # uses setpriv (util-linux) to avoid pulling in a Go binary.
+    apt-get update && apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
 
 # Labels

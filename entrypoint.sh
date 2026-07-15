@@ -6,4 +6,7 @@ set -e
 mkdir -p /app/data
 chown -R proxui:proxui /app/data
 
-exec gosu proxui "$@"
+# Drop from root to the proxui user with setpriv (util-linux, already in the
+# base image) instead of gosu, which is a static Go binary that drags Go stdlib
+# CVEs into vulnerability scans despite not using those code paths.
+exec setpriv --reuid proxui --regid proxui --init-groups "$@"
