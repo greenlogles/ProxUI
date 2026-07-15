@@ -6375,15 +6375,18 @@ def _ssh_target_for_node(node: str) -> tuple[str | None, bool]:
     return meta.get("host"), meta.get("verify_ssl", True)
 
 
-def _ssh_connect_root(node: str, timeout: int = 20):
+def _ssh_connect_root(node: str, timeout: int = 20, host: str | None = None):
     """Open a paramiko SSHClient to `node` as root using ProxUI's key.
 
-    Returns the connected client, or raises. Caller must close it.
+    `host` overrides the address to connect to — needed for node-specific
+    commands (e.g. `pct exec`) since connection_metadata maps discovered nodes
+    to the configured API endpoint, not their own address. Caller must close it.
     """
     paramiko = _get_paramiko()
     if not paramiko:
         raise SnippetWriteError("paramiko is not installed (pip install paramiko).")
-    host, _ = _ssh_target_for_node(node)
+    if host is None:
+        host, _ = _ssh_target_for_node(node)
     if not host:
         raise SnippetWriteError(f"No connection host known for node '{node}'.")
     if not os.path.exists(_SSH_KEY_PATH):
@@ -6469,14 +6472,19 @@ def _sftp_read_file(node: str, remote_path: str) -> str:
 
 
 def _ssh_run_root(
-    node: str, command: str, timeout: int = 30, stdin_data: str | None = None
+    node: str,
+    command: str,
+    timeout: int = 30,
+    stdin_data: str | None = None,
+    host: str | None = None,
 ) -> tuple[int, str, str]:
     """Run a command on `node` as root via SSH. Returns (exit_code, stdout, stderr).
 
     If stdin_data is given it is written to the command's stdin (e.g. to feed
-    `chpasswd`) so secrets never appear on the command line.
+    `chpasswd`) so secrets never appear on the command line. `host` overrides the
+    address (needed for node-specific commands — see _ssh_connect_root).
     """
-    client = _ssh_connect_root(node, timeout=timeout)
+    client = _ssh_connect_root(node, timeout=timeout, host=host)
     try:
         stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
         if stdin_data is not None:
@@ -6494,9 +6502,10 @@ def _ssh_run_root(
         client.close()
 
 
-def _ssh_port_open(node: str, timeout: float = 4.0) -> bool:
-    """Quick TCP check for SSH (port 22) reachability."""
-    host, _ = _ssh_target_for_node(node)
+def _ssh_port_open(node: str, timeout: float = 4.0, host: str | None = None) -> bool:
+    """Quick TCP check for SSH (port 22) reachability. `host` overrides the address."""
+    if host is None:
+        host, _ = _ssh_target_for_node(node)
     if not host:
         return False
     try:
@@ -7649,6 +7658,29 @@ def api_vm_agent(node, vmid):
         return _proxmox_error_response(e)
 
 
+def _node_address(node: str) -> str | None:
+    """Real management address of a specific cluster node, for node-local commands.
+
+    connection_metadata maps discovered nodes to the configured API endpoint, so
+    it can't reach a *specific* node (e.g. to run `pct exec`, which must run on
+    the node that owns the container). Look the node's IP up via cluster status.
+    """
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return None
+    try:
+        for entry in proxmox.cluster.status.get():
+            if (
+                entry.get("type") == "node"
+                and entry.get("name") == node
+                and entry.get("ip")
+            ):
+                return entry["ip"]
+    except Exception:
+        return None
+    return None
+
+
 def _reset_lxc_root_password(node: str, vmid: str, password: str) -> str:
     """Set an LXC container's root password by running chpasswd via `pct exec`.
 
@@ -7664,11 +7696,20 @@ def _reset_lxc_root_password(node: str, vmid: str, password: str) -> str:
     qvmid = shlex.quote(str(vmid))
     errors = []
 
+    # `pct exec` must run ON the node that owns the container. connection_metadata
+    # points discovered nodes at the configured API endpoint, so resolve the
+    # owning node's real address for the SSH tier. (The termproxy tier already
+    # reaches the right node — /nodes/<node>/termproxy is proxied there.)
+    host = _node_address(node)
+
     # Tier 1: SSH as root with ProxUI's key — password stays on the stdin pipe.
-    if os.path.exists(_SSH_KEY_PATH) and _ssh_port_open(node):
+    if os.path.exists(_SSH_KEY_PATH) and host and _ssh_port_open(node, host=host):
         try:
             rc, out, err = _ssh_run_root(
-                node, f"pct exec {qvmid} -- chpasswd", stdin_data=payload
+                node,
+                f"pct exec {qvmid} -- chpasswd",
+                stdin_data=payload,
+                host=host,
             )
             if rc == 0:
                 return "ssh"
