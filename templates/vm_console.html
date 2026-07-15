@@ -10,7 +10,11 @@
     </script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
-    <script defer src="{{ url_for('static', filename='js/alpine.min.js') }}"></script>
+    <!-- Alpine is loaded at the end of <body>, AFTER the module below, so the
+         module registers the consoleToolbar component (on `alpine:init`) before
+         Alpine auto-starts and walks the DOM. Loading it here in <head> makes
+         Alpine start() run first, leaving x-data unresolved (toggleVirtualKeyboard
+         "is not defined"). -->
     <style>
         html, body {
             margin: 0;
@@ -23,7 +27,12 @@
         #console-container {
             display: flex;
             flex-direction: column;
+            /* 100dvh (dynamic viewport height) so the column matches the
+               actually-visible area on mobile — with plain 100vh the browser's
+               URL bar pushes the bottom rows of the in-flow keyboard off-screen.
+               100vh first as a fallback for browsers without dvh. */
             height: 100vh;
+            height: 100dvh;
         }
 
         #console-toolbar {
@@ -187,16 +196,23 @@
         }
 
         /* Virtual Keyboard - Full layout */
+        /* Hidden state is driven by Alpine's x-show (inline style). Keep it
+           hidden before Alpine initialises via x-cloak — do NOT put a
+           `display: none` rule on #virtual-keyboard here, or x-show can never
+           reveal it (an ID rule beats x-show's empty inline display). */
+        [x-cloak] {
+            display: none !important;
+        }
+
+        /* In-flow flex child (not fixed) so #vnc-screen shrinks when the
+           keyboard is shown and noVNC re-scales into the reduced area — the
+           keyboard no longer overlays the console on mobile. */
         #virtual-keyboard {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
+            flex-shrink: 0;
+            width: 100%;
             background-color: #1a1a1a;
             border-top: 1px solid #333;
             padding: 3px;
-            z-index: 200;
-            display: none;
         }
 
         .vkb-row {
@@ -237,8 +253,7 @@
         @media (min-width: 769px) {
             #virtual-keyboard {
                 max-width: 500px;
-                left: 50%;
-                transform: translateX(-50%);
+                margin: 0 auto;
                 border-radius: 8px 8px 0 0;
             }
         }
@@ -265,6 +280,23 @@
         .vkb-key.modifier.active {
             background-color: #ffc107 !important;
             color: #000;
+        }
+
+        /* Letter/symbol layer toggle (lives in a vkb-special row) */
+        .vkb-key.layer-toggle {
+            color: #0dcaf0;
+            font-weight: 600;
+        }
+
+        .vkb-key.layer-toggle.active {
+            background-color: #0dcaf0 !important;
+            color: #000;
+        }
+
+        /* F1-F12 row packs 12 keys — shrink labels so they fit */
+        .vkb-frow .vkb-key {
+            font-size: 12px;
+            padding: 10px 0;
         }
 
         @media (max-width: 380px) {
@@ -348,10 +380,13 @@
         </div>
 
         <!-- Virtual Keyboard - Full layout -->
-        <div id="virtual-keyboard" x-show="keyboardVisible">
+        <div id="virtual-keyboard" x-cloak x-show="keyboardVisible">
             <!-- Row 1: Special keys -->
             <div class="vkb-row vkb-special">
                 <button class="vkb-key" data-key="Escape">ESC</button>
+                <button class="vkb-key layer-toggle" @click="symbolsMode = !symbolsMode"
+                        :class="{ 'active': symbolsMode }"
+                        x-text="symbolsMode ? 'ABC' : 'SYM'"></button>
                 <button class="vkb-key" data-key="/">/ </button>
                 <button class="vkb-key" data-key="|">|</button>
                 <button class="vkb-key" data-key="-">-</button>
@@ -374,8 +409,9 @@
                 <button class="vkb-key" data-key="Delete">DEL</button>
                 <button class="vkb-key" @click="toggleVirtualKeyboard()">✕</button>
             </div>
+            <!-- ===== Letter layer (shown when symbolsMode is false) ===== -->
             <!-- Row 3: Numbers -->
-            <div class="vkb-row">
+            <div class="vkb-row" x-show="!symbolsMode">
                 <button class="vkb-key" data-key="1">1</button>
                 <button class="vkb-key" data-key="2">2</button>
                 <button class="vkb-key" data-key="3">3</button>
@@ -388,7 +424,7 @@
                 <button class="vkb-key" data-key="0">0</button>
             </div>
             <!-- Row 4: QWERTY -->
-            <div class="vkb-row">
+            <div class="vkb-row" x-show="!symbolsMode">
                 <button class="vkb-key" data-key="q">q</button>
                 <button class="vkb-key" data-key="w">w</button>
                 <button class="vkb-key" data-key="e">e</button>
@@ -401,7 +437,7 @@
                 <button class="vkb-key" data-key="p">p</button>
             </div>
             <!-- Row 5: ASDF -->
-            <div class="vkb-row">
+            <div class="vkb-row" x-show="!symbolsMode">
                 <button class="vkb-key" data-key="a">a</button>
                 <button class="vkb-key" data-key="s">s</button>
                 <button class="vkb-key" data-key="d">d</button>
@@ -414,7 +450,7 @@
                 <button class="vkb-key" data-key="Enter">↵</button>
             </div>
             <!-- Row 6: ZXCV -->
-            <div class="vkb-row">
+            <div class="vkb-row" x-show="!symbolsMode">
                 <button class="vkb-key" data-key="z">z</button>
                 <button class="vkb-key" data-key="x">x</button>
                 <button class="vkb-key" data-key="c">c</button>
@@ -426,12 +462,75 @@
                 <button class="vkb-key" data-key=".">.</button>
                 <button class="vkb-key" data-key=" ">␣</button>
             </div>
+
+            <!-- ===== Symbol / function-key layer (shown when symbolsMode is true) ===== -->
+            <!-- Function keys F1-F12 -->
+            <div class="vkb-row vkb-frow" x-show="symbolsMode">
+                <button class="vkb-key" data-key="F1">F1</button>
+                <button class="vkb-key" data-key="F2">F2</button>
+                <button class="vkb-key" data-key="F3">F3</button>
+                <button class="vkb-key" data-key="F4">F4</button>
+                <button class="vkb-key" data-key="F5">F5</button>
+                <button class="vkb-key" data-key="F6">F6</button>
+                <button class="vkb-key" data-key="F7">F7</button>
+                <button class="vkb-key" data-key="F8">F8</button>
+                <button class="vkb-key" data-key="F9">F9</button>
+                <button class="vkb-key" data-key="F10">F10</button>
+                <button class="vkb-key" data-key="F11">F11</button>
+                <button class="vkb-key" data-key="F12">F12</button>
+            </div>
+            <!-- Symbols -->
+            <div class="vkb-row" x-show="symbolsMode">
+                <button class="vkb-key" data-key="`">`</button>
+                <button class="vkb-key" data-key="~">~</button>
+                <button class="vkb-key" data-key="!">!</button>
+                <button class="vkb-key" data-key="@">@</button>
+                <button class="vkb-key" data-key="#">#</button>
+                <button class="vkb-key" data-key="$">$</button>
+                <button class="vkb-key" data-key="%">%</button>
+                <button class="vkb-key" data-key="^">^</button>
+                <button class="vkb-key" data-key="&amp;">&amp;</button>
+                <button class="vkb-key" data-key="*">*</button>
+            </div>
+            <div class="vkb-row" x-show="symbolsMode">
+                <button class="vkb-key" data-key="(">(</button>
+                <button class="vkb-key" data-key=")">)</button>
+                <button class="vkb-key" data-key="_">_</button>
+                <button class="vkb-key" data-key="+">+</button>
+                <button class="vkb-key" data-key="=">=</button>
+                <button class="vkb-key" data-key="{">{</button>
+                <button class="vkb-key" data-key="}">}</button>
+                <button class="vkb-key" data-key="[">[</button>
+                <button class="vkb-key" data-key="]">]</button>
+                <button class="vkb-key" data-key="\">\</button>
+            </div>
+            <div class="vkb-row" x-show="symbolsMode">
+                <button class="vkb-key" data-key=":">:</button>
+                <button class="vkb-key" data-key=";">;</button>
+                <button class="vkb-key" data-key="&quot;">&quot;</button>
+                <button class="vkb-key" data-key="'">'</button>
+                <button class="vkb-key" data-key="&lt;">&lt;</button>
+                <button class="vkb-key" data-key="&gt;">&gt;</button>
+                <button class="vkb-key" data-key="?">?</button>
+                <button class="vkb-key" data-key="Enter">↵</button>
+                <button class="vkb-key" data-key=" ">␣</button>
+            </div>
         </div>
     </div>
 
     <!-- noVNC Library for VMs and Containers -->
     <script type="module">
-        import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js';
+        // noVNC is imported dynamically (inside connect) rather than as a static
+        // top-level import so this module's synchronous top-level code — which
+        // registers the Alpine consoleToolbar component — is not blocked on the
+        // noVNC CDN fetch and runs before Alpine (loaded just below) starts.
+        let RFB = null;
+        async function loadRFB() {
+            if (!RFB) {
+                RFB = (await import('https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js')).default;
+            }
+            return RFB;
+        }
 
         const node = '{{ node }}';
         const vmid = '{{ vmid }}';
@@ -633,6 +732,8 @@
             showConnecting();
 
             try {
+                const RFB = await loadRFB();
+
                 const session = await getVncSession();
 
                 if (!session.success) {
@@ -713,6 +814,7 @@
         function register() {
             window.Alpine.data('consoleToolbar', () => ({
                 keyboardVisible: false,
+                symbolsMode: false,
                 vmClipboardAvailable: false,
 
                 init() {
@@ -735,7 +837,10 @@
 
                 toggleVirtualKeyboard() {
                     this.keyboardVisible = !this.keyboardVisible;
-                    if (!this.keyboardVisible) resetModifiers();
+                    if (!this.keyboardVisible) {
+                        resetModifiers();
+                        this.symbolsMode = false;
+                    }
                 },
 
                 async pasteToVM() {
@@ -776,6 +881,11 @@
         }
         if (window.Alpine) register(); else document.addEventListener('alpine:init', register);
     </script>
+
+    <!-- Loaded AFTER the module above: deferred scripts run in document order,
+         so the module has already registered `consoleToolbar` on `alpine:init`
+         by the time Alpine auto-starts and resolves x-data. -->
+    <script defer src="{{ url_for('static', filename='js/alpine.min.js') }}"></script>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
