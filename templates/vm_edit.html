@@ -686,6 +686,17 @@
                             <div x-show="ssh.root_pam" class="text-muted mt-1">
                                 This cluster uses root@pam — the node console can install the key without a password.
                             </div>
+                            <div class="mt-2">
+                                <div class="form-text small mb-1">If other ProxUI instances have already installed a key here:</div>
+                                <div class="form-check form-check-inline">
+                                    <input class="form-check-input" type="radio" id="keyModeAdd" value="add" x-model="keyMode">
+                                    <label class="form-check-label small" for="keyModeAdd">Keep them, add this key</label>
+                                </div>
+                                <div class="form-check form-check-inline">
+                                    <input class="form-check-input" type="radio" id="keyModeReplace" value="replace" x-model="keyMode">
+                                    <label class="form-check-label small" for="keyModeReplace">Replace all ProxUI keys with this one</label>
+                                </div>
+                            </div>
                             <button class="btn btn-sm btn-primary mt-2" @click="setupAccess()" :disabled="setupBusy">
                                 <span x-show="setupBusy" class="spinner-border spinner-border-sm me-1"></span>
                                 <i x-show="!setupBusy" class="bi bi-key"></i> Install key
@@ -2987,7 +2998,7 @@ function cloudInit(node, vmid) {
     regenBusy: false,
     // Access / storage setup
     ssh: { checked: false, sftp_ok: false, root_pam: false, pubkey: '' },
-    showSetup: false, showPubkey: false, rootPassword: '',
+    showSetup: false, showPubkey: false, rootPassword: '', keyMode: 'add',
     setupBusy: false, setupMsg: '', setupOk: false,
 
     // True when a custom "user" snippet is attached: Proxmox then ignores the
@@ -3043,7 +3054,7 @@ function cloudInit(node, vmid) {
     async setupAccess() {
       this.setupBusy = true; this.setupMsg = '';
       try {
-        const body = { node };
+        const body = { node, replace: this.keyMode === 'replace' };
         if (!this.ssh.root_pam && this.rootPassword) body.root_password = this.rootPassword;
         const r = await ProxUtils.apiJson(`/api/snippets/ssh/setup`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },

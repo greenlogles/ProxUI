@@ -6732,16 +6732,29 @@ def _termproxy_open(
     )
 
 
-def _install_key_command(pub_line: str) -> str:
+def _install_key_command(pub_line: str, replace: bool = False) -> str:
     """Idempotent shell to put ProxUI's pubkey in root's authorized_keys.
 
-    Removes any previous proxui-snippet@ lines first so re-running is clean.
+    replace=False (default): remove only *this* instance's own key (matched by
+    its key material) before appending it, so re-running is idempotent while
+    leaving other ProxUI instances' keys in place — multiple instances coexist.
+
+    replace=True: remove every prior proxui-snippet@ key (all ProxUI instances)
+    before adding this one, e.g. to clean up keys from decommissioned instances.
     """
     q = shlex.quote(pub_line)
+    if replace:
+        # Drop every ProxUI key regardless of which instance installed it.
+        filter_cmd = "grep -v 'proxui-snippet@' /root/.ssh/authorized_keys"
+    else:
+        # Drop only our own key (by its unique key material), keep the rest.
+        parts = pub_line.split()
+        key_material = parts[1] if len(parts) >= 2 else pub_line
+        filter_cmd = f"grep -vF {shlex.quote(key_material)} /root/.ssh/authorized_keys"
     return (
         "mkdir -p /root/.ssh && chmod 700 /root/.ssh && "
         "touch /root/.ssh/authorized_keys && "
-        "grep -v 'proxui-snippet@' /root/.ssh/authorized_keys > /root/.ssh/.proxui_ak.tmp 2>/dev/null || true && "
+        f"{filter_cmd} > /root/.ssh/.proxui_ak.tmp 2>/dev/null || true && "
         f"printf '%s\\n' {q} >> /root/.ssh/.proxui_ak.tmp && "
         "cat /root/.ssh/.proxui_ak.tmp > /root/.ssh/authorized_keys && "
         "rm -f /root/.ssh/.proxui_ak.tmp && chmod 600 /root/.ssh/authorized_keys && "
@@ -6749,15 +6762,20 @@ def _install_key_command(pub_line: str) -> str:
     )
 
 
-def _provision_ssh_key(node: str, root_password: str | None = None) -> dict:
+def _provision_ssh_key(
+    node: str, root_password: str | None = None, replace: bool = False
+) -> dict:
     """Install ProxUI's public key into root's authorized_keys on `node`.
 
     Prefers SSH-as-root-with-password when port 22 is open; otherwise drives the
     node Shell (termproxy). Then verifies key-based SFTP works and detects whether
     root's authorized_keys is cluster-shared (pmxcfs). Returns a status dict.
+
+    replace=True removes other ProxUI instances' keys too (see
+    _install_key_command); the default preserves them.
     """
     _priv, pub = _ensure_ssh_key()
-    install_cmd = _install_key_command(pub)
+    install_cmd = _install_key_command(pub, replace=replace)
 
     if _ssh_port_open(node) and root_password:
         client = _ssh_connect_root_password(node, root_password)
@@ -7172,18 +7190,20 @@ def api_snippets_ssh_status():
 def api_snippets_ssh_setup():
     """Generate (if needed) and install ProxUI's public key into root's authorized_keys.
 
-    Body: { node, root_password? }. root_password is required unless the API user
-    is root@pam (passwordless node Shell).
+    Body: { node, root_password?, replace? }. root_password is required unless
+    the API user is root@pam (passwordless node Shell). replace=true also removes
+    other ProxUI instances' keys; the default keeps them.
     """
     data = request.get_json() or {}
     node = data.get("node")
     root_password = data.get("root_password") or None
+    replace = bool(data.get("replace"))
     if not node:
         return jsonify({"error": "node is required"}), 400
     if not get_proxmox_connection(node, auto_renew=True):
         return jsonify({"error": "Node not found"}), 404
     try:
-        result = _provision_ssh_key(node, root_password=root_password)
+        result = _provision_ssh_key(node, root_password=root_password, replace=replace)
         result["success"] = True
         result["message"] = (
             "SSH key installed. Snippet writes will use SFTP as root."
