@@ -27,6 +27,7 @@ COPY ./static/ /app/static/
 COPY ./templates/ /app/templates/
 COPY ./app.py /app/
 COPY ./cloud_images.json /app/
+COPY ./lxc_profiles.json /app/
 COPY ./entrypoint.sh /entrypoint.sh
 
 # Create non-root user for security
