@@ -3344,12 +3344,11 @@ def api_delete_iso(node, volid):
         return jsonify({"error": "Node not found"}), 404
 
     try:
-        # volid format: storage/filename.iso
-        parts = volid.split("/")
-        if len(parts) != 2:
+        # volid format: storage:content-type/filename.iso (e.g. local:iso/foo.iso)
+        if ":" not in volid or "/" not in volid:
             return jsonify({"error": "Invalid volume ID format"}), 400
 
-        storage = parts[0]
+        storage = volid.split(":")[0]
         proxmox.nodes(node).storage(storage).content(volid).delete()
 
         return jsonify(
@@ -3395,12 +3394,12 @@ def api_delete_lxc_template(node, volid):
         return jsonify({"error": "Node not found"}), 404
 
     try:
-        # volid format: storage/template-name.tar.xz
-        parts = volid.split("/")
-        if len(parts) != 2:
+        # volid format: storage:content-type/template-name.tar.xz
+        # (e.g. local:vztmpl/debian-12.tar.zst)
+        if ":" not in volid or "/" not in volid:
             return jsonify({"error": "Invalid volume ID format"}), 400
 
-        storage = parts[0]
+        storage = volid.split(":")[0]
         proxmox.nodes(node).storage(storage).content(volid).delete()
 
         return jsonify(

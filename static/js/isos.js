@@ -157,7 +157,7 @@ export function isosManager() {
     // ── Display helpers ───────────────────────────────────────────────────────
 
     isoFilename(volid) { return (volid || '').split('/').pop(); },
-    isoStorage(volid) { return (volid || '').split('/')[0] || ''; },
+    isoStorage(volid) { return (volid || '').split(':')[0] || ''; },
     isoSizeGB(iso) { return iso.size ? (iso.size / 1073741824).toFixed(2) : 'Unknown'; },
     vmMemGB(vm) { return vm.maxmem ? (vm.maxmem / 1073741824).toFixed(1) : 'Unknown'; },
     vmCpuInfo(vm) { return vm.cpus ? `${vm.cpus} cores` : 'Unknown'; },
