@@ -212,7 +212,11 @@ jobs:
         tags: |
           type=raw,value=testing
           type=sha,prefix={{branch}}-
-    
+
+    - name: Set short SHA
+      id: short-sha
+      run: echo "value=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
     - name: Build and push
       id: build
       uses: docker/build-push-action@v5
@@ -222,7 +226,7 @@ jobs:
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        build-args: BUILD_VERSION=main-${{ github.sha && github.sha || 'dev' }}
+        build-args: BUILD_VERSION=${{ github.ref_name }}-${{ steps.short-sha.outputs.value }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
