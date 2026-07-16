@@ -1,5 +1,6 @@
 import base64
 import json
+import math
 import os
 import pprint
 import re
@@ -447,6 +448,30 @@ def humanize_uptime(seconds):
 
 
 app.jinja_env.filters["humanize_uptime"] = humanize_uptime
+
+
+def humanize_bytes(num_bytes, decimals=1):
+    """Convert a byte count to an adaptive-unit string (B/KB/MB/GB/TB/PB),
+    keeping the numeric value between roughly 1.0 and 999.9."""
+    try:
+        num_bytes = float(num_bytes)
+    except (ValueError, TypeError):
+        return "N/A"
+    if num_bytes <= 0:
+        return "0 B"
+
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    k = 1024
+    unit_index = int(math.floor(math.log(num_bytes, k)))
+    unit_index = max(0, min(unit_index, len(units) - 1))
+    value = num_bytes / (k**unit_index)
+
+    if unit_index == 0:
+        return f"{int(value)} B"
+    return f"{value:.{decimals}f} {units[unit_index]}"
+
+
+app.jinja_env.filters["humanize_bytes"] = humanize_bytes
 
 # Configuration file path for Docker volume
 import os
@@ -2315,6 +2340,8 @@ def index():
 
     # Get node list for metrics
     nodes = [n["name"] for n in cluster_nodes if n.get("status") == "online"]
+    total_nodes = len(cluster_nodes)
+    online_nodes = len(nodes)
 
     return render_template(
         "index.html",
@@ -2326,6 +2353,8 @@ def index():
         top_cpu=top_cpu,
         top_memory=top_memory,
         nodes=nodes,
+        total_nodes=total_nodes,
+        online_nodes=online_nodes,
     )
 
 
@@ -2649,7 +2678,7 @@ def tasks():
     return render_template("tasks.html")
 
 
-@app.route("/create_vm", methods=["GET", "POST"])
+@app.route("/create", methods=["GET", "POST"])
 def create_vm():
     """Create new VM or container"""
     if request.method == "POST":

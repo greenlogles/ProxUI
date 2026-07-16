@@ -4,111 +4,71 @@
 
 {% block content %}
 <div x-data="tasksPage()">
-<div class="row">
-    <div class="col-12">
-        <div class="d-flex justify-content-between align-items-center">
-            <h1><i class="bi bi-list-task"></i> Recent Tasks</h1>
-            <button class="btn btn-outline-primary" @click="refresh()" :disabled="loading" title="Refresh Tasks">
-                <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i> Refresh
-            </button>
+    <div class="d-flex align-items-center flex-wrap gap-3 mb-3">
+        <div class="me-auto">
+            <div class="sec-title">Recent Tasks</div>
+            <div class="sec-sub">Cluster-wide task log</div>
         </div>
-        <p class="text-muted">All recent tasks from the cluster</p>
+        <button class="btn-x" @click="refresh()" :disabled="loading">
+            <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i> Refresh
+        </button>
     </div>
-</div>
 
-<div class="row mt-3">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Cluster Tasks</h5>
-                <div class="d-flex gap-2">
-                    <select class="form-select form-select-sm" style="width: auto;"
-                            x-model="filter" @change="applyFilter()">
-                        <option value="all">All Tasks</option>
-                        <option value="running">Running</option>
-                        <option value="ok">Completed</option>
-                        <option value="error">Failed</option>
-                    </select>
-                    <select class="form-select form-select-sm" style="width: auto;"
-                            x-model.number="limit" @change="load()">
-                        <option value="50">Last 50</option>
-                        <option value="100">Last 100</option>
-                        <option value="200">Last 200</option>
-                    </select>
-                </div>
+    <div class="card-x">
+        <div class="cx-head flex-wrap gap-2">
+            <div class="seg">
+                <button :class="{on:filter==='all'}" @click="filter='all'; applyFilter()">All</button>
+                <button :class="{on:filter==='running'}" @click="filter='running'; applyFilter()">Running</button>
+                <button :class="{on:filter==='ok'}" @click="filter='ok'; applyFilter()">Completed</button>
+                <button :class="{on:filter==='error'}" @click="filter='error'; applyFilter()">Failed</button>
             </div>
-            <div class="card-body p-0">
-                <template x-if="loading && filteredTasks.length === 0">
-                    <div class="text-center p-4">
-                        <div class="spinner-border spinner-border-sm" role="status"></div>
-                        Loading tasks...
-                    </div>
-                </template>
-                <template x-if="error">
-                    <div class="text-danger p-4">
-                        <i class="bi bi-exclamation-triangle"></i> Error loading tasks
-                    </div>
-                </template>
-                <template x-if="!loading && !error && filteredTasks.length === 0">
-                    <div class="text-muted p-4">
-                        <i class="bi bi-info-circle"></i>
-                        <span x-text="filter === 'all' ? 'No tasks found' : 'No tasks match the current filter'"></span>
-                    </div>
-                </template>
-                <div x-show="filteredTasks.length > 0" class="table-responsive">
-                    <table class="table table-hover mb-0">
-                        <thead class="table-light">
-                            <tr>
-                                <th>Task</th>
-                                <th>Node</th>
-                                <th>Description</th>
-                                <th>User</th>
-                                <th>Status</th>
-                                <th>Started</th>
-                                <th>Duration</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <template x-for="task in filteredTasks" :key="task.upid || (task.node + task.type + task.starttime)">
-                                <tr>
-                                    <td>
-                                        <strong x-text="taskName(task)"></strong>
-                                    </td>
-                                    <td>
-                                        <span class="badge bg-secondary" x-text="task.node || 'Unknown'"></span>
-                                    </td>
-                                    <td>
-                                        <template x-if="task.id && (task.type || '').startsWith('qm')">
-                                            <span>VM <a :href="vmLink(task)" class="text-decoration-none" x-text="task.id"></a></span>
-                                        </template>
-                                        <template x-if="task.id && (task.type || '').startsWith('vz')">
-                                            <span>CT <a :href="vmLink(task)" class="text-decoration-none" x-text="task.id"></a></span>
-                                        </template>
-                                        <template x-if="!task.id || (!(task.type || '').startsWith('qm') && !(task.type || '').startsWith('vz'))">
-                                            <span x-text="task.id || ''"></span>
-                                        </template>
-                                    </td>
-                                    <td x-text="task.user || ''"></td>
-                                    <td>
-                                        <span class="badge" :class="'bg-' + taskStatusClass(task)"
-                                              x-text="task.status || (task.endtime ? 'unknown' : 'running')"></span>
-                                    </td>
-                                    <td>
-                                        <small class="text-muted" x-text="task.start_time_formatted || 'Unknown'"></small>
-                                    </td>
-                                    <td>
-                                        <small class="text-muted" x-text="taskDuration(task)"></small>
-                                    </td>
-                                </tr>
-                            </template>
-                        </tbody>
-                    </table>
-                </div>
+            <div class="seg ms-auto">
+                <button :class="{on:limit===50}" @click="limit=50; load()">Last 50</button>
+                <button :class="{on:limit===100}" @click="limit=100; load()">Last 100</button>
+                <button :class="{on:limit===200}" @click="limit=200; load()">Last 200</button>
             </div>
+        </div>
+        <div class="cx-body flush tbl-scroll">
+            <template x-if="loading && filteredTasks.length === 0">
+                <div class="text-center p-4"><div class="spinner-border spinner-border-sm" role="status"></div> Loading tasks...</div>
+            </template>
+            <template x-if="error">
+                <div class="text-danger p-4"><i class="bi bi-exclamation-triangle"></i> Error loading tasks</div>
+            </template>
+            <template x-if="!loading && !error && filteredTasks.length === 0">
+                <div class="empty-hint">
+                    <i class="bi bi-info-circle"></i>
+                    <span x-text="filter === 'all' ? 'No tasks found' : 'No tasks match the current filter'"></span>
+                </div>
+            </template>
+            <table class="tbl" x-show="filteredTasks.length > 0">
+                <thead><tr><th>Status</th><th>Task</th><th>Node</th><th>User</th><th>Start time</th><th class="num">Duration</th></tr></thead>
+                <tbody>
+                    <template x-for="task in filteredTasks" :key="task.upid || (task.node + task.type + task.starttime)">
+                        <tr>
+                            <td>
+                                <span class="pill" :class="pillCls(task)" x-text="task.status || (task.endtime ? 'unknown' : 'running')"></span>
+                            </td>
+                            <td>
+                                <div class="nm" x-text="taskName(task)"></div>
+                                <template x-if="task.id && ((task.type || '').startsWith('qm') || (task.type || '').startsWith('vz'))">
+                                    <div class="text-faint" style="font-size:11px">
+                                        <span x-text="(task.type || '').startsWith('qm') ? 'VM' : 'CT'"></span>
+                                        <a :href="vmLink(task)" x-text="task.id"></a>
+                                    </div>
+                                </template>
+                            </td>
+                            <td class="text-muted-2" x-text="task.node || 'Unknown'"></td>
+                            <td class="text-muted-2 mono" style="font-size:12px" x-text="task.user || ''"></td>
+                            <td class="text-muted-2 mono" style="font-size:12px" x-text="task.start_time_formatted || 'Unknown'"></td>
+                            <td class="num mono text-muted-2" x-text="taskDuration(task)"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
         </div>
     </div>
 </div>
-</div>{# end x-data="tasksPage" #}
 {% endblock %}
 
 {% block scripts %}
@@ -116,6 +76,7 @@
   import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
 
   const ALLOWED_STATUS = new Set(['primary', 'secondary', 'success', 'danger', 'warning', 'info', 'dark']);
+  const PILL_CLS = { success: 'ok', danger: 'err', primary: 'run', secondary: 'stop' };
 
   function tasksPage() {
     return {
@@ -131,6 +92,10 @@
 
       taskStatusClass(task) {
         return ALLOWED_STATUS.has(task.status_class) ? task.status_class : 'secondary';
+      },
+
+      pillCls(task) {
+        return PILL_CLS[this.taskStatusClass(task)] || 'stop';
       },
 
       vmLink(task) {

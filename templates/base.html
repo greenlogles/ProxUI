@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{% block title %}Proxmox Manager{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/favicon.svg') }}">
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/favicon.png') }}">
     <script>
         (function() {
             const themeKey = 'proxui-theme';
@@ -79,62 +81,84 @@
 </head>
 <body>
     {#
-      App chrome. Structured into regions so a top→left sidebar redesign is
-      mostly CSS: `.app-navbar` is the shell, `.app-nav-primary` holds the page
-      links, `.app-nav-utility` holds theme/jobs/cluster. All behaviour is in
-      self-contained Alpine components (no getElementById), so these regions can
-      be repositioned freely.
+      App shell (left sidebar + slim top utility bar). Regions keep their hook
+      classes so behaviour stays put: `.app-sidebar`/`.app-nav-primary` hold the
+      page links, `.app-navbar`/`.app-nav-utility` hold jobs/cluster/theme, and
+      `.app-main` is the content column. All behaviour lives in self-contained
+      Alpine components (globalJobs, clusterSwitcher) — no getElementById.
     #}
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark app-navbar">
-        <div class="container-fluid">
-            <a class="navbar-brand app-brand" href="{{ url_for('index') }}">
-                <i class="bi bi-server"></i> Proxmox Manager
-            </a>
-            <span class="badge bg-secondary fw-normal small">{{ app_version }}</span>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav app-nav-primary">
-                    {% set _nav = [
-                        ('index', 'bi-speedometer2', 'Dashboard'),
-                        ('vms', 'bi-pc-display', 'VMs & Containers'),
-                        ('create_vm', 'bi-plus-circle', 'Create VM'),
-                        ('tasks', 'bi-list-task', 'Tasks'),
-                        ('storages', 'bi-hdd', 'Storage'),
-                        ('networks', 'bi-diagram-3', 'Networks'),
-                        ('isos_templates', 'bi-disc', 'ISOs & Templates'),
-                        ('cluster', 'bi-diagram-2', 'Cluster'),
-                    ] %}
-                    {% for endpoint, icon, label in _nav %}
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == endpoint %}active{% endif %}" href="{{ url_for(endpoint) }}">
-                            <i class="bi {{ icon }}"></i> {{ label }}
-                        </a>
-                    </li>
-                    {% endfor %}
-                </ul>
+    {% set _nav = [
+        ('index', 'bi-speedometer2', 'Dashboard'),
+        ('vms', 'bi-pc-display', 'VMs & Containers'),
+        ('create_vm', 'bi-plus-circle', 'Create'),
+        ('tasks', 'bi-list-task', 'Tasks'),
+        ('storages', 'bi-hdd', 'Storage'),
+        ('networks', 'bi-diagram-3', 'Networks'),
+        ('isos_templates', 'bi-disc', 'ISOs & Templates'),
+        ('cluster', 'bi-diagram-2', 'Cluster'),
+    ] %}
+    {% set _pt = namespace(title='Proxmox Manager') %}
+    {% for endpoint, icon, label in _nav %}
+        {% if request.endpoint == endpoint %}{% set _pt.title = label %}{% endif %}
+    {% endfor %}
+    {% set _cluster_name = current_cluster.name if current_cluster else 'No cluster' %}
 
-                <!-- Utility region: theme toggle, background jobs, cluster selector -->
-                <div class="navbar-nav ms-auto d-flex align-items-center app-nav-utility">
-                    <!-- Theme toggle -->
-                    <button class="btn btn-sm btn-outline-light theme-toggle me-3" type="button"
-                            x-data="{ dark: (document.documentElement.getAttribute('data-theme') || 'light') === 'dark' }"
-                            @click="window.ProxUITheme.toggle(); dark = !dark"
-                            :title="dark ? 'Switch to light mode' : 'Switch to dark mode'"
-                            :aria-label="dark ? 'Switch to light mode' : 'Switch to dark mode'">
-                        <i class="bi" :class="dark ? 'bi-sun' : 'bi-moon-stars'"></i>
+    <div class="app-shell" x-data="{ drawer: false }" @keydown.escape.window="drawer = false">
+
+        <!-- ==================== SIDEBAR ==================== -->
+        <aside class="app-sidebar" :class="{ open: drawer }">
+            <a class="sidebar-brand" href="{{ url_for('index') }}">
+                <div class="brand-mark"><img src="{{ url_for('static', filename='img/logo.svg') }}" alt="ProxUI" width="34" height="34"></div>
+                <div class="brand-text">
+                    <span class="brand-name">ProxUI</span>
+                    <span class="brand-ver">{{ app_version }}</span>
+                </div>
+            </a>
+
+            <nav class="app-nav-primary">
+                {% for endpoint, icon, label in _nav %}
+                <a class="nav-link-item {% if request.endpoint == endpoint %}active{% endif %}"
+                   href="{{ url_for(endpoint) }}" @click="drawer = false">
+                    <i class="bi {{ icon }}"></i><span class="lbl">{{ label }}</span>
+                </a>
+                {% endfor %}
+                {# Operations section (Maintenance / Backups / Updates) intentionally hidden for now. #}
+            </nav>
+
+            <div class="sidebar-foot">
+                <div class="node-pill">
+                    <span class="dot"></span>
+                    <div class="meta">
+                        <div class="nm">{{ _cluster_name }}</div>
+                        <div class="sub">Active cluster</div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- ==================== COLUMN ==================== -->
+        <div class="app-col">
+            <header class="app-navbar">
+                <div class="topbar-left">
+                    <button class="icon-btn hamburger" type="button" @click="drawer = !drawer" aria-label="Menu">
+                        <i class="bi bi-list"></i>
                     </button>
+                    <div class="page-heading">
+                        <div class="crumb">{{ _cluster_name }}</div>
+                        <div class="h">{% block page_heading %}{{ _pt.title }}{% endblock %}</div>
+                    </div>
+                </div>
+
+                <!-- Utility region: background jobs, cluster selector, theme toggle -->
+                <div class="app-nav-utility">
 
                     <!-- Background Jobs -->
-                    <div class="nav-item dropdown me-3" x-data="globalJobs">
-                        <a class="nav-link position-relative" href="#" role="button"
-                           data-bs-toggle="dropdown" aria-expanded="false" title="Background Jobs"
-                           :class="{ 'jobs-active': activeJobs.length }">
-                            <i class="bi bi-list-task fs-5"></i>
-                            <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
-                                  style="font-size: 0.6rem;" x-show="activeJobs.length" x-text="activeJobs.length"></span>
-                        </a>
+                    <div class="dropdown" x-data="globalJobs">
+                        <button class="icon-btn" type="button" data-bs-toggle="dropdown" aria-expanded="false"
+                                title="Background Jobs" :class="{ 'jobs-active': activeJobs.length }">
+                            <i class="bi bi-list-check"></i>
+                            <span class="count-badge" x-show="activeJobs.length" x-text="activeJobs.length"></span>
+                        </button>
                         <div class="dropdown-menu dropdown-menu-end shadow" style="min-width: 400px; max-height: 500px; overflow-y: auto;">
                             <div class="dropdown-header d-flex justify-content-between align-items-center">
                                 <span><i class="bi bi-list-task"></i> Background Jobs</span>
@@ -228,13 +252,19 @@
                     </div>
 
                 {% if all_clusters|length >= 1 %}
+                    <div class="util-divider"></div>
+
                     <!-- Cluster Selector -->
-                    <div class="nav-item dropdown"
+                    <div class="dropdown"
                          x-data="clusterSwitcher('{{ current_cluster.id }}', {{ current_cluster.name | tojson | forceescape }}, {{ all_clusters | map(attribute='id') | list | tojson | forceescape }})">
-                        <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-                            <i class="bi bi-diagram-2 me-2"></i>
-                            <span x-text="currentName">{{ current_cluster.name }}</span>
-                        </a>
+                        <button class="cluster-trigger" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="bi bi-diagram-2 cl-ico"></i>
+                            <span class="cl-txt" style="text-align:left; line-height:1.15">
+                                <span class="cl-lbl d-block">Cluster</span>
+                                <span class="cl-name d-block" x-text="currentName">{{ current_cluster.name }}</span>
+                            </span>
+                            <i class="bi bi-chevron-down"></i>
+                        </button>
                         <ul class="dropdown-menu dropdown-menu-end">
                             <li><h6 class="dropdown-header"><i class="bi bi-diagram-2"></i> Switch Cluster</h6></li>
                             <li><hr class="dropdown-divider"></li>
@@ -302,58 +332,63 @@
                         </div>
                     </div>
                 {% endif %}
+
+                    <div class="util-divider"></div>
+
+                    <!-- Theme toggle -->
+                    <button class="icon-btn" type="button"
+                            x-data="{ dark: (document.documentElement.getAttribute('data-theme') || 'light') === 'dark' }"
+                            @click="window.ProxUITheme.toggle(); dark = !dark"
+                            :title="dark ? 'Switch to light mode' : 'Switch to dark mode'"
+                            :aria-label="dark ? 'Switch to light mode' : 'Switch to dark mode'">
+                        <i class="bi" :class="dark ? 'bi-sun' : 'bi-moon-stars'"></i>
+                    </button>
                 </div>
-            </div>
-        </div>
-    </nav>
+            </header>
 
-    {% if demo_mode %}
-    <div class="demo-banner alert alert-info alert-dismissible mb-0 rounded-0 py-2" role="alert"
-         x-data="{ dismissed: sessionStorage.getItem('demoBannerDismissed') === 'true' }"
-         x-show="!dismissed" x-cloak>
-        <div class="container-fluid d-flex align-items-center justify-content-center gap-2">
-            <i class="bi bi-info-circle-fill"></i>
-            <span>{{ demo_message }}</span>
-            <button type="button" class="btn-close btn-close-sm ms-2" aria-label="Close"
-                    @click="dismissed = true; sessionStorage.setItem('demoBannerDismissed', 'true')"></button>
-        </div>
-    </div>
-    {% endif %}
-
-    <div class="container-fluid mt-3 app-main">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
-                        {{ message }}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            <!-- ==================== MAIN ==================== -->
+            <main class="app-main">
+                <div class="main-inner">
+                    {% if demo_mode %}
+                    <div class="demo-banner alert alert-info alert-dismissible mb-3 py-2" role="alert"
+                         x-data="{ dismissed: sessionStorage.getItem('demoBannerDismissed') === 'true' }"
+                         x-show="!dismissed" x-cloak>
+                        <div class="d-flex align-items-center justify-content-center gap-2">
+                            <i class="bi bi-info-circle-fill"></i>
+                            <span>{{ demo_message }}</span>
+                            <button type="button" class="btn-close btn-close-sm ms-2" aria-label="Close"
+                                    @click="dismissed = true; sessionStorage.setItem('demoBannerDismissed', 'true')"></button>
+                        </div>
                     </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
+                    {% endif %}
 
-        {% block content %}{% endblock %}
+                    {% with messages = get_flashed_messages(with_categories=true) %}
+                        {% if messages %}
+                            {% for category, message in messages %}
+                                <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
+                                    {{ message }}
+                                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                                </div>
+                            {% endfor %}
+                        {% endif %}
+                    {% endwith %}
+
+                    {% block content %}{% endblock %}
+                </div>
+            </main>
+        </div>
+
+        <!-- Off-canvas scrim (mobile drawer) -->
+        <div class="scrim" x-show="drawer" @click="drawer = false" x-cloak></div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
-    
+
 
     <style>
     /* Hide Alpine-controlled elements until Alpine initializes (prevents flash). */
     [x-cloak] { display: none !important; }
-
-    /* ── App shell hooks ──────────────────────────────────────────────────
-       The chrome is structured into regions so a top→left sidebar redesign is
-       CSS-only. Today `.app-navbar` renders as Bootstrap's top bar; to move it
-       to a left sidebar, target these classes (no markup changes needed):
-         .app-navbar      → position: fixed; left/top/bottom: 0; width: 240px;
-                            flex-direction: column; align-items: stretch;
-         .app-nav-primary → flex-direction: column; (stacks the page links)
-         .app-nav-utility → margin-top: auto; (pins theme/jobs/cluster to bottom)
-         .app-main        → margin-left: 240px; (main content beside the sidebar)
-       On narrow screens keep the current collapsed top-bar behaviour.
-       ──────────────────────────────────────────────────────────────────── */
 
     /* Pulsing animation for active jobs indicator */
     .jobs-active {
@@ -366,8 +401,8 @@
         100% { opacity: 1; }
     }
 
-    .jobs-active .bi-list-task {
-        color: #ffc107 !important;
+    .jobs-active .bi-list-check {
+        color: var(--warn) !important;
     }
 
     /* Demo banner styling */

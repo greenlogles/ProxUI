@@ -3,6 +3,8 @@
 {% block title %}{{ config.name or ('Container' if vm_type == 'lxc' else 'VM') }} ({{ vmid }}) - Proxmox Manager{% endblock %}
 
 {% block content %}
+<div class="mb-3"><a href="{{ url_for('vms') }}" class="back-link"><i class="bi bi-arrow-left"></i> VMs &amp; Containers</a></div>
+
 <!-- vmStatus wraps the header actions + status bar so both react to the live
      status polled every 5s (data-* attrs seed the initial values). -->
 <div x-data="vmStatus"
@@ -13,347 +15,296 @@
      data-cpu="{{ status.cpu or 0 }}"
      data-mem="{{ status.mem or 0 }}"
      data-maxmem="{{ status.maxmem or 0 }}">
-<div class="row">
-    <div class="col-12">
-        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-            <div>
-                <h1>
-                    <i class="bi bi-{{ 'pc-display' if vm_type == 'qemu' else 'box' }}"></i>
-                    {{ config.name or config.hostname or (('Container ' if vm_type == 'lxc' else 'VM ') + vmid) }}
-                </h1>
-                <p class="text-muted mb-0">{{ vm_type|upper }} {{ vmid }} on {{ node }}</p>
-            </div>
-            <div class="d-flex flex-wrap gap-2 align-items-center">
-                <!-- Power Actions — all forms present; visibility flips with the live
-                     status (:class object syntax; Jinja sets the initial class).
-                     Hidden while the VM is locked (clone/migrate/etc.). -->
-                <div class="btn-group" role="group">
-                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='start') }}"
-                          class="d-inline {{ '' if (status.status == 'stopped' and not status.lock) else 'd-none' }}"
-                          :class="{ 'd-none': !isStopped || busy }">
-                        <button type="submit" class="btn btn-success">
-                            <i class="bi bi-play-fill"></i> Start
-                        </button>
-                    </form>
-                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='shutdown') }}"
-                          class="d-inline {{ 'd-none' if (status.status == 'stopped' or status.lock) else '' }}"
-                          :class="{ 'd-none': isStopped || busy }">
-                        <button type="submit" class="btn btn-warning">
-                            <i class="bi bi-power"></i> Shutdown
-                        </button>
-                    </form>
-                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='stop') }}"
-                          class="d-inline {{ 'd-none' if (status.status == 'stopped' or status.lock) else '' }}"
-                          :class="{ 'd-none': isStopped || busy }">
-                        <button type="submit" class="btn btn-danger" onclick="return confirm('Force stop {{ 'container' if vm_type == 'lxc' else 'VM' }}?')">
-                            <i class="bi bi-stop-fill"></i> Stop
-                        </button>
-                    </form>
-                    <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='reset') }}"
-                          class="d-inline {{ 'd-none' if (status.status == 'stopped' or status.lock) else '' }}"
-                          :class="{ 'd-none': isStopped || busy }">
-                        <button type="submit" class="btn btn-outline-warning" onclick="return confirm('Reset {{ 'container' if vm_type == 'lxc' else 'VM' }}?')">
-                            <i class="bi bi-arrow-clockwise"></i>
-                        </button>
-                    </form>
-                </div>
 
-                <!-- Console (QEMU and LXC) -->
-                <a href="{{ url_for('vm_console', node=node, vmid=vmid) }}"
-                   class="btn btn-outline-info {{ 'disabled' if (status.status != 'running' or status.lock) else '' }}"
-                   :class="{ 'disabled': !isRunning || busy }"
-                   :aria-disabled="!isRunning || busy"
-                   :tabindex="(isRunning && !busy) ? null : '-1'"
-                   :title="isRunning ? '' : '{{ 'VM' if vm_type == 'qemu' else 'Container' }} must be running'">
-                    <i class="bi bi-display"></i> Console
-                </a>
-
-                <!-- Migration -->
-                <button type="button" class="btn btn-outline-secondary {{ 'disabled' if migration_info else '' }}"
-                        data-bs-toggle="modal" data-bs-target="#migrateModal"
-                        {% if migration_info %}disabled title="Migration in progress"{% endif %}>
-                    <i class="bi bi-arrow-left-right"></i> Migrate
-                </button>
-
-                <!-- Edit & Delete -->
-                <a href="{{ url_for('vm_edit', node=node, vmid=vmid) }}" class="btn btn-outline-primary">
-                    <i class="bi bi-gear"></i> Edit
-                </a>
-                <button type="button" class="btn btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteModal">
-                    <i class="bi bi-trash"></i> Delete
-                </button>
-            </div>
+<div class="d-flex align-items-center flex-wrap gap-3 mb-3">
+    <div class="me-auto d-flex align-items-center gap-3">
+        <span class="job-ico" style="width:46px;height:46px;font-size:22px" :class="isRunning ? 'ok' : 'err'">
+            <i class="bi bi-{{ 'pc-display' if vm_type == 'qemu' else 'box' }}"></i>
+        </span>
+        <div>
+            <div class="sec-title" style="font-size:20px">{{ config.name or config.hostname or (('Container ' if vm_type == 'lxc' else 'VM ') + vmid) }}</div>
+            <div class="sec-sub">{{ vm_type|upper }} <span class="mono">{{ vmid }}</span> on {{ node }}</div>
         </div>
+    </div>
+
+    <!-- Power Actions — all forms present; visibility flips with the live
+         status (:class object syntax; Jinja sets the initial class).
+         Hidden while the VM is locked (clone/migrate/etc.). -->
+    <div class="d-flex flex-wrap gap-2">
+        <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='start') }}"
+              class="d-inline {{ '' if (status.status == 'stopped' and not status.lock) else 'd-none' }}"
+              :class="{ 'd-none': !isStopped || busy }">
+            <button type="submit" class="btn-x primary"><i class="bi bi-play-fill"></i> Start</button>
+        </form>
+        <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='shutdown') }}"
+              class="d-inline {{ 'd-none' if (status.status == 'stopped' or status.lock) else '' }}"
+              :class="{ 'd-none': isStopped || busy }">
+            <button type="submit" class="btn-x"><i class="bi bi-power"></i> Shutdown</button>
+        </form>
+        <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='stop') }}"
+              class="d-inline {{ 'd-none' if (status.status == 'stopped' or status.lock) else '' }}"
+              :class="{ 'd-none': isStopped || busy }">
+            <button type="submit" class="btn-x" onclick="return confirm('Force stop {{ 'container' if vm_type == 'lxc' else 'VM' }}?')">
+                <i class="bi bi-stop-fill"></i> Stop
+            </button>
+        </form>
+        <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='reset') }}"
+              class="d-inline {{ 'd-none' if (status.status == 'stopped' or status.lock) else '' }}"
+              :class="{ 'd-none': isStopped || busy }">
+            <button type="submit" class="btn-x" onclick="return confirm('Reset {{ 'container' if vm_type == 'lxc' else 'VM' }}?')">
+                <i class="bi bi-arrow-clockwise"></i> Reset
+            </button>
+        </form>
+
+        <!-- Console (QEMU and LXC) -->
+        <a href="{{ url_for('vm_console', node=node, vmid=vmid) }}"
+           class="btn-x pri {{ 'disabled' if (status.status != 'running' or status.lock) else '' }}"
+           :class="{ 'disabled': !isRunning || busy }"
+           :aria-disabled="!isRunning || busy"
+           :tabindex="(isRunning && !busy) ? null : '-1'"
+           :title="isRunning ? '' : '{{ 'VM' if vm_type == 'qemu' else 'Container' }} must be running'"
+           style="text-decoration:none">
+            <i class="bi bi-terminal"></i> Console
+        </a>
+
+        <!-- Migration -->
+        <button type="button" class="btn-x {{ 'disabled' if migration_info else '' }}"
+                data-bs-toggle="modal" data-bs-target="#migrateModal"
+                {% if migration_info %}disabled title="Migration in progress"{% endif %}>
+            <i class="bi bi-arrows-move"></i> Migrate
+        </button>
+
+        <!-- Edit & Delete -->
+        <a href="{{ url_for('vm_edit', node=node, vmid=vmid) }}" class="btn-x" style="text-decoration:none">
+            <i class="bi bi-pencil"></i> Edit
+        </a>
+        <button type="button" class="btn-x danger" data-bs-toggle="modal" data-bs-target="#deleteModal">
+            <i class="bi bi-trash"></i> Delete
+        </button>
     </div>
 </div>
 
 {% if migration_info %}
-<div class="row">
-    <div class="col-12">
-        <div class="alert alert-info alert-dismissible fade show" role="alert">
-            <i class="bi bi-arrow-left-right"></i>
-            <strong>Migration in Progress!</strong> 
+<div class="callout info mb-3">
+    <i class="bi bi-arrow-left-right"></i>
+    <div>
+        <div class="t">Migration in Progress!</div>
+        <div class="b">
             This {{ 'VM' if vm_type == 'qemu' else 'container' }} is currently being migrated{% if migration_info.target %} to {{ migration_info.target }}{% endif %}.
             Started at {{ migration_info.start_time }}.
-            <div class="mt-2">
-                <small class="text-muted">
-                    Status: <span class="badge bg-primary">{{ migration_info.status }}</span>
-                    {% if migration_info.task_id %} | Task ID: {{ migration_info.task_id }}{% endif %}
-                </small>
+            <div class="mt-2 text-faint" style="font-size:11.5px">
+                Status: <span class="tag">{{ migration_info.status }}</span>
+                {% if migration_info.task_id %} · Task ID: {{ migration_info.task_id }}{% endif %}
             </div>
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
         </div>
     </div>
 </div>
 {% endif %}
 
-<!-- Status Bar (values come from the vmStatus wrapper above) -->
-<div class="card mb-3">
-    <div class="card-body py-2">
-        <div class="d-flex flex-wrap align-items-center gap-4">
-            <div class="d-flex align-items-center gap-2">
-                <span class="text-muted small">Status:</span>
-                <span class="badge d-inline-flex align-items-center gap-1" :class="statusClass">
-                    <span class="spinner-border spinner-border-sm" style="width:.7rem;height:.7rem;"
-                          :class="busy ? '' : 'd-none'"></span>
-                    <span x-text="statusLabel"></span>
-                </span>
-            </div>
-            <div class="d-flex align-items-center gap-2">
-                <span class="text-muted small">Uptime:</span>
-                <span class="small" x-text="uptimeText"></span>
-            </div>
-            <div class="d-flex align-items-center gap-2 flex-grow-1" style="min-width: 150px; max-width: 250px;">
-                <span class="text-muted small">CPU:</span>
-                <div class="progress flex-grow-1" style="height: 12px;">
-                    <div class="progress-bar" :style="`width: ${cpuPct}%`"></div>
-                </div>
-                <span class="small" style="min-width: 45px;" x-text="cpuPct + '%'"></span>
-            </div>
-            <div class="d-flex align-items-center gap-2 flex-grow-1" style="min-width: 200px; max-width: 300px;">
-                <span class="text-muted small">Memory:</span>
-                <div class="progress flex-grow-1" style="height: 12px;">
-                    <div class="progress-bar" :style="`width: ${memPct}%`"></div>
-                </div>
-                <span class="small" style="min-width: 100px;" x-text="memText"></span>
-            </div>
-            {% if guest_disk_info %}
-                {% for disk in guest_disk_info %}
-                    {% if disk.mountpoint == '/' %}
-            <div class="d-flex align-items-center gap-2 flex-grow-1" style="min-width: 180px; max-width: 280px;">
-                <span class="text-muted small">Disk:</span>
-                <div class="progress flex-grow-1" style="height: 12px;">
-                    <div class="progress-bar bg-{{ 'danger' if disk.used_percent > 80 else 'warning' if disk.used_percent > 60 else 'info' }}" style="width: {{ disk.used_percent }}%"></div>
-                </div>
-                <span class="small" style="min-width: 90px;">{{ "%.0f"|format(disk.used_gb) }}/{{ "%.0f"|format(disk.total_gb) }}GB</span>
-            </div>
-                    {% endif %}
-                {% endfor %}
-            {% endif %}
+<!-- Hero status metrics (values come from the vmStatus wrapper above) -->
+<div class="metric-hero mb-3">
+    <div class="hero-stat">
+        <div class="k">Status</div>
+        <div class="v">
+            <span class="badge d-inline-flex align-items-center gap-1" :class="statusClass" style="font-size:12.5px">
+                <span class="spinner-border spinner-border-sm" style="width:.7rem;height:.7rem;" :class="busy ? '' : 'd-none'"></span>
+                <span x-text="statusLabel"></span>
+            </span>
         </div>
     </div>
+    <div class="hero-stat">
+        <div class="k">Uptime</div>
+        <div class="v mono" style="font-size:15px" x-text="uptimeText"></div>
+    </div>
+    <div class="hero-stat">
+        <div class="k">CPU</div>
+        <div class="v" x-text="cpuPct + '%'"></div>
+        <div class="ubar mt-2"><i :class="cpuPct > 80 ? 'crit' : cpuPct > 60 ? 'hot' : 'okc'" :style="'width:' + cpuPct + '%'"></i></div>
+    </div>
+    <div class="hero-stat">
+        <div class="k">Memory</div>
+        <div class="v" style="font-size:15px" x-text="memText"></div>
+        <div class="ubar mt-2"><i :class="memPct > 80 ? 'crit' : memPct > 60 ? 'hot' : 'okc'" :style="'width:' + memPct + '%'"></i></div>
+    </div>
+    {% if guest_disk_info %}
+        {% for disk in guest_disk_info %}
+            {% if disk.mountpoint == '/' %}
+    <div class="hero-stat">
+        <div class="k">Disk</div>
+        <div class="v" style="font-size:15px">{{ "%.0f"|format(disk.used_gb) }} / {{ "%.0f"|format(disk.total_gb) }}GB</div>
+        <div class="ubar mt-2"><i class="{{ 'crit' if disk.used_percent > 80 else 'hot' if disk.used_percent > 60 else 'okc' }}" style="width:{{ disk.used_percent }}%"></i></div>
+    </div>
+            {% endif %}
+        {% endfor %}
+    {% endif %}
 </div>
 </div><!-- /vmStatus wrapper -->
 
-<div class="row mt-3">
-    <!-- Performance Metrics Charts -->
-    <div class="col-12 mb-3">
-        <div class="card" x-data="vmMetrics('{{ node }}', '{{ vmid }}')">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="bi bi-graph-up"></i> Performance Metrics</h5>
-                <div class="d-flex gap-2 align-items-center">
-                    <select class="form-select form-select-sm" x-model="timeframe" style="width: auto;">
-                        <option value="hour">Last Hour</option>
-                        <option value="day">Last Day</option>
-                        <option value="week">Last Week</option>
-                        <option value="month">Last Month</option>
-                        <option value="year">Last Year</option>
-                    </select>
-                    <small class="text-muted" x-text="lastUpdate">Loading...</small>
-                    <button class="btn btn-sm btn-outline-primary" @click="refresh()" :disabled="loading" title="Refresh Metrics">
-                        <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
-                    </button>
-                </div>
+<!-- Performance Metrics Charts -->
+<div class="card-x mb-3" x-data="vmMetrics('{{ node }}', '{{ vmid }}')">
+    <div class="cx-head flex-wrap gap-2">
+        <i class="bi bi-graph-up" style="color:var(--accent)"></i><span class="cx-title">Performance Metrics</span>
+        <select class="inp" x-model="timeframe" style="width:auto" class="ms-auto">
+            <option value="hour">Last Hour</option>
+            <option value="day">Last Day</option>
+            <option value="week">Last Week</option>
+            <option value="month">Last Month</option>
+            <option value="year">Last Year</option>
+        </select>
+        <small class="text-faint" x-text="lastUpdate">Loading...</small>
+        <button class="icon-btn" style="width:32px;height:32px;font-size:15px" @click="refresh()" :disabled="loading" title="Refresh Metrics">
+            <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
+        </button>
+    </div>
+    <div class="cx-body">
+        <div class="row g-4">
+            <div class="col-12 col-lg-6">
+                <div class="text-faint" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px"><i class="bi bi-cpu"></i> CPU Usage (%)</div>
+                <div class="chart-box tall"><canvas x-ref="cpu"></canvas></div>
             </div>
-            <div class="card-body">
-                <!-- Charts Row -->
-                <div class="row">
-                    <div class="col-md-6 mb-3">
-                        <h6><i class="bi bi-cpu"></i> CPU Usage (%)</h6>
-                        <div style="height: 250px;">
-                            <canvas x-ref="cpu"></canvas>
-                        </div>
-                    </div>
-                    <div class="col-md-6 mb-3">
-                        <h6><i class="bi bi-memory"></i> Memory Usage (%)</h6>
-                        <div style="height: 250px;">
-                            <canvas x-ref="memory"></canvas>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="row">
-                    <div class="col-md-6 mb-3">
-                        <h6><i class="bi bi-diagram-3"></i> Network I/O (MB)</h6>
-                        <div style="height: 250px;">
-                            <canvas x-ref="network"></canvas>
-                        </div>
-                    </div>
-                    <div class="col-md-6 mb-3">
-                        <h6><i class="bi bi-hdd"></i> Disk I/O (MB)</h6>
-                        <div style="height: 250px;">
-                            <canvas x-ref="disk"></canvas>
-                        </div>
-                    </div>
-                </div>
+            <div class="col-12 col-lg-6">
+                <div class="text-faint" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px"><i class="bi bi-memory"></i> Memory Usage (%)</div>
+                <div class="chart-box tall"><canvas x-ref="memory"></canvas></div>
+            </div>
+            <div class="col-12 col-lg-6">
+                <div class="text-faint" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px"><i class="bi bi-diagram-3"></i> Network I/O (MB)</div>
+                <div class="chart-box tall"><canvas x-ref="network"></canvas></div>
+            </div>
+            <div class="col-12 col-lg-6">
+                <div class="text-faint" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px"><i class="bi bi-hdd"></i> Disk I/O (MB)</div>
+                <div class="chart-box tall"><canvas x-ref="disk"></canvas></div>
             </div>
         </div>
     </div>
 </div>
 
-
-<div class="row">
-    
-    <div class="col-md-6 mb-3">
-        {% if guest_disk_info %}
-        <!-- Guest Disk Usage Card -->
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-hdd"></i> {{ 'Disk Usage' if vm_type == 'lxc' else 'Guest Disk Usage' }}</h5>
-            </div>
-            <div class="card-body">
-                <div style="max-height: 300px; overflow-y: auto;">
+<div class="row g-3">
+    <div class="col-12 col-xl-4">
+        <div class="d-flex flex-column gap-3 h-100">
+            {% if guest_disk_info %}
+            <!-- Guest Disk Usage Card -->
+            <div class="card-x">
+                <div class="cx-head"><i class="bi bi-hdd" style="color:var(--accent)"></i><span class="cx-title">{{ 'Disk Usage' if vm_type == 'lxc' else 'Guest Disk Usage' }}</span></div>
+                <div class="cx-body" style="max-height:300px;overflow-y:auto">
                     {% for disk in guest_disk_info %}
-                    <div class="mb-3{% if not loop.last %} border-bottom pb-2{% endif %}">
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <strong>{{ disk.mountpoint }}</strong>
-                            <small class="text-muted">{{ disk.type }}</small>
+                    <div class="{{ 'mb-3' if not loop.last else '' }}">
+                        <div class="d-flex justify-content-between" style="font-size:12.5px">
+                            <span class="mono">{{ disk.mountpoint }} <span class="text-faint">{{ disk.type }}</span></span>
+                            <span class="mono">{{ "%.1f"|format(disk.used_percent) }}%</span>
                         </div>
-                        <div class="progress mb-1" style="height: 18px;">
-                            <div class="progress-bar bg-{{ 'danger' if disk.used_percent > 80 else 'warning' if disk.used_percent > 60 else 'info' }}" 
-                                 style="width: {{ disk.used_percent }}%">
-                                {{ "%.1f"|format(disk.used_percent) }}%
-                            </div>
-                        </div>
-                        <small class="text-muted">
+                        <div class="ubar my-2"><i class="{{ 'crit' if disk.used_percent > 80 else 'hot' if disk.used_percent > 60 else 'okc' }}" style="width:{{ disk.used_percent }}%"></i></div>
+                        <div class="text-faint mono" style="font-size:11px">
                             {{ "%.1f"|format(disk.used_gb) }} / {{ "%.1f"|format(disk.total_gb) }} GB used
                             ({{ "%.1f"|format(disk.free_gb) }} GB free)
-                        </small>
+                        </div>
+                        {% if not loop.last %}<div class="divider my-3"></div>{% endif %}
                     </div>
                     {% endfor %}
+                    {% if not guest_disk_info %}
+                    <div class="empty-hint">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <p class="mb-0">Guest agent not available or no disk info</p>
+                    </div>
+                    {% endif %}
                 </div>
-                {% if not guest_disk_info %}
-                <div class="text-center text-muted">
-                    <i class="bi bi-exclamation-triangle"></i>
-                    <p class="mb-0">Guest agent not available or no disk info</p>
-                </div>
-                {% endif %}
             </div>
-        </div>
-        {% endif %}
+            {% endif %}
 
-        <!-- Recent Tasks -->
-        <div class="card" x-data="vmTasks('{{ node }}', '{{ vmid }}')">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="bi bi-list-task"></i> Recent Tasks</h5>
-                <button class="btn btn-sm btn-outline-primary" @click="refresh()" :disabled="loading" title="Refresh Tasks">
-                    <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
-                </button>
-            </div>
-            <div class="card-body p-0" style="max-height:350px;overflow-y:auto;">
-                <template x-if="loading && tasks.length === 0">
-                    <div class="text-center p-4"><div class="spinner-border spinner-border-sm" role="status"></div> Loading tasks...</div>
-                </template>
-                <template x-if="error">
-                    <div class="text-danger p-4"><i class="bi bi-exclamation-triangle"></i> Error loading tasks</div>
-                </template>
-                <template x-if="!loading && !error && tasks.length === 0">
-                    <div class="text-muted p-4"><i class="bi bi-info-circle"></i> No recent tasks</div>
-                </template>
-                <div class="list-group list-group-flush" x-show="tasks.length > 0">
-                    <template x-for="task in tasks" :key="task.upid || (task.node + task.type + task.starttime)">
-                        <div class="list-group-item list-group-item-action">
-                            <div class="d-flex w-100 justify-content-between align-items-start">
-                                <div>
-                                    <h6 class="mb-1" x-text="displayName(task)"></h6>
-                                    <p class="mb-1 text-muted small">Started: <span x-text="task.start_time_formatted || 'Unknown'"></span></p>
-                                    <template x-if="task.end_time_formatted">
-                                        <p class="mb-1 text-muted small">Ended: <span x-text="task.end_time_formatted"></span></p>
-                                    </template>
-                                </div>
-                                <span class="badge" :class="'bg-' + statusClass(task)" x-text="task.status || 'unknown'"></span>
-                            </div>
-                        </div>
+            <!-- Recent Tasks -->
+            <div class="card-x" style="flex:1" x-data="vmTasks('{{ node }}', '{{ vmid }}')">
+                <div class="cx-head">
+                    <i class="bi bi-clock-history" style="color:var(--accent)"></i><span class="cx-title">Recent Tasks</span>
+                    <button class="icon-btn ms-auto" style="width:28px;height:28px;font-size:13px" @click="refresh()" :disabled="loading" title="Refresh Tasks">
+                        <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
+                    </button>
+                </div>
+                <div class="cx-body tight" style="max-height:350px;overflow-y:auto;">
+                    <template x-if="loading && tasks.length === 0">
+                        <div class="text-center p-4"><div class="spinner-border spinner-border-sm" role="status"></div> Loading tasks...</div>
                     </template>
+                    <template x-if="error">
+                        <div class="text-danger p-4"><i class="bi bi-exclamation-triangle"></i> Error loading tasks</div>
+                    </template>
+                    <template x-if="!loading && !error && tasks.length === 0">
+                        <div class="empty-hint"><i class="bi bi-info-circle"></i> No recent tasks</div>
+                    </template>
+                    <table class="tbl" x-show="tasks.length > 0">
+                        <tbody>
+                            <template x-for="task in tasks" :key="task.upid || (task.node + task.type + task.starttime)">
+                                <tr>
+                                    <td style="width:26px">
+                                        <span class="job-ico" :class="{success:'ok',danger:'err',primary:'run',warning:'run',secondary:'ok'}[statusClass(task)] || 'ok'" style="width:26px;height:26px;font-size:13px">
+                                            <i class="bi bi-circle-fill" style="font-size:8px"></i>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <div class="nm" style="font-size:12.5px" x-text="displayName(task)"></div>
+                                        <div class="text-faint" style="font-size:11px">
+                                            Started: <span x-text="task.start_time_formatted || 'Unknown'"></span>
+                                            <template x-if="task.end_time_formatted">
+                                                <span> · Ended: <span x-text="task.end_time_formatted"></span></span>
+                                            </template>
+                                        </div>
+                                    </td>
+                                    <td class="text-faint mono" style="font-size:11px;text-align:right" x-text="task.status || 'unknown'"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
     </div>
 
     <!-- Configuration Details -->
-    <div class="col-md-6 mb-3">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-sliders"></i> Configuration</h5>
-            </div>
-            <div class="card-body" style="max-height: 500px; overflow-y: auto;">
-                
+    <div class="col-12 col-xl-8">
+        <div class="card-x h-100">
+            <div class="cx-head"><i class="bi bi-sliders" style="color:var(--accent)"></i><span class="cx-title">Configuration</span></div>
+            <div class="cx-body" style="max-height: 620px; overflow-y: auto;">
+                <div class="cfg-grid">
+
                 <!-- CPU Configuration -->
                 {% if parsed_config.cpu %}
-                <div class="mb-4">
-                    <h6 class="text-primary mb-2"><i class="bi bi-cpu"></i> Processor</h6>
-                    <div class="row">
-                        {% for key, value in parsed_config.cpu.items() %}
-                        <div class="col-sm-4 mb-2">
-                            <small class="text-muted">{{ key|title }}:</small>
-                            <div><strong>{{ value }}</strong></div>
-                        </div>
-                        {% endfor %}
-                    </div>
+                <div class="cfg-box">
+                    <h6><i class="bi bi-cpu"></i> Processor</h6>
+                    {% for key, value in parsed_config.cpu.items() %}
+                    <div class="kv"><span class="k">{{ key|title }}</span><span class="v">{{ value }}</span></div>
+                    {% endfor %}
                 </div>
                 {% endif %}
 
                 <!-- Memory Configuration -->
                 {% if parsed_config.memory %}
-                <div class="mb-4">
-                    <h6 class="text-primary mb-2"><i class="bi bi-memory"></i> Memory</h6>
-                    <div class="row">
-                        {% for key, value in parsed_config.memory.items() %}
-                        <div class="col-sm-6 mb-2">
-                            <small class="text-muted">{{ key|title }}:</small>
-                            <div><strong>
-                                {% if key == 'memory' %}
-                                    {{ (value|int / 1024)|round(1) if value|string|length > 3 else value }} 
-                                    {{ 'GB' if value|string|length > 3 else 'MB' }}
-                                {% else %}
-                                    {{ value }}
-                                {% endif %}
-                            </strong></div>
-                        </div>
-                        {% endfor %}
+                <div class="cfg-box">
+                    <h6><i class="bi bi-memory"></i> Memory</h6>
+                    {% for key, value in parsed_config.memory.items() %}
+                    <div class="kv">
+                        <span class="k">{{ key|title }}</span>
+                        <span class="v">
+                            {% if key == 'memory' %}
+                                {{ (value|int / 1024)|round(1) if value|string|length > 3 else value }}
+                                {{ 'GB' if value|string|length > 3 else 'MB' }}
+                            {% else %}
+                                {{ value }}
+                            {% endif %}
+                        </span>
                     </div>
+                    {% endfor %}
                 </div>
                 {% endif %}
 
                 <!-- Network Configuration -->
                 {% if parsed_config.network %}
-                <div class="mb-4">
-                    <h6 class="text-primary mb-2"><i class="bi bi-ethernet"></i> Network</h6>
+                <div class="cfg-box">
+                    <h6><i class="bi bi-ethernet"></i> Network</h6>
                     {% for net in parsed_config.network %}
-                    <div class="border rounded p-2 mb-2">
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <strong>{{ net.interface }}</strong>
-                        </div>
-                        <div class="row">
-                            {% for key, value in net.items() %}
-                            {% if key not in ['interface', 'config'] %}
-                            <div class="col-sm-6 mb-1">
-                                <small class="text-muted">{{ key|title }}:</small>
-                                <small><strong>{{ value }}</strong></small>
-                            </div>
-                            {% endif %}
-                            {% endfor %}
-                        </div>
+                    <div class="{{ 'mb-2' if not loop.last else '' }}">
+                        <div class="kv" style="border-bottom:0;padding-bottom:2px"><span class="k" style="font-weight:700;color:var(--text)">{{ net.interface }}</span><span></span></div>
+                        {% for key, value in net.items() %}
+                        {% if key not in ['interface', 'config'] %}
+                        <div class="kv"><span class="k">{{ key|title }}</span><span class="v mono" style="font-size:11.5px">{{ value }}</span></div>
+                        {% endif %}
+                        {% endfor %}
                     </div>
                     {% endfor %}
                 </div>
@@ -361,17 +312,12 @@
 
                 <!-- Hard Disks -->
                 {% if parsed_config.disks %}
-                <div class="mb-4">
-                    <h6 class="text-primary mb-2"><i class="bi bi-hdd"></i> Hard Disks</h6>
+                <div class="cfg-box">
+                    <h6><i class="bi bi-hdd"></i> Hard Disks</h6>
                     {% for disk in parsed_config.disks %}
-                    <div class="border rounded p-2 mb-2">
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <strong>{{ disk.device }}</strong>
-                            {% if disk.size %}
-                            <span class="badge bg-secondary">{{ disk.size }}</span>
-                            {% endif %}
-                        </div>
-                        <small class="text-muted">{{ disk.details or disk.config }}</small>
+                    <div class="kv">
+                        <span class="k">{{ disk.device }}</span>
+                        <span class="v mono" style="font-size:10.5px">{{ disk.size or '' }} {{ disk.details or disk.config }}</span>
                     </div>
                     {% endfor %}
                 </div>
@@ -379,18 +325,12 @@
 
                 <!-- CD/DVD Drives -->
                 {% if parsed_config.cdrom %}
-                <div class="mb-4">
-                    <h6 class="text-primary mb-2"><i class="bi bi-disc"></i> CD/DVD</h6>
+                <div class="cfg-box">
+                    <h6><i class="bi bi-disc"></i> CD/DVD</h6>
                     {% for cdrom in parsed_config.cdrom %}
-                    <div class="border rounded p-2 mb-2">
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <strong>{{ cdrom.device }}</strong>
-                            <span class="badge bg-info">ISO</span>
-                        </div>
-                        {% if cdrom.iso_name %}
-                        <div><small class="text-info">{{ cdrom.iso_name }}</small></div>
-                        {% endif %}
-                        <small class="text-muted">{{ cdrom.details or cdrom.config }}</small>
+                    <div class="kv">
+                        <span class="k">{{ cdrom.device }} <span class="type-chip">ISO</span></span>
+                        <span class="v mono" style="font-size:10.5px">{{ cdrom.iso_name or cdrom.details or cdrom.config }}</span>
                     </div>
                     {% endfor %}
                 </div>
@@ -398,118 +338,98 @@
 
                 <!-- Cloud-init Drive -->
                 {% if parsed_config.cloudinit_drive %}
-                <div class="mb-4">
-                    <h6 class="text-primary mb-2"><i class="bi bi-cloud-arrow-up"></i> Cloud-init Drive</h6>
-                    <div class="border rounded p-2 mb-2 border-info">
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <strong>{{ parsed_config.cloudinit_drive.device }}</strong>
-                            <span class="badge bg-info">Cloud-init</span>
-                        </div>
-                        <small class="text-muted">{{ parsed_config.cloudinit_drive.details or parsed_config.cloudinit_drive.config }}</small>
+                <div class="cfg-box">
+                    <h6><i class="bi bi-cloud-arrow-up"></i> Cloud-init Drive</h6>
+                    <div class="kv">
+                        <span class="k">{{ parsed_config.cloudinit_drive.device }} <span class="type-chip">Cloud-init</span></span>
+                        <span class="v mono" style="font-size:10.5px">{{ parsed_config.cloudinit_drive.details or parsed_config.cloudinit_drive.config }}</span>
                     </div>
                 </div>
                 {% endif %}
 
                 <!-- Connected Devices -->
                 {% if parsed_config.devices %}
-                <div class="mb-4">
-                    <h6 class="text-primary mb-2"><i class="bi bi-device-hdd"></i> Connected Devices</h6>
+                <div class="cfg-box">
+                    <h6><i class="bi bi-device-hdd"></i> Connected Devices</h6>
                     {% for device in parsed_config.devices %}
-                    <div class="border rounded p-2 mb-2">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <strong>{{ device.device }}</strong>
-                            <small class="text-muted">{{ device.config }}</small>
-                        </div>
-                    </div>
+                    <div class="kv"><span class="k">{{ device.device }}</span><span class="v mono" style="font-size:10.5px">{{ device.config }}</span></div>
                     {% endfor %}
                 </div>
                 {% endif %}
 
                 <!-- Cloud-init Configuration -->
                 {% if parsed_config.cloud_init %}
-                <div class="mb-4">
-                    <h6 class="text-primary mb-2"><i class="bi bi-cloud"></i> Cloud-init</h6>
-                    <div class="row">
-                        {% for key, value in parsed_config.cloud_init.items() %}
-                        <div class="col-sm-6 mb-2">
-                            <small class="text-muted">
-                                {% if key == 'ciuser' %}Default User
-                                {% elif key == 'sshkeys' %}SSH Keys
-                                {% elif key.startswith('ipconfig') %}IP Config {{ key[-1] }}
-                                {% elif key == 'nameserver' %}DNS Server
-                                {% elif key == 'searchdomain' %}Search Domain
-                                {% else %}{{ key|title }}
-                                {% endif %}:
-                            </small>
-                            <div><strong>
-                                {% if key == 'sshkeys' and value.parsed %}
-                                    <div x-data="{ open: false }">
-                                    <div class="d-flex justify-content-between align-items-center">
-                                        <span>{{ value.parsed|length }} SSH key(s)</span>
-                                        <button class="btn btn-sm btn-outline-secondary" type="button"
-                                                data-bs-toggle="collapse"
-                                                data-bs-target="#sshKeysCollapse"
-                                                @click="open=!open">
-                                            <i class="bi" :class="open ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
-                                            <span x-text="open ? 'Hide' : 'View'">View</span>
-                                        </button>
-                                    </div>
-                                    <div class="collapse mt-2" id="sshKeysCollapse">
-                                        {% for ssh_key in value.parsed %}
-                                        <div class="border-start border-2 border-info ps-2 mb-2">
-                                            <div class="d-flex justify-content-between align-items-center">
-                                                <span class="badge bg-secondary me-2">{{ ssh_key.type }}</span>
-                                                <small class="text-muted">{{ ssh_key.comment }}</small>
-                                            </div>
-                                            <small class="font-monospace text-muted">{{ ssh_key.preview }}</small>
+                <div class="cfg-box">
+                    <h6><i class="bi bi-cloud"></i> Cloud-init</h6>
+                    {% for key, value in parsed_config.cloud_init.items() %}
+                    <div class="kv">
+                        <span class="k">
+                            {% if key == 'ciuser' %}Default User
+                            {% elif key == 'sshkeys' %}SSH Keys
+                            {% elif key.startswith('ipconfig') %}IP Config {{ key[-1] }}
+                            {% elif key == 'nameserver' %}DNS Server
+                            {% elif key == 'searchdomain' %}Search Domain
+                            {% else %}{{ key|title }}
+                            {% endif %}
+                        </span>
+                        <span class="v">
+                            {% if key == 'sshkeys' and value.parsed %}
+                                <div x-data="{ open: false }">
+                                <div class="d-flex justify-content-between align-items-center gap-2">
+                                    <span>{{ value.parsed|length }} SSH key(s)</span>
+                                    <button class="act-btn" type="button"
+                                            data-bs-toggle="collapse"
+                                            data-bs-target="#sshKeysCollapse"
+                                            @click="open=!open">
+                                        <i class="bi" :class="open ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+                                    </button>
+                                </div>
+                                <div class="collapse mt-2" id="sshKeysCollapse" style="text-align:left">
+                                    {% for ssh_key in value.parsed %}
+                                    <div class="mb-2" style="border-left:2px solid var(--accent-border);padding-left:8px">
+                                        <div class="d-flex justify-content-between align-items-center gap-2">
+                                            <span class="type-chip">{{ ssh_key.type }}</span>
+                                            <small class="text-faint">{{ ssh_key.comment }}</small>
                                         </div>
-                                        {% endfor %}
+                                        <small class="mono text-faint">{{ ssh_key.preview }}</small>
                                     </div>
-                                    </div>
-                                {% elif key == 'sshkeys' %}
-                                    <span class="text-truncate d-inline-block" style="max-width: 200px;" title="{{ value }}">
-                                        SSH keys configured
-                                    </span>
-                                {% else %}
-                                    {{ value }}
-                                {% endif %}
-                            </strong></div>
-                        </div>
-                        {% endfor %}
+                                    {% endfor %}
+                                </div>
+                                </div>
+                            {% elif key == 'sshkeys' %}
+                                <span class="text-truncate d-inline-block" style="max-width: 200px;" title="{{ value }}">
+                                    SSH keys configured
+                                </span>
+                            {% else %}
+                                {{ value }}
+                            {% endif %}
+                        </span>
                     </div>
+                    {% endfor %}
                 </div>
                 {% endif %}
 
                 <!-- General Settings -->
                 {% if parsed_config.general %}
-                <div class="mb-4">
-                    <h6 class="text-primary mb-2"><i class="bi bi-gear"></i> General</h6>
-                    <div class="row">
-                        {% for key, value in parsed_config.general.items() %}
-                        <div class="col-sm-6 mb-2">
-                            <small class="text-muted">{{ key|title }}:</small>
-                            <div><strong>{{ value }}</strong></div>
-                        </div>
-                        {% endfor %}
-                    </div>
+                <div class="cfg-box">
+                    <h6><i class="bi bi-gear"></i> General</h6>
+                    {% for key, value in parsed_config.general.items() %}
+                    <div class="kv"><span class="k">{{ key|title }}</span><span class="v">{{ value }}</span></div>
+                    {% endfor %}
                 </div>
                 {% endif %}
 
                 <!-- Other Settings -->
                 {% if parsed_config.other %}
-                <div class="mb-4">
-                    <h6 class="text-primary mb-2"><i class="bi bi-three-dots"></i> Other Settings</h6>
-                    <div class="row">
-                        {% for key, value in parsed_config.other.items() %}
-                        <div class="col-sm-6 mb-2">
-                            <small class="text-muted">{{ key }}:</small>
-                            <div><strong>{{ value }}</strong></div>
-                        </div>
-                        {% endfor %}
-                    </div>
+                <div class="cfg-box">
+                    <h6><i class="bi bi-three-dots"></i> Other Settings</h6>
+                    {% for key, value in parsed_config.other.items() %}
+                    <div class="kv"><span class="k">{{ key }}</span><span class="v">{{ value }}</span></div>
+                    {% endfor %}
                 </div>
                 {% endif %}
 
+                </div>
             </div>
         </div>
     </div>
@@ -528,15 +448,15 @@
             <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='migrate') }}" id="migrateForm">
                 <div class="modal-body">
                     {% if vm_type == 'lxc' %}
-                    <div class="alert alert-info">
+                    <div class="callout info mb-3">
                         <i class="bi bi-info-circle"></i>
-                        <strong>Note:</strong> LXC containers don't support live migration. The container will be restarted during the migration process.
+                        <div><div class="t">Note</div><div class="b">LXC containers don't support live migration. The container will be restarted during the migration process.</div></div>
                     </div>
                     {% endif %}
 
-                    <div class="mb-3">
-                        <label class="form-label">Target Node</label>
-                        <select class="form-select" name="target_node" x-model="targetNode" @change="loadStorages()" required>
+                    <div class="field">
+                        <label>Target Node</label>
+                        <select class="inp" name="target_node" x-model="targetNode" @change="loadStorages()" required>
                             <option value="">Select target node...</option>
                             {% for target in available_nodes %}
                             <option value="{{ target }}">{{ target }}</option>
@@ -544,20 +464,20 @@
                         </select>
                     </div>
 
-                    <div class="mb-3">
-                        <label class="form-label">Target Storage (Optional)</label>
-                        <select class="form-select" name="target_storage" x-model="targetStorage">
+                    <div class="field mb-0">
+                        <label>Target Storage (Optional)</label>
+                        <select class="inp" name="target_storage" x-model="targetStorage">
                             <option value="">Keep current storage locations</option>
                             <template x-for="s in storages" :key="s.storage">
                                 <option :value="s.storage" x-text="s.storage + ' (' + s.type + ')' + (s.available_gb !== undefined ? ' - ' + s.available_gb + ' GB free' : '')"></option>
                             </template>
                         </select>
-                        <div class="form-text">Leave empty to keep disks on current storage</div>
+                        <div class="hint">Leave empty to keep disks on current storage</div>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary" onclick="return confirm('Migrate {{ 'VM' if vm_type == 'qemu' else 'container' }} to selected node?')">
+                    <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn-x primary">
                         <i class="bi bi-arrow-right-circle"></i> Migrate
                     </button>
                 </div>
@@ -573,40 +493,39 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title text-danger">
+                <h5 class="modal-title" style="color:var(--danger)">
                     <i class="bi bi-exclamation-triangle"></i> Delete {{ 'Container' if vm_type == 'lxc' else 'VM' }} {{ vmid }}
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <div class="alert alert-danger">
-                    <i class="bi bi-exclamation-triangle"></i>
-                    <strong>Warning:</strong> This action cannot be undone!
+                <div class="confirm-box mb-3">
+                    <div class="d-flex gap-3">
+                        <i class="bi bi-exclamation-triangle-fill" style="color:var(--danger);font-size:22px"></i>
+                        <div style="flex:1">
+                            <div style="font-weight:700;margin-bottom:4px">This action cannot be undone!</div>
+                            <div class="sec-sub" style="color:var(--text-muted)">
+                                Are you sure you want to delete {{ 'container' if vm_type == 'lxc' else 'VM' }} <strong>{{ config.name or vmid }}</strong>?
+                                This will permanently remove {{ 'container' if vm_type == 'lxc' else 'VM' }} configuration, all disks and data, and all snapshots (if any).
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
-                <p>Are you sure you want to delete {{ 'container' if vm_type == 'lxc' else 'VM' }} <strong>{{ config.name or vmid }}</strong>?</p>
-
-                <p class="text-muted">This will permanently remove:</p>
-                <ul class="text-muted">
-                    <li>{{ 'Container' if vm_type == 'lxc' else 'VM' }} configuration</li>
-                    <li>All {{ 'container' if vm_type == 'lxc' else 'VM' }} disks and data</li>
-                    <li>All snapshots (if any)</li>
-                </ul>
-
                 <div class="mt-3" x-show="statusMsg">
-                    <div :class="'alert alert-' + statusType">
+                    <div class="callout" :class="statusType === 'success' ? 'ok' : statusType === 'info' ? 'info' : 'danger'">
                         <i :class="'bi bi-' + (statusType === 'success' ? 'check-circle' : statusType === 'info' ? 'info-circle' : 'exclamation-triangle')"></i>
                         <span x-text="statusMsg"></span>
                     </div>
                 </div>
 
-                <div class="alert alert-warning" :class="canDelete ? 'd-none' : ''">
+                <div class="callout warn" :class="canDelete ? 'd-none' : ''">
                     <i class="bi bi-exclamation-triangle"></i> <span x-text="warnMsg"></span>
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-danger" @click="run()"
+                <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn-x" style="background:var(--danger);border-color:var(--danger);color:#fff" @click="run()"
                         :disabled="deleting || !canDelete">
                     <span x-show="deleting" class="spinner-border spinner-border-sm me-1" role="status"></span>
                     <span x-show="!deleting"><i class="bi bi-trash"></i></span>
@@ -618,60 +537,56 @@
 </div>
 {% if vm_type == 'lxc' %}
 <!-- LXC Advanced Summary (read-only) -->
-<div class="row mt-3">
-    <div class="col-12">
-        <div class="card" x-data="lxcSummary()">
-            <div class="card-header d-flex justify-content-between align-items-center py-2">
-                <h5 class="mb-0"><i class="bi bi-sliders2"></i> Advanced / Passthrough</h5>
-                <a href="{{ url_for('vm_edit', node=node, vmid=vmid) }}" class="btn btn-sm btn-outline-primary">
-                    <i class="bi bi-pencil-square"></i> Configure
-                </a>
-            </div>
-            <div class="card-body py-2">
-                <template x-if="loading">
-                    <div class="text-muted small"><div class="spinner-border spinner-border-sm me-1" role="status"></div> Loading…</div>
+<div class="card-x mt-3" x-data="lxcSummary()">
+    <div class="cx-head">
+        <i class="bi bi-sliders" style="color:var(--accent)"></i><span class="cx-title">Advanced / Passthrough</span>
+        <a href="{{ url_for('vm_edit', node=node, vmid=vmid) }}" class="btn-x sm ms-auto" style="text-decoration:none">
+            <i class="bi bi-pencil-square"></i> Configure
+        </a>
+    </div>
+    <div class="cx-body">
+        <template x-if="loading">
+            <div class="text-muted small"><div class="spinner-border spinner-border-sm me-1" role="status"></div> Loading…</div>
+        </template>
+        <template x-if="!loading && !hasAny">
+            <div class="empty-hint">No advanced configuration. <a href="{{ url_for('vm_edit', node=node, vmid=vmid) }}">Configure</a></div>
+        </template>
+        <template x-if="!loading && hasAny">
+            <div class="vstack gap-2">
+                <template x-if="enabledFlags.length > 0">
+                    <div>
+                        <span class="text-faint" style="font-size:11px" class="me-2">Flags</span>
+                        <template x-for="f in enabledFlags" :key="f">
+                            <span class="tag me-1" x-text="f"></span>
+                        </template>
+                    </div>
                 </template>
-                <template x-if="!loading && !hasAny">
-                    <div class="text-muted small">No advanced configuration. <a href="{{ url_for('vm_edit', node=node, vmid=vmid) }}">Configure</a></div>
+                <template x-if="devices.length > 0">
+                    <div>
+                        <span class="text-faint" style="font-size:11px" class="me-2">Devices</span>
+                        <template x-for="d in devices" :key="d.key">
+                            <span class="tag me-1" x-text="d.path.split('/').pop()"></span>
+                        </template>
+                    </div>
                 </template>
-                <template x-if="!loading && hasAny">
-                    <div class="vstack gap-1">
-                        <template x-if="enabledFlags.length > 0">
-                            <div>
-                                <span class="text-muted small me-2">Flags</span>
-                                <template x-for="f in enabledFlags" :key="f">
-                                    <span class="badge bg-success me-1" x-text="f"></span>
-                                </template>
-                            </div>
+                <template x-if="mounts.length > 0">
+                    <div>
+                        <span class="text-faint" style="font-size:11px" class="me-2">Mounts</span>
+                        <template x-for="m in mounts" :key="m.key">
+                            <span class="tag me-1" x-text="m.mp"></span>
                         </template>
-                        <template x-if="devices.length > 0">
-                            <div>
-                                <span class="text-muted small me-2">Devices</span>
-                                <template x-for="d in devices" :key="d.key">
-                                    <span class="badge bg-secondary me-1" x-text="d.path.split('/').pop()"></span>
-                                </template>
-                            </div>
-                        </template>
-                        <template x-if="mounts.length > 0">
-                            <div>
-                                <span class="text-muted small me-2">Mounts</span>
-                                <template x-for="m in mounts" :key="m.key">
-                                    <span class="badge bg-info text-dark me-1" x-text="m.mp"></span>
-                                </template>
-                            </div>
-                        </template>
-                        <template x-if="idmaps.length > 0">
-                            <div>
-                                <span class="text-muted small me-2">idmap</span>
-                                <template x-for="i in idmaps" :key="i.key">
-                                    <span class="badge bg-warning text-dark me-1" x-text="i.type + ' ' + i.ct_id + '→' + i.host_id"></span>
-                                </template>
-                            </div>
+                    </div>
+                </template>
+                <template x-if="idmaps.length > 0">
+                    <div>
+                        <span class="text-faint" style="font-size:11px" class="me-2">idmap</span>
+                        <template x-for="i in idmaps" :key="i.key">
+                            <span class="tag me-1" x-text="i.type + ' ' + i.ct_id + '→' + i.host_id"></span>
                         </template>
                     </div>
                 </template>
             </div>
-        </div>
+        </template>
     </div>
 </div>
 {% endif %}
@@ -705,10 +620,53 @@ function vmTasks(node, vmid) {
 }
 
 function vmMetrics(node, vmid) {
-  const base = {
-    responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: true, position: 'bottom' } },
-    scales: { x: { display: true, title: { display: true, text: 'Time' } }, y: { display: true, beginAtZero: true } }
+  // Theme-aware Chart.js styling matching the ProxUI design system: thin
+  // smoothed lines, gradient fill, hidden x-axis grid, faint ticks/gridlines
+  // pulled from the CSS custom properties so both themes stay in sync.
+  const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const withAlpha = (hex, alpha) => {
+    const h = hex.replace('#', '');
+    const bigint = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+    const r = (bigint >> 16) & 255, g = (bigint >> 8) & 255, b = bigint & 255;
+    return `rgba(${r},${g},${b},${alpha})`;
+  };
+  const gradientFill = (ctx, color) => {
+    const g = ctx.createLinearGradient(0, 0, 0, ctx.canvas.height || 150);
+    g.addColorStop(0, withAlpha(color, 0.35));
+    g.addColorStop(1, withAlpha(color, 0));
+    return g;
+  };
+  const dataset = (ctx, label, color, fill) => ({
+    label, data: [], borderColor: color,
+    backgroundColor: fill ? gradientFill(ctx, color) : 'transparent',
+    fill: !!fill, borderWidth: 2, tension: 0.4,
+    pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: color,
+    pointHoverBorderColor: '#fff', pointHoverBorderWidth: 2,
+  });
+  const themedOptions = ({ pct = false, max } = {}) => {
+    const grid = cssVar('--grid-line'), faint = cssVar('--text-faint');
+    return {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: true, position: 'top', align: 'end',
+          labels: { color: faint, boxWidth: 8, boxHeight: 8, usePointStyle: true, font: { size: 11 }, padding: 12 },
+        },
+        tooltip: {
+          backgroundColor: cssVar('--panel'), titleColor: cssVar('--text'), bodyColor: cssVar('--text-muted'),
+          borderColor: cssVar('--border'), borderWidth: 1, padding: 10, cornerRadius: 8, usePointStyle: true,
+        },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: faint, font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 6 } },
+        y: {
+          grid: { color: grid, drawBorder: false },
+          ticks: { color: faint, font: { size: 10 }, maxTicksLimit: 5, callback: v => pct ? v + '%' : v },
+          beginAtZero: true, suggestedMax: max,
+        },
+      },
+    };
   };
   // Closure variable — Chart instances never stored in Alpine's reactive state
   // (Alpine's Proxy corrupts Chart.js internals: this.options.events → undefined).
@@ -716,32 +674,37 @@ function vmMetrics(node, vmid) {
   return {
     timeframe: 'day', lastUpdate: 'Loading...', loading: false, _poller: null,
     init() {
+      const cpuCtx = this.$refs.cpu.getContext('2d');
+      const memCtx = this.$refs.memory.getContext('2d');
+      const netCtx = this.$refs.network.getContext('2d');
+      const diskCtx = this.$refs.disk.getContext('2d');
+      const accent = cssVar('--accent'), violet = cssVar('--violet'), ok = cssVar('--ok'), warn = cssVar('--warn');
       charts = {
-        cpu: new Chart(this.$refs.cpu.getContext('2d'), {
+        cpu: new Chart(cpuCtx, {
           type: 'line',
-          data: { labels: [], datasets: [{ label: 'CPU Usage (%)', data: [], borderColor: 'rgb(54,162,235)', backgroundColor: 'rgba(54,162,235,0.1)', fill: true, tension: 0.1 }] },
-          options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, max: 100, title: { display: true, text: 'CPU Usage (%)' } } } }
+          data: { labels: [], datasets: [dataset(cpuCtx, 'CPU Usage (%)', accent, true)] },
+          options: themedOptions({ pct: true, max: 100 }),
         }),
-        memory: new Chart(this.$refs.memory.getContext('2d'), {
+        memory: new Chart(memCtx, {
           type: 'line',
-          data: { labels: [], datasets: [{ label: 'Memory Usage (%)', data: [], borderColor: 'rgb(255,99,132)', backgroundColor: 'rgba(255,99,132,0.1)', fill: true, tension: 0.1 }] },
-          options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, max: 100, title: { display: true, text: 'Memory Usage (%)' } } } }
+          data: { labels: [], datasets: [dataset(memCtx, 'Memory Usage (%)', violet, true)] },
+          options: themedOptions({ pct: true, max: 100 }),
         }),
-        network: new Chart(this.$refs.network.getContext('2d'), {
+        network: new Chart(netCtx, {
           type: 'line',
           data: { labels: [], datasets: [
-            { label: 'Network In (MB)', data: [], borderColor: 'rgb(75,192,192)', backgroundColor: 'rgba(75,192,192,0.1)', fill: false, tension: 0.1 },
-            { label: 'Network Out (MB)', data: [], borderColor: 'rgb(255,205,86)', backgroundColor: 'rgba(255,205,86,0.1)', fill: false, tension: 0.1 }
+            dataset(netCtx, 'Network In (MB)', ok, false),
+            dataset(netCtx, 'Network Out (MB)', accent, false),
           ] },
-          options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, title: { display: true, text: 'Network I/O (MB)' } } } }
+          options: themedOptions(),
         }),
-        disk: new Chart(this.$refs.disk.getContext('2d'), {
+        disk: new Chart(diskCtx, {
           type: 'line',
           data: { labels: [], datasets: [
-            { label: 'Disk Read (MB)', data: [], borderColor: 'rgb(153,102,255)', backgroundColor: 'rgba(153,102,255,0.1)', fill: false, tension: 0.1 },
-            { label: 'Disk Write (MB)', data: [], borderColor: 'rgb(255,159,64)', backgroundColor: 'rgba(255,159,64,0.1)', fill: false, tension: 0.1 }
+            dataset(diskCtx, 'Disk Read (MB)', warn, false),
+            dataset(diskCtx, 'Disk Write (MB)', accent, false),
           ] },
-          options: { ...base, scales: { ...base.scales, y: { ...base.scales.y, title: { display: true, text: 'Disk I/O (MB)' } } } }
+          options: themedOptions(),
         }),
       };
       // $watch fires after x-model commits the new value; @change fires concurrently

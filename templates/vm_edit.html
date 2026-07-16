@@ -126,60 +126,54 @@
 {% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-            <h1><i class="bi bi-gear"></i> Edit {{ 'Container' if vm_type == 'lxc' else 'VM' }} {{ vm.name }}</h1>
-            <div>
-                <span class="badge bg-{{ 'success' if vm.status == 'running' else 'danger' if vm.status == 'stopped' else 'warning' }}">
-                    {{ vm.status }}
-                </span>
-                <a href="{{ url_for('vm_detail', node=node, vmid=vm.vmid) }}" class="btn btn-outline-secondary ms-2">
-                    <i class="bi bi-arrow-left"></i> Back to Details
-                </a>
-            </div>
-        </div>
+<div class="d-flex align-items-center flex-wrap gap-3 mb-3">
+    <div class="me-auto">
+        <div class="sec-title">Edit {{ 'Container' if vm_type == 'lxc' else 'VM' }} {{ vm.name }}</div>
     </div>
+    <span class="pill {{ 'run' if vm.status == 'running' else 'stop' if vm.status == 'stopped' else 'maint' }}"><span class="d"></span>{{ vm.status }}</span>
+    <a href="{{ url_for('vm_detail', node=node, vmid=vm.vmid) }}" class="btn-x">
+        <i class="bi bi-arrow-left"></i> Back to Details
+    </a>
 </div>
 
 {% if vm.status == 'running' %}
-<div class="alert alert-warning">
+<div class="callout warn mb-3">
     <i class="bi bi-exclamation-triangle"></i>
-    <strong>Warning:</strong> Some configuration changes require the {{ 'container' if vm_type == 'lxc' else 'VM' }} to be stopped to take effect.
-    Memory and CPU changes can be applied to running {{ 'containers' if vm_type == 'lxc' else 'VMs' }} but may need a restart for optimal performance.
+    <div><div class="t">Warning</div><div class="b">Some configuration changes require the {{ 'container' if vm_type == 'lxc' else 'VM' }} to be stopped to take effect.
+    Memory and CPU changes can be applied to running {{ 'containers' if vm_type == 'lxc' else 'VMs' }} but may need a restart for optimal performance.</div></div>
 </div>
 {% endif %}
 
 <div class="row justify-content-center">
     <div class="col-md-8">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-{{ 'box' if vm_type == 'lxc' else 'cpu' }}"></i> {{ 'Container' if vm_type == 'lxc' else 'VM' }} Configuration</h5>
+        <div class="card-x">
+            <div class="cx-head">
+                <span class="cx-title"><i class="bi bi-{{ 'box' if vm_type == 'lxc' else 'cpu' }}"></i> {{ 'Container' if vm_type == 'lxc' else 'VM' }} Configuration</span>
             </div>
-            <div class="card-body">
+            <div class="cx-body">
                 <form id="vmConfigForm">
                     <!-- General Settings (LXC only) -->
                     {% if vm_type == 'lxc' %}
                     <div class="mb-4">
-                        <h6 class="text-primary mb-3"><i class="bi bi-gear"></i> General Settings</h6>
+                        <div class="sub-h" style="margin-top:0"><i class="bi bi-gear"></i> General Settings</div>
 
-                        <div class="mb-3">
-                            <label for="hostname" class="form-label">Hostname</label>
-                            <input type="text" class="form-control" id="hostname" name="hostname"
+                        <div class="field">
+                            <label for="hostname">Hostname</label>
+                            <input type="text" class="inp" id="hostname" name="hostname"
                                    value="{{ config.hostname or '' }}" pattern="[a-zA-Z0-9\-]+">
-                            <div class="form-text">Container hostname (alphanumeric and hyphens only)</div>
+                            <div class="hint">Container hostname (alphanumeric and hyphens only)</div>
                         </div>
                     </div>
                     {% endif %}
 
                     <!-- CPU Configuration -->
                     <div class="mb-4">
-                        <h6 class="text-primary mb-3"><i class="bi bi-cpu"></i> CPU Configuration</h6>
+                        <div class="sub-h" style="margin-top:0"><i class="bi bi-cpu"></i> CPU Configuration</div>
 
                         {% if vm_type != 'lxc' %}
-                        <div class="mb-3">
-                            <label for="cpu_type" class="form-label">CPU Type</label>
-                            <select class="form-select" id="cpu_type" name="cpu_type">
+                        <div class="field">
+                            <label for="cpu_type">CPU Type</label>
+                            <select class="inp" id="cpu_type" name="cpu_type">
                                 <option value="host">Host (Recommended)</option>
                                 <option value="kvm64">KVM64</option>
                                 <option value="qemu64">QEMU64</option>
@@ -190,21 +184,25 @@
                         </div>
 
                         <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <label for="sockets" class="form-label">Sockets</label>
-                                <input type="number" class="form-control" id="sockets" name="sockets"
-                                       min="1" max="4" value="{{ config.sockets or 1 }}">
+                            <div class="col-md-6">
+                                <div class="field">
+                                    <label for="sockets">Sockets</label>
+                                    <input type="number" class="inp" id="sockets" name="sockets"
+                                           min="1" max="4" value="{{ config.sockets or 1 }}">
+                                </div>
                             </div>
-                            <div class="col-md-6 mb-3">
-                                <label for="cores" class="form-label">Cores</label>
-                                <input type="number" class="form-control" id="cores" name="cores"
-                                       min="1" max="128" value="{{ config.cores or 1 }}">
+                            <div class="col-md-6">
+                                <div class="field">
+                                    <label for="cores">Cores</label>
+                                    <input type="number" class="inp" id="cores" name="cores"
+                                           min="1" max="128" value="{{ config.cores or 1 }}">
+                                </div>
                             </div>
                         </div>
                         {% else %}
-                        <div class="mb-3">
-                            <label for="cores" class="form-label">CPU Cores</label>
-                            <input type="number" class="form-control" id="cores" name="cores"
+                        <div class="field">
+                            <label for="cores">CPU Cores</label>
+                            <input type="number" class="inp" id="cores" name="cores"
                                    min="1" max="128" value="{{ config.cores or 1 }}">
                         </div>
                         {% endif %}
@@ -212,19 +210,23 @@
 
                     <!-- Memory Configuration -->
                     <div class="mb-4">
-                        <h6 class="text-primary mb-3"><i class="bi bi-memory"></i> Memory Configuration</h6>
+                        <div class="sub-h" style="margin-top:0"><i class="bi bi-memory"></i> Memory Configuration</div>
 
                         <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <label for="memory" class="form-label">Memory (MB)</label>
-                                <input type="number" class="form-control" id="memory" name="memory"
-                                       min="64" max="4194304" step="64" value="{{ config.memory or 512 }}">
+                            <div class="col-md-6">
+                                <div class="field">
+                                    <label for="memory">Memory (MB)</label>
+                                    <input type="number" class="inp" id="memory" name="memory"
+                                           min="64" max="4194304" step="64" value="{{ config.memory or 512 }}">
+                                </div>
                             </div>
                             {% if vm_type == 'lxc' %}
-                            <div class="col-md-6 mb-3">
-                                <label for="swap" class="form-label">Swap (MB)</label>
-                                <input type="number" class="form-control" id="swap" name="swap"
-                                       min="0" max="4194304" step="64" value="{{ config.swap or 512 }}">
+                            <div class="col-md-6">
+                                <div class="field">
+                                    <label for="swap">Swap (MB)</label>
+                                    <input type="number" class="inp" id="swap" name="swap"
+                                           min="0" max="4194304" step="64" value="{{ config.swap or 512 }}">
+                                </div>
                             </div>
                             {% endif %}
                         </div>
@@ -233,11 +235,11 @@
                     <!-- Display Configuration (QEMU VMs only) -->
                     {% if vm_type|default('qemu') == 'qemu' %}
                     <div class="mb-4">
-                        <h6 class="text-primary mb-3"><i class="bi bi-display"></i> Display Configuration</h6>
+                        <div class="sub-h" style="margin-top:0"><i class="bi bi-display"></i> Display Configuration</div>
 
-                        <div class="mb-3">
-                            <label for="vga_type" class="form-label">Display Type</label>
-                            <select class="form-select" id="vga_type" name="vga_type">
+                        <div class="field">
+                            <label for="vga_type">Display Type</label>
+                            <select class="inp" id="vga_type" name="vga_type">
                                 <option value="std">Standard VGA (std)</option>
                                 <option value="cirrus">Cirrus Logic (cirrus)</option>
                                 <option value="vmware">VMware Compatible (vmware)</option>
@@ -247,7 +249,7 @@
                                 <option value="serial0">Serial Terminal (serial0)</option>
                                 <option value="none">None (headless)</option>
                             </select>
-                            <div class="form-text">
+                            <div class="hint">
                                 <strong>std</strong> - Standard VGA, most compatible<br>
                                 <strong>qxl</strong> - Best for SPICE remote access with multi-monitor support<br>
                                 <strong>virtio</strong> - Best performance for Linux guests with virtio drivers<br>
@@ -255,19 +257,19 @@
                             </div>
                         </div>
 
-                        <div class="mb-3" id="vgaMemoryContainer">
-                            <label for="vga_memory" class="form-label">VGA Memory (MB)</label>
-                            <input type="number" class="form-control" id="vga_memory" name="vga_memory"
+                        <div class="field" id="vgaMemoryContainer">
+                            <label for="vga_memory">VGA Memory (MB)</label>
+                            <input type="number" class="inp" id="vga_memory" name="vga_memory"
                                    min="4" max="512" step="4" value="16">
-                            <div class="form-text">Video memory in MB (4-512). Default is 16MB. Higher values useful for higher resolutions.</div>
+                            <div class="hint">Video memory in MB (4-512). Default is 16MB. Higher values useful for higher resolutions.</div>
                         </div>
                     </div>
                     {% endif %}
 
                     <!-- Disk Configuration -->
                     <div class="mb-4">
-                        <h6 class="text-primary mb-3"><i class="bi bi-hdd"></i> Disk Configuration</h6>
-                        
+                        <div class="sub-h" style="margin-top:0"><i class="bi bi-hdd"></i> Disk Configuration</div>
+
                         <div id="diskInterfaces">
                             <!-- Disk interfaces will be loaded here -->
                         </div>
@@ -277,8 +279,8 @@
                     {% if vm_type|default('qemu') == 'qemu' %}
                     <div class="mb-4">
                         <div class="d-flex justify-content-between align-items-center mb-3">
-                            <h6 class="text-primary mb-0"><i class="bi bi-disc"></i> ISO/CD-ROM Images</h6>
-                            <button type="button" class="btn btn-sm btn-success" id="attachIsoBtn">
+                            <div class="sub-h mb-0" style="margin-top:0"><i class="bi bi-disc"></i> ISO/CD-ROM Images</div>
+                            <button type="button" class="btn-x sm primary" id="attachIsoBtn">
                                 <i class="bi bi-plus-circle"></i> Attach ISO
                             </button>
                         </div>
@@ -290,7 +292,7 @@
 
                     <!-- Cloud-init Drive -->
                     <div class="mb-4" id="cloudinitSection" style="display: none;">
-                        <h6 class="text-primary mb-3"><i class="bi bi-cloud-arrow-up"></i> Cloud-init Drive</h6>
+                        <div class="sub-h" style="margin-top:0"><i class="bi bi-cloud-arrow-up"></i> Cloud-init Drive</div>
                         <div id="cloudinitDrive">
                             <!-- Cloud-init drive will be loaded here -->
                         </div>
@@ -300,58 +302,63 @@
                     <!-- Network Interfaces -->
                     <div class="mb-4">
                         <div class="d-flex justify-content-between align-items-center mb-3">
-                            <h6 class="text-primary mb-0"><i class="bi bi-diagram-3"></i> Network Interfaces</h6>
-                            <button type="button" class="btn btn-sm btn-success" id="addNetworkBtn">
+                            <div class="sub-h mb-0" style="margin-top:0"><i class="bi bi-diagram-3"></i> Network Interfaces</div>
+                            <button type="button" class="btn-x sm primary" id="addNetworkBtn">
                                 <i class="bi bi-plus-circle"></i> Add Interface
                             </button>
                         </div>
-                        
+
                         <div id="networkInterfaces">
                             <!-- Network interfaces will be loaded here -->
                         </div>
                     </div>
 
-                    <!-- Boot Options -->
+                    <!-- Boot Options. NOTE: outer div keeps class="mb-4" verbatim —
+                         static/js/vm_edit inline script (loadBootOrder) selects it via
+                         document.querySelector('.mb-4:has(#bootOrderList)'). Do not rename. -->
                     <div class="mb-4">
-                        <h6 class="text-primary mb-3"><i class="bi bi-power"></i> Boot Options</h6>
+                        <div class="sub-h" style="margin-top:0"><i class="bi bi-power"></i> Boot Options</div>
 
                         {% if vm_type != 'lxc' %}
-                        <div class="mb-3">
-                            <label for="bootOrder" class="form-label">Boot Order</label>
-                            <div class="card">
-                                <div class="card-header bg-light">
-                                    <small class="text-muted">Drag and drop to reorder boot devices</small>
+                        <div class="field">
+                            <label for="bootOrder">Boot Order</label>
+                            <div class="card-x">
+                                <div class="cx-head">
+                                    <small class="text-muted-2">Drag and drop to reorder boot devices</small>
                                 </div>
-                                <div class="card-body p-2">
+                                <div class="cx-body tight">
                                     <div id="bootOrderList" class="list-group list-group-flush">
                                         <!-- Boot order items will be loaded here -->
                                     </div>
                                 </div>
                             </div>
-                            <div class="form-text mt-2">
+                            <div class="hint mt-2">
                                 The VM will attempt to boot from devices in the order shown above.
                                 Available devices depend on your VM configuration.
                             </div>
                         </div>
                         {% endif %}
 
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="autostart" name="autostart">
-                            <label class="form-check-label" for="autostart">
-                                Auto-start {{ 'Container' if vm_type == 'lxc' else 'VM' }} on node boot
-                            </label>
-                            <div class="form-text">{{ 'Container' if vm_type == 'lxc' else 'VM' }} will automatically start when the Proxmox node boots</div>
+                        <div class="field mb-0">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="autostart" name="autostart">
+                                <label class="form-check-label" for="autostart">
+                                    Auto-start {{ 'Container' if vm_type == 'lxc' else 'VM' }} on node boot
+                                </label>
+                            </div>
+                            <div class="hint">{{ 'Container' if vm_type == 'lxc' else 'VM' }} will automatically start when the Proxmox node boots</div>
                         </div>
                     </div>
 
-                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
-                        <button type="button" class="btn btn-secondary" onclick="window.history.back()">
+                    <div class="divider my-4"></div>
+                    <div class="d-flex gap-2 justify-content-end flex-wrap">
+                        <button type="button" class="btn-x" onclick="window.history.back()">
                             <i class="bi bi-x-circle"></i> Cancel
                         </button>
-                        <button type="button" class="btn btn-primary" id="saveBtn">
+                        <button type="button" class="btn-x primary" id="saveBtn">
                             <i class="bi bi-check-circle"></i> Save
                         </button>
-                        <button type="button" class="btn btn-success" id="saveCloseBtn">
+                        <button type="button" class="btn-x primary" id="saveCloseBtn">
                             <i class="bi bi-check2-square"></i> Save and Close
                         </button>
                     </div>
@@ -397,12 +404,10 @@
        }
      }">
     <div class="col-md-8">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-key"></i> Reset Root Password</h5>
-            </div>
-            <div class="card-body">
-                <p class="text-muted small mb-3">
+        <div class="card-x">
+            <div class="cx-head"><span class="cx-title"><i class="bi bi-key"></i> Reset Root Password</span></div>
+            <div class="cx-body">
+                <p class="text-muted-2 small mb-3">
                     {% if vm_type == 'lxc' %}
                     The container must be <strong>running</strong>. Uses <code>chpasswd</code> via <code>pct exec</code>.
                     {% else %}
@@ -412,26 +417,30 @@
                 </p>
                 <div class="row g-2 align-items-end">
                     <div class="col-sm-4">
-                        <label class="form-label">New password</label>
-                        <input type="password" class="form-control" x-model="pw"
-                               @keydown.enter="submit()" autocomplete="new-password">
+                        <div class="field mb-0">
+                            <label>New password</label>
+                            <input type="password" class="inp" x-model="pw"
+                                   @keydown.enter="submit()" autocomplete="new-password">
+                        </div>
                     </div>
                     <div class="col-sm-4">
-                        <label class="form-label">Confirm password</label>
-                        <input type="password" class="form-control" x-model="pw2"
-                               @keydown.enter="submit()" autocomplete="new-password">
+                        <div class="field mb-0">
+                            <label>Confirm password</label>
+                            <input type="password" class="inp" x-model="pw2"
+                                   @keydown.enter="submit()" autocomplete="new-password">
+                        </div>
                     </div>
                     <div class="col-sm-4">
-                        <button class="btn btn-warning w-100" @click="submit()" :disabled="busy">
+                        <button class="btn-x primary w-100" style="justify-content:center" @click="submit()" :disabled="busy">
                             <span x-show="busy" class="spinner-border spinner-border-sm me-1"></span>
                             <i x-show="!busy" class="bi bi-key-fill"></i>
                             Reset Password
                         </button>
                     </div>
                 </div>
-                <div x-show="error" class="alert alert-danger py-2 small mt-2 mb-0" x-text="error"></div>
-                <div x-show="success && !rebootRequired" class="alert alert-success py-2 small mt-2 mb-0" x-text="success"></div>
-                <div x-show="success && rebootRequired" class="alert alert-warning py-2 small mt-2 mb-0">
+                <div x-show="error" class="callout danger mt-2 mb-0 py-2"><span x-text="error"></span></div>
+                <div x-show="success && !rebootRequired" class="callout ok mt-2 mb-0 py-2"><span x-text="success"></span></div>
+                <div x-show="success && rebootRequired" class="callout warn mt-2 mb-0 py-2">
                     <i class="bi bi-arrow-clockwise"></i> <span x-text="success"></span>
                 </div>
             </div>
@@ -468,12 +477,10 @@
        }
      }">
     <div class="col-md-8">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-cpu"></i> QEMU Guest Agent</h5>
-            </div>
-            <div class="card-body">
-                <p class="text-muted small mb-3">
+        <div class="card-x">
+            <div class="cx-head"><span class="cx-title"><i class="bi bi-cpu"></i> QEMU Guest Agent</span></div>
+            <div class="cx-body">
+                <p class="text-muted-2 small mb-3">
                     Enables improved guest integration: graceful shutdown, IP reporting,
                     file system freeze, and in-guest password reset.
                     Requires <code>qemu-guest-agent</code> installed in the guest OS.
@@ -484,14 +491,14 @@
                                id="agentToggle" x-model="enabled" :disabled="busy"
                                style="width: 3em; height: 1.5em; cursor: pointer;">
                         <label class="form-check-label ms-2" for="agentToggle" style="cursor: pointer;">
-                            <span x-show="enabled" class="text-success fw-semibold">Enabled</span>
-                            <span x-show="!enabled" class="text-muted">Disabled</span>
+                            <span x-show="enabled" class="fw-semibold" style="color:var(--ok)">Enabled</span>
+                            <span x-show="!enabled" class="text-muted-2">Disabled</span>
                         </label>
                     </div>
                     <span x-show="busy" class="spinner-border spinner-border-sm text-secondary"></span>
                 </div>
-                <div x-show="error" class="alert alert-danger py-2 small mt-2 mb-0" x-text="error"></div>
-                <div x-show="success" class="alert alert-success py-2 small mt-2 mb-0">
+                <div x-show="error" class="callout danger mt-2 mb-0 py-2"><span x-text="error"></span></div>
+                <div x-show="success" class="callout info mt-2 mb-0 py-2">
                     <i class="bi bi-info-circle"></i> <span x-text="success"></span>
                 </div>
             </div>
@@ -506,19 +513,19 @@
      x-data="cloudInit('{{ node }}', '{{ vm.vmid }}')"
      data-vm-name="{{ vm.name | e }}">
     <div class="col-md-8">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="bi bi-cloud-fill"></i> Cloud-Init</h5>
+        <div class="card-x">
+            <div class="cx-head d-flex justify-content-between align-items-center">
+                <span class="cx-title"><i class="bi bi-cloud-fill"></i> Cloud-Init</span>
                 <div class="d-flex align-items-center gap-2">
                     <span x-show="loading" class="spinner-border spinner-border-sm text-secondary"></span>
-                    <button class="btn btn-sm btn-outline-secondary" @click="regenerate()" :disabled="regenBusy"
+                    <button class="btn-x sm" @click="regenerate()" :disabled="regenBusy"
                             title="Regenerate the cloud-init drive from the current config (qm cloudinit update). Reboot the VM to apply — an already-provisioned guest may also need 'cloud-init clean' inside it first.">
                         <span x-show="regenBusy" class="spinner-border spinner-border-sm me-1"></span>
                         <i x-show="!regenBusy" class="bi bi-arrow-clockwise"></i> Regenerate drive
                     </button>
                 </div>
             </div>
-            <div class="card-body">
+            <div class="cx-body">
                 <ul class="nav nav-tabs mb-3">
                     <li class="nav-item">
                         <a class="nav-link" :class="{active: tab==='native'}" href="#"
@@ -586,7 +593,7 @@
                     <div class="mt-3 d-flex gap-2 align-items-center">
                         <button class="btn btn-sm btn-primary" @click="saveNative()" :disabled="nativeBusy">
                             <span x-show="nativeBusy" class="spinner-border spinner-border-sm me-1"></span>
-                            <i x-show="!nativeBusy" class="bi bi-floppy"></i> Save Settings
+                            <i x-show="!nativeBusy" class="bi bi-save"></i> Save Settings
                         </button>
                     </div>
                     <div x-show="nativeError" class="alert alert-danger py-2 small mt-2 mb-0" x-text="nativeError"></div>
@@ -776,7 +783,7 @@
                                 @click="saveSnippet()"
                                 :disabled="snippetBusy || !snippetContent.trim() || !snippetStorage">
                             <span x-show="snippetBusy" class="spinner-border spinner-border-sm me-1"></span>
-                            <i x-show="!snippetBusy" class="bi bi-floppy"></i> Save &amp; Attach
+                            <i x-show="!snippetBusy" class="bi bi-save"></i> Save &amp; Attach
                         </button>
                     </div>
                     <div x-show="snippetError" class="alert alert-danger py-2 small mt-2 mb-0" x-text="snippetError"></div>
@@ -794,21 +801,21 @@
 <!-- LXC Advanced / Passthrough -->
 <div class="row justify-content-center mt-3">
     <div class="col-md-8">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="bi bi-sliders2"></i> Advanced / Passthrough</h5>
+        <div class="card-x">
+            <div class="cx-head d-flex justify-content-between align-items-center">
+                <span class="cx-title"><i class="bi bi-sliders"></i> Advanced / Passthrough</span>
                 <div class="d-flex gap-2 align-items-center">
-                    <small class="text-muted fst-italic" x-show="hasBackup" x-text="'Snapshot: ' + backupTimestamp"></small>
-                    <button class="btn btn-sm btn-outline-secondary" x-show="hasBackup"
+                    <small class="text-faint fst-italic" x-show="hasBackup" x-text="'Snapshot: ' + backupTimestamp"></small>
+                    <button class="btn-x sm" x-show="hasBackup"
                             @click="restore()" title="Revert to pre-write snapshot">
                         <i class="bi bi-arrow-counterclockwise"></i> Restore
                     </button>
-                    <button class="btn btn-sm btn-outline-primary" @click="refresh()" title="Refresh">
+                    <button class="icon-btn" style="width:32px;height:32px;font-size:15px" @click="refresh()" title="Refresh">
                         <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
                     </button>
                 </div>
             </div>
-            <div class="card-body">
+            <div class="cx-body">
                 <template x-if="loading">
                     <div class="text-center py-3">
                         <div class="spinner-border spinner-border-sm" role="status"></div>
@@ -914,7 +921,7 @@
                     </button>
                     <hr class="my-3">
                     <!-- idmap -->
-                    <h6 class="text-primary mb-2"><i class="bi bi-person-lock"></i> UID/GID Mapping (idmap)</h6>
+                    <h6 class="text-primary mb-2"><i class="bi bi-shield-lock"></i> UID/GID Mapping (idmap)</h6>
                     <p x-show="idmaps.length === 0" class="text-muted small mb-2">No idmap entries (container uses default subuid/subgid mapping).</p>
                     <div class="mb-2" x-show="idmaps.length > 0">
                         <template x-for="m in idmaps" :key="m.key">
@@ -940,14 +947,14 @@
 <!-- LXC Profiles Card -->
 <div class="row justify-content-center mt-3">
     <div class="col-md-8">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="bi bi-collection"></i> Apply Config Profile</h5>
-                <button class="btn btn-sm btn-outline-primary" @click="loadProfiles()" title="Refresh">
+        <div class="card-x">
+            <div class="cx-head d-flex justify-content-between align-items-center">
+                <span class="cx-title"><i class="bi bi-collection"></i> Apply Config Profile</span>
+                <button class="icon-btn" style="width:32px;height:32px;font-size:15px" @click="loadProfiles()" title="Refresh">
                     <i class="bi bi-arrow-clockwise"></i>
                 </button>
             </div>
-            <div class="card-body">
+            <div class="cx-body">
                 <template x-if="loading">
                     <div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div><span class="ms-2">Loading…</span></div>
                 </template>
@@ -1134,7 +1141,7 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-person-lock"></i> Add UID/GID Mapping</h5>
+                <h5 class="modal-title"><i class="bi bi-shield-lock"></i> Add UID/GID Mapping</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
