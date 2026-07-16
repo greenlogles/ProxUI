@@ -240,9 +240,9 @@
                                     <td>
                                         <div class="nm" style="font-size:12.5px" x-text="displayName(task)"></div>
                                         <div class="text-faint" style="font-size:11px">
-                                            Started: <span x-text="task.start_time_formatted || 'Unknown'"></span>
-                                            <template x-if="task.end_time_formatted">
-                                                <span> · Ended: <span x-text="task.end_time_formatted"></span></span>
+                                            Started: <span x-text="fmtDateTime(task.starttime)"></span>
+                                            <template x-if="task.endtime">
+                                                <span> · Ended: <span x-text="fmtDateTime(task.endtime)"></span></span>
                                             </template>
                                         </div>
                                     </td>
@@ -604,6 +604,7 @@ function vmTasks(node, vmid) {
     tasks: [], loading: true, error: '', _poller: null,
     displayName(t) { return ProxUtils.taskTypeName(t.type); },
     statusClass(t) { return ALLOWED_STATUS.has(t.status_class) ? t.status_class : 'secondary'; },
+    fmtDateTime: ProxUtils.formatDateTime,
     async load() {
       this.loading = true; this.error = '';
       try { this.tasks = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/tasks`); }
@@ -724,11 +725,12 @@ function vmMetrics(node, vmid) {
         const data = await ProxUtils.apiJson(`/api/vm/${node}/${vmid}/metrics?timeframe=${this.timeframe}`);
         if (!data.error) {
           const h = data.historical;
-          charts.cpu.data.labels = h.labels; charts.cpu.data.datasets[0].data = h.cpu; charts.cpu.update('none');
-          charts.memory.data.labels = h.labels; charts.memory.data.datasets[0].data = h.memory; charts.memory.update('none');
-          charts.network.data.labels = h.labels; charts.network.data.datasets[0].data = h.network_in; charts.network.data.datasets[1].data = h.network_out; charts.network.update('none');
-          charts.disk.data.labels = h.labels; charts.disk.data.datasets[0].data = h.disk_read; charts.disk.data.datasets[1].data = h.disk_write; charts.disk.update('none');
-          this.lastUpdate = `Last update: ${data.timestamp}`;
+          const labels = h.labels.map(ts => ProxUtils.formatChartLabel(ts, this.timeframe));
+          charts.cpu.data.labels = labels; charts.cpu.data.datasets[0].data = h.cpu; charts.cpu.update('none');
+          charts.memory.data.labels = labels; charts.memory.data.datasets[0].data = h.memory; charts.memory.update('none');
+          charts.network.data.labels = labels; charts.network.data.datasets[0].data = h.network_in; charts.network.data.datasets[1].data = h.network_out; charts.network.update('none');
+          charts.disk.data.labels = labels; charts.disk.data.datasets[0].data = h.disk_read; charts.disk.data.datasets[1].data = h.disk_write; charts.disk.update('none');
+          this.lastUpdate = `Last update: ${new Date().toLocaleTimeString()}`;
         }
       } catch(e) {
         this.lastUpdate = `Error: ${e.message}`;

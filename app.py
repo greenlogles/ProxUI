@@ -3015,6 +3015,195 @@ def cluster():
     return render_template("cluster.html", cluster=cluster_info)
 
 
+@app.route("/node/<node>")
+def node_detail(node):
+    """Show detailed status, storage, disks, and guests for a single node"""
+    node_info = next((n for n in cluster_nodes if n["name"] == node), None)
+    if not node_info:
+        flash(f"Node '{node}' not found", "error")
+        return redirect(url_for("cluster"))
+
+    if node_info.get("status") != "online":
+        return render_template(
+            "node_detail.html",
+            node=node,
+            online=False,
+            status=None,
+            storages=[],
+            guests=[],
+        )
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return render_template(
+            "node_detail.html",
+            node=node,
+            online=False,
+            status=None,
+            storages=[],
+            guests=[],
+        )
+
+    try:
+        status = proxmox.nodes(node).status.get()
+    except Exception as e:
+        flash(f"Error loading node status: {e}", "error")
+        return render_template(
+            "node_detail.html",
+            node=node,
+            online=False,
+            status=None,
+            storages=[],
+            guests=[],
+        )
+
+    # All storages configured on this node (unfiltered by content type).
+    node_storages = []
+    try:
+        for storage in proxmox.nodes(node).storage.get():
+            total = storage.get("total", 0) or 0
+            used = storage.get("used", 0) or 0
+            storage["used_percent"] = (used / total * 100) if total > 0 else 0
+            node_storages.append(storage)
+        node_storages.sort(key=lambda s: s.get("storage", "").lower())
+    except Exception as e:
+        print(f"Error getting storages for node {node}: {e}")
+
+    # Guests (VMs/containers) living on this node.
+    guests = [r for r in get_all_vms_and_containers() if r.get("node") == node]
+    guests.sort(key=lambda g: (g.get("name") or "").lower())
+
+    return render_template(
+        "node_detail.html",
+        node=node,
+        online=True,
+        status=status,
+        storages=node_storages,
+        guests=guests,
+    )
+
+
+@app.route("/api/node/<node>/metrics")
+def api_node_metrics(node):
+    """Historical CPU/load/memory/network metrics for a node (RRD-backed)."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    timeframe = request.args.get("timeframe", "day")
+    timeframe_mapping = {
+        "hour": "hour",
+        "day": "day",
+        "week": "week",
+        "month": "month",
+        "year": "year",
+    }
+    proxmox_timeframe = timeframe_mapping.get(timeframe, "day")
+
+    try:
+        status = proxmox.nodes(node).status.get()
+        try:
+            rrd_data = proxmox.nodes(node).rrddata.get(timeframe=proxmox_timeframe)
+        except Exception:
+            rrd_data = []
+
+        chart_data = {
+            "labels": [],
+            "cpu": [],
+            "loadavg": [],
+            "memory": [],
+            "network_in": [],
+            "network_out": [],
+        }
+
+        for entry in rrd_data:
+            timestamp = entry.get("time", 0)
+            if not timestamp:
+                continue
+
+            mem_total = entry.get("memtotal") or 0
+            mem_used = entry.get("memused") or 0
+
+            # Send the raw Unix timestamp (seconds) — the browser formats it
+            # in the viewer's own local timezone, so this is correct
+            # everywhere regardless of what timezone the server runs in.
+            chart_data["labels"].append(timestamp)
+            chart_data["cpu"].append(
+                (entry.get("cpu", 0) * 100) if entry.get("cpu") is not None else 0
+            )
+            chart_data["loadavg"].append(
+                entry.get("loadavg", 0) if entry.get("loadavg") is not None else 0
+            )
+            chart_data["memory"].append(
+                (mem_used / mem_total * 100) if mem_total else 0
+            )
+            chart_data["network_in"].append(
+                (entry.get("netin", 0) or 0) / (1024 * 1024)
+            )  # MB
+            chart_data["network_out"].append(
+                (entry.get("netout", 0) or 0) / (1024 * 1024)
+            )  # MB
+
+        loadavg = status.get("loadavg") or [0, 0, 0]
+        mem = status.get("memory", {}) or {}
+        current = {
+            "cpu_percent": (status.get("cpu", 0) or 0) * 100,
+            "cores": status.get("cpuinfo", {}).get("cpus", 1),
+            "loadavg": loadavg,
+            "memory": {
+                "used": mem.get("used", 0),
+                "total": mem.get("total", 0),
+                "usage_percent": (
+                    (mem.get("used", 0) / mem.get("total", 1)) * 100
+                    if mem.get("total")
+                    else 0
+                ),
+            },
+            "uptime": status.get("uptime", 0),
+        }
+
+        return jsonify(
+            {
+                "current": current,
+                "historical": chart_data,
+                "timeframe": timeframe,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/node/<node>/disks")
+def api_node_disks(node):
+    """List local disk devices for a node, including SMART health/model/serial."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        disks = proxmox.nodes(node).disks.list.get()
+        disks.sort(key=lambda d: d.get("devpath", ""))
+        return jsonify(disks)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/node/<node>/zfs")
+def api_node_zfs(node):
+    """List ZFS pools for a node, if any (empty list if ZFS is not in use)."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        pools = proxmox.nodes(node).disks.zfs.get()
+        return jsonify(pools)
+    except Exception as e:
+        # No ZFS support / not configured on this node — not a real error.
+        return jsonify([])
+
+
 @app.route("/api/nodes")
 def api_nodes():
     """API endpoint to get all cluster nodes"""
@@ -4177,20 +4366,10 @@ def api_vm_metrics(node, vmid):
         for entry in rrd_data:
             timestamp = entry.get("time", 0)
             if timestamp:
-                # Format timestamp based on timeframe
-                dt = datetime.fromtimestamp(timestamp)
-                if timeframe == "hour":
-                    label = dt.strftime("%H:%M")
-                elif timeframe == "day":
-                    label = dt.strftime("%H:%M")
-                elif timeframe == "week":
-                    label = dt.strftime("%m/%d %H:%M")
-                elif timeframe == "month":
-                    label = dt.strftime("%m/%d")
-                else:  # year
-                    label = dt.strftime("%Y-%m")
-
-                chart_data["labels"].append(label)
+                # Send the raw Unix timestamp (seconds) — the browser formats
+                # it in the viewer's own local timezone, so this is correct
+                # everywhere regardless of what timezone the server runs in.
+                chart_data["labels"].append(timestamp)
                 chart_data["cpu"].append(
                     (entry.get("cpu", 0) * 100) if entry.get("cpu") is not None else 0
                 )

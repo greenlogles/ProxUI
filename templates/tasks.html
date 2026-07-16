@@ -60,7 +60,7 @@
                             </td>
                             <td class="text-muted-2" x-text="task.node || 'Unknown'"></td>
                             <td class="text-muted-2 mono" style="font-size:12px" x-text="task.user || ''"></td>
-                            <td class="text-muted-2 mono" style="font-size:12px" x-text="task.start_time_formatted || 'Unknown'"></td>
+                            <td class="text-muted-2 mono" style="font-size:12px" x-text="fmtDateTime(task.starttime)"></td>
                             <td class="num mono text-muted-2" x-text="taskDuration(task)"></td>
                         </tr>
                     </template>
@@ -89,6 +89,8 @@
       taskName(task) {
         return ProxUtils.taskTypeName(task.type);
       },
+
+      fmtDateTime: ProxUtils.formatDateTime,
 
       taskStatusClass(task) {
         return ALLOWED_STATUS.has(task.status_class) ? task.status_class : 'secondary';

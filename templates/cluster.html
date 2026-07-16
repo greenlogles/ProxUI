@@ -14,12 +14,17 @@
         <div class="card-x">
             <div class="cx-head">
                 <span class="nc-dot {{ 'offline' if node.error else 'online' }}" style="width:10px;height:10px"></span>
-                <span class="cx-title"><i class="bi bi-server"></i> {{ node.host }}</span>
+                <a href="{{ url_for('node_detail', node=node.host) }}" class="cx-title" style="color:var(--text)">
+                    <i class="bi bi-server"></i> {{ node.host }}
+                </a>
                 {% if node.error %}
                 <span class="pill err ms-2"><span class="d"></span>Offline</span>
                 {% else %}
                 <span class="pill ok ms-2"><span class="d"></span>Online</span>
                 {% endif %}
+                <a href="{{ url_for('node_detail', node=node.host) }}" class="btn-x sm ms-auto" style="text-decoration:none">
+                    <i class="bi bi-arrow-right"></i> Details
+                </a>
             </div>
             <div class="cx-body">
                 {% if node.error %}

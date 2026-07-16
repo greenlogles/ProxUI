@@ -204,7 +204,7 @@
                                         </template>
                                     </div>
                                 </td>
-                                <td class="text-faint mono" style="font-size:11px;text-align:right" x-text="task.start_time_formatted || 'Unknown'"></td>
+                                <td class="text-faint mono" style="font-size:11px;text-align:right" x-text="fmtDateTime(task.starttime)"></td>
                             </tr>
                         </template>
                     </tbody>
@@ -257,6 +257,7 @@
       dotIcon(t)     { return JOB_ICON[this.statusClass(t)] || 'bi-dash-circle'; },
       isVmTask(t)    { const ty = t.type || ''; return ty.startsWith('qm') || ty.startsWith('vz'); },
       vmLink(t)      { return `/vm/${encodeURIComponent(t.node)}/${encodeURIComponent(t.id)}`; },
+      fmtDateTime: ProxUtils.formatDateTime,
       async load() {
         this.loading = true; this.error = '';
         try {

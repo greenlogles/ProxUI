@@ -1,0 +1,467 @@
+{% extends "base.html" %}
+
+{% block title %}{{ node }} - Proxmox Manager{% endblock %}
+
+{% block content %}
+<div class="mb-3"><a href="{{ url_for('cluster') }}" class="back-link"><i class="bi bi-arrow-left"></i> Cluster</a></div>
+
+{% if not online %}
+<div class="d-flex align-items-center gap-3 mb-3">
+    <span class="job-ico err" style="width:46px;height:46px;font-size:22px"><i class="bi bi-server"></i></span>
+    <div>
+        <div class="sec-title" style="font-size:20px">{{ node }}</div>
+        <div class="sec-sub">Node</div>
+    </div>
+</div>
+<div class="callout danger">
+    <i class="bi bi-exclamation-triangle"></i>
+    <div><div class="t">Node offline or unreachable</div><div class="b">Could not connect to <strong>{{ node }}</strong>. It may be powered off, disconnected from the cluster, or its API is not responding.</div></div>
+</div>
+{% else %}
+
+<div x-data="nodeMetrics('{{ node }}')">
+    <div class="d-flex align-items-center flex-wrap gap-3 mb-3">
+        <div class="me-auto d-flex align-items-center gap-3">
+            <span class="job-ico ok" style="width:46px;height:46px;font-size:22px"><i class="bi bi-server"></i></span>
+            <div>
+                <div class="sec-title" style="font-size:20px">{{ node }}</div>
+                <div class="sec-sub">Node <span class="pill ok ms-1"><span class="d"></span>Online</span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hero stats -->
+    <div class="metric-hero mb-4">
+        <div class="hero-stat"><div class="k">Uptime</div><div class="v mono">{{ status.uptime|humanize_uptime }}</div></div>
+        <div class="hero-stat"><div class="k">CPU</div><div class="v">{{ (status.cpu * 100)|round(1) }}%</div></div>
+        <div class="hero-stat"><div class="k">Memory</div><div class="v">{{ (status.memory.used / status.memory.total * 100)|round(1) if status.memory.total else 0 }}%</div></div>
+        <div class="hero-stat"><div class="k">Load Average</div><div class="v mono">{{ status.loadavg[0] if status.loadavg else 'N/A' }}</div></div>
+        <div class="hero-stat"><div class="k">CPU Cores</div><div class="v">{{ status.cpuinfo.cpus|default('N/A') }}</div></div>
+    </div>
+
+    <div class="d-flex flex-wrap mb-3 pb-3" style="gap:8px 40px;border-bottom:1px solid var(--border-soft)">
+        <div>
+            <div class="text-faint" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:700">CPU Model</div>
+            <div style="font-size:12px;font-weight:600">{{ status.cpuinfo.model|default('N/A') }}</div>
+        </div>
+        <div>
+            <div class="text-faint" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:700">Kernel</div>
+            <div class="mono" style="font-size:11.5px;font-weight:600">{{ status.kversion.split(' ')[:2]|join(' ') if status.kversion else 'N/A' }}</div>
+        </div>
+        <div>
+            <div class="text-faint" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:700">PVE Version</div>
+            <div class="mono" style="font-size:11.5px;font-weight:600">{{ status.pveversion|default('N/A') }}</div>
+        </div>
+    </div>
+
+    <!-- Performance Metrics -->
+    <div class="card-x mb-4">
+        <div class="cx-head d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <span class="cx-title"><i class="bi bi-graph-up" style="color:var(--accent)"></i> Performance Metrics</span>
+            <div class="d-flex align-items-center gap-2">
+                <select class="inp" style="width:auto" x-model="timeframe">
+                    <option value="hour">Last Hour</option>
+                    <option value="day">Last Day</option>
+                    <option value="week">Last Week</option>
+                    <option value="month">Last Month</option>
+                    <option value="year">Last Year</option>
+                </select>
+                <span class="text-faint" style="font-size:12px" x-text="lastUpdate"></span>
+                <button class="icon-btn" style="width:32px;height:32px;font-size:15px" @click="refresh()" :disabled="loading" title="Refresh">
+                    <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
+                </button>
+            </div>
+        </div>
+        <div class="cx-body">
+            <div class="row g-4">
+                <div class="col-12 col-lg-6">
+                    <div class="text-faint" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:700"><i class="bi bi-cpu"></i> CPU Usage (%)</div>
+                    <div class="chart-box"><canvas x-ref="cpu"></canvas></div>
+                </div>
+                <div class="col-12 col-lg-6">
+                    <div class="text-faint" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:700"><i class="bi bi-speedometer"></i> Load Average</div>
+                    <div class="chart-box"><canvas x-ref="load"></canvas></div>
+                </div>
+                <div class="col-12 col-lg-6">
+                    <div class="text-faint" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:700"><i class="bi bi-memory"></i> Memory Usage (%)</div>
+                    <div class="chart-box"><canvas x-ref="memory"></canvas></div>
+                </div>
+                <div class="col-12 col-lg-6">
+                    <div class="text-faint" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:700"><i class="bi bi-diagram-3"></i> Network I/O (MB)</div>
+                    <div class="chart-box"><canvas x-ref="network"></canvas></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Storage -->
+<div class="card-x mb-4">
+    <div class="cx-head"><i class="bi bi-hdd" style="color:var(--accent)"></i><span class="cx-title">Storage</span></div>
+    <div class="cx-body flush tbl-scroll">
+        <table class="tbl">
+            <thead><tr><th>Storage</th><th>Type</th><th>Shared</th><th>Status</th><th style="width:230px">Usage</th></tr></thead>
+            <tbody>
+                {% for storage in storages %}
+                <tr>
+                    <td>
+                        <span class="nm">{{ storage.storage }}</span>
+                        {% if storage.content %}<div class="text-faint" style="font-size:11px">{{ storage.content }}</div>{% endif %}
+                    </td>
+                    <td><span class="type-chip">{{ storage.type }}</span></td>
+                    <td>
+                        {% if storage.shared %}
+                        <i class="bi bi-check-circle-fill" style="color:var(--ok)"></i>
+                        {% else %}
+                        <i class="bi bi-dash" style="color:var(--text-faint)"></i>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if storage.active %}
+                        <span class="pill ok"><span class="d"></span>Active</span>
+                        {% else %}
+                        <span class="pill err"><span class="d"></span>Inactive</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if storage.total %}
+                        <div class="usage-cell">
+                            <div class="ubar" style="flex:1"><i class="{{ 'crit' if storage.used_percent > 80 else 'hot' if storage.used_percent > 60 else 'okc' }}" style="width:{{ storage.used_percent }}%"></i></div>
+                            <span class="pct">{{ "%.0f"|format(storage.used_percent) }}%</span>
+                        </div>
+                        <div class="text-faint mono" style="font-size:10.5px">{{ storage.used|humanize_bytes }} / {{ storage.total|humanize_bytes }}</div>
+                        {% else %}
+                        <span class="text-faint">N/A</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if not storages %}
+        <div class="empty-hint"><i class="bi bi-inbox" style="font-size:26px"></i><div class="mt-2">No storage configured on this node.</div></div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Local Disks -->
+<div class="card-x mb-4" x-data="nodeDisks('{{ node }}')">
+    <div class="cx-head d-flex justify-content-between align-items-center">
+        <span class="cx-title"><i class="bi bi-device-hdd" style="color:var(--accent)"></i> Local Disks</span>
+        <button class="icon-btn" style="width:32px;height:32px;font-size:15px" @click="load()" :disabled="loading" title="Refresh">
+            <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
+        </button>
+    </div>
+    <div class="cx-body flush tbl-scroll">
+        <template x-if="loading && disks.length === 0">
+            <div class="text-center py-4"><div class="spinner-border spinner-border-sm" role="status"></div> Loading disks...</div>
+        </template>
+        <template x-if="error">
+            <div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> <span x-text="error"></span></div>
+        </template>
+        <template x-if="!loading && !error && disks.length === 0">
+            <div class="empty-hint">No disk information available.</div>
+        </template>
+        <table class="tbl" x-show="disks.length > 0">
+            <thead><tr><th>Device</th><th>Model</th><th>Serial</th><th>Type</th><th class="num">Size</th><th>Used By</th><th>SMART</th><th class="num">Wearout</th></tr></thead>
+            <tbody>
+                <template x-for="d in disks" :key="d.devpath">
+                    <tr>
+                        <td><span class="nm mono" x-text="d.devpath"></span></td>
+                        <td x-text="d.model || 'N/A'"></td>
+                        <td class="mono text-muted-2" style="font-size:12px" x-text="d.serial || 'N/A'"></td>
+                        <td><span class="type-chip" x-text="(d.type || 'disk').toUpperCase()"></span></td>
+                        <td class="num mono" x-text="fmtBytes(d.size)"></td>
+                        <td class="text-muted-2" x-text="usedByLabel(d.used)"></td>
+                        <td>
+                            <span class="pill" :class="smartCls(d.health)"><span class="d"></span><span x-text="d.health || 'UNKNOWN'"></span></span>
+                        </td>
+                        <td class="num mono" x-text="(d.wearout === undefined || d.wearout === null || d.wearout === 'N/A') ? '—' : d.wearout + '%'"></td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ZFS Pools -->
+<div class="card-x mb-4" x-data="nodeZfs('{{ node }}')">
+    <div class="cx-head d-flex justify-content-between align-items-center">
+        <span class="cx-title"><i class="bi bi-stack" style="color:var(--accent)"></i> ZFS Pools</span>
+        <button class="icon-btn" style="width:32px;height:32px;font-size:15px" @click="load()" :disabled="loading" title="Refresh">
+            <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
+        </button>
+    </div>
+    <div class="cx-body flush tbl-scroll">
+        <template x-if="loading && pools.length === 0">
+            <div class="text-center py-4"><div class="spinner-border spinner-border-sm" role="status"></div> Loading ZFS pools...</div>
+        </template>
+        <template x-if="!loading && pools.length === 0">
+            <div class="empty-hint"><i class="bi bi-info-circle"></i> No ZFS pools on this node.</div>
+        </template>
+        <table class="tbl" x-show="pools.length > 0">
+            <thead><tr><th>Pool</th><th>Health</th><th style="width:230px">Usage</th><th class="num">Fragmentation</th></tr></thead>
+            <tbody>
+                <template x-for="p in pools" :key="p.name">
+                    <tr>
+                        <td><span class="nm">&#128190; <span x-text="p.name"></span></span></td>
+                        <td><span class="pill" :class="p.health === 'ONLINE' ? 'ok' : 'err'"><span class="d"></span><span x-text="p.health"></span></span></td>
+                        <td>
+                            <div class="usage-cell">
+                                <div class="ubar" style="flex:1"><i :class="poolBarCls(p)" :style="'width:'+poolPct(p)+'%'"></i></div>
+                                <span class="pct" x-text="poolPct(p)+'%'"></span>
+                            </div>
+                            <div class="text-faint mono" style="font-size:10.5px" x-text="fmtBytes(p.alloc) + ' / ' + fmtBytes(p.size)"></div>
+                        </td>
+                        <td class="num mono" x-text="(p.frag ?? 0) + '%'"></td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Guests on this node -->
+<div class="card-x" x-data="nodeGuests({{ guests|tojson|forceescape }})">
+    <div class="cx-head"><i class="bi bi-pc-display" style="color:var(--accent)"></i><span class="cx-title">VMs &amp; Containers</span><span class="text-faint ms-2" style="font-size:12px">{{ guests|length }} guests</span></div>
+    <div class="cx-body flush tbl-scroll">
+        <table class="tbl">
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th><a href="#" @click.prevent="setSort('name')">Name <i class="bi" :class="sortIcon('name')"></i></a></th>
+                    <th><a href="#" @click.prevent="setSort('type')">Type <i class="bi" :class="sortIcon('type')"></i></a></th>
+                    <th style="width:150px"><a href="#" @click.prevent="setSort('cpu')">CPU <i class="bi" :class="sortIcon('cpu')"></i></a></th>
+                    <th style="width:170px"><a href="#" @click.prevent="setSort('memory')">Memory <i class="bi" :class="sortIcon('memory')"></i></a></th>
+                    <th class="num">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <template x-for="g in sorted" :key="g.node + '-' + g.vmid">
+                    <tr>
+                        <td>
+                            <span class="pill" :class="g.template ? 'tmpl' : (g.status === 'running' ? 'run' : 'stop')">
+                                <span class="d"></span><span x-text="g.template ? 'Template' : (g.status === 'running' ? 'Running' : 'Stopped')"></span>
+                            </span>
+                        </td>
+                        <td>
+                            <a :href="'/vm/' + g.node + '/' + g.vmid" class="nm" x-text="g.name"></a>
+                            <div class="text-faint mono" style="font-size:11px">VMID: <span x-text="g.vmid"></span></div>
+                        </td>
+                        <td>
+                            <span class="type-chip" :class="g.template ? '' : (g.type === 'qemu' ? 'vm' : 'lxc')" x-text="g.template ? 'TMPL' : (g.type === 'qemu' ? 'VM' : 'LXC')"></span>
+                        </td>
+                        <td>
+                            <div class="usage-cell">
+                                <div class="ubar"><i :class="barCls(g.cpu_percent)" :style="'width:'+g.cpu_percent+'%'"></i></div>
+                                <span class="pct" x-text="(g.cpu_percent||0).toFixed(1)+'%'"></span>
+                            </div>
+                        </td>
+                        <td>
+                            <div class="usage-cell">
+                                <div class="ubar"><i :class="barCls(g.mem_percent)" :style="'width:'+g.mem_percent+'%'"></i></div>
+                                <span class="pct" x-text="(g.mem_percent||0).toFixed(1)+'%'"></span>
+                            </div>
+                        </td>
+                        <td>
+                            <div class="act-row">
+                                <a :href="'/vm/' + g.node + '/' + g.vmid" class="act-btn" title="Details"><i class="bi bi-info-circle"></i></a>
+                            </div>
+                        </td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+        <template x-if="guests.length === 0">
+            <div class="empty-hint"><i class="bi bi-inbox" style="font-size:26px"></i><div class="mt-2">No guests on this node.</div></div>
+        </template>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
+
+  function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+  function withAlpha(hex, alpha) {
+    const h = hex.replace('#', '');
+    const bigint = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+    const r = (bigint >> 16) & 255, g = (bigint >> 8) & 255, b = bigint & 255;
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  function gradientFill(ctx, color) {
+    const g = ctx.createLinearGradient(0, 0, 0, ctx.canvas.height || 150);
+    g.addColorStop(0, withAlpha(color, 0.35));
+    g.addColorStop(1, withAlpha(color, 0));
+    return g;
+  }
+  function dataset(ctx, label, color, fill) {
+    return {
+      label, data: [], borderColor: color,
+      backgroundColor: fill ? gradientFill(ctx, color) : 'transparent',
+      fill: !!fill, borderWidth: 2, tension: 0.4,
+      pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: color,
+      pointHoverBorderColor: '#fff', pointHoverBorderWidth: 2,
+    };
+  }
+  function themedOptions({ pct = false, max } = {}) {
+    const grid = cssVar('--grid-line'), faint = cssVar('--text-faint');
+    return {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: true, position: 'top', align: 'end',
+          labels: { color: faint, boxWidth: 8, boxHeight: 8, usePointStyle: true, font: { size: 11 }, padding: 12 } },
+        tooltip: { backgroundColor: cssVar('--panel'), titleColor: cssVar('--text'), bodyColor: cssVar('--text-muted'),
+          borderColor: cssVar('--border'), borderWidth: 1, padding: 10, cornerRadius: 8, usePointStyle: true },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: faint, font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 6 } },
+        y: { grid: { color: grid, drawBorder: false },
+          ticks: { color: faint, font: { size: 10 }, maxTicksLimit: 5, callback: v => pct ? v + '%' : v },
+          beginAtZero: true, suggestedMax: max },
+      },
+    };
+  }
+
+  function nodeMetrics(node) {
+    let charts = null;
+    return {
+      timeframe: 'day', lastUpdate: 'Loading...', loading: false, _poller: null,
+      init() {
+        const cpuCtx = this.$refs.cpu.getContext('2d');
+        const loadCtx = this.$refs.load.getContext('2d');
+        const memCtx = this.$refs.memory.getContext('2d');
+        const netCtx = this.$refs.network.getContext('2d');
+        const accent = cssVar('--accent'), violet = cssVar('--violet'), ok = cssVar('--ok'), warn = cssVar('--warn');
+        charts = {
+          cpu: new Chart(cpuCtx, { type: 'line',
+            data: { labels: [], datasets: [dataset(cpuCtx, 'CPU Usage (%)', accent, true)] },
+            options: themedOptions({ pct: true, max: 100 }) }),
+          load: new Chart(loadCtx, { type: 'line',
+            data: { labels: [], datasets: [dataset(loadCtx, 'Load Average', warn, true)] },
+            options: themedOptions() }),
+          memory: new Chart(memCtx, { type: 'line',
+            data: { labels: [], datasets: [dataset(memCtx, 'Memory Usage (%)', violet, true)] },
+            options: themedOptions({ pct: true, max: 100 }) }),
+          network: new Chart(netCtx, { type: 'line',
+            data: { labels: [], datasets: [
+              dataset(netCtx, 'Network In (MB)', ok, false),
+              dataset(netCtx, 'Network Out (MB)', accent, false),
+            ] },
+            options: themedOptions() }),
+        };
+        this.$watch('timeframe', () => this.load());
+        this.load();
+        this._poller = ProxUtils.createAdaptivePoller(() => this.load(), 30000);
+      },
+      destroy() {
+        this._poller?.destroy();
+        if (charts) { Object.values(charts).forEach(c => c.destroy()); charts = null; }
+      },
+      async load() {
+        if (!charts) return;
+        this.loading = true;
+        try {
+          const data = await ProxUtils.apiJson(`/api/node/${node}/metrics?timeframe=${this.timeframe}`);
+          if (!data.error) {
+            const h = data.historical;
+            const labels = h.labels.map(ts => ProxUtils.formatChartLabel(ts, this.timeframe));
+            charts.cpu.data.labels = labels; charts.cpu.data.datasets[0].data = h.cpu; charts.cpu.update('none');
+            charts.load.data.labels = labels; charts.load.data.datasets[0].data = h.loadavg; charts.load.update('none');
+            charts.memory.data.labels = labels; charts.memory.data.datasets[0].data = h.memory; charts.memory.update('none');
+            charts.network.data.labels = labels;
+            charts.network.data.datasets[0].data = h.network_in;
+            charts.network.data.datasets[1].data = h.network_out;
+            charts.network.update('none');
+            this.lastUpdate = `Last update: ${new Date().toLocaleTimeString()}`;
+          }
+        } catch (e) {
+          this.lastUpdate = `Error: ${e.message}`;
+        } finally { this.loading = false; }
+      },
+      refresh() { this.load(); },
+    };
+  }
+
+  const SMART_CLS = { PASSED: 'ok', FAILED: 'err' };
+  function nodeDisks(node) {
+    return {
+      disks: [], loading: true, error: '',
+      fmtBytes: ProxUtils.formatBytes,
+      smartCls(health) { return SMART_CLS[health] || 'maint'; },
+      usedByLabel(used) {
+        if (!used) return '—';
+        return used.toLowerCase().startsWith('zfs') ? 'ZFS' : used;
+      },
+      async load() {
+        this.loading = true; this.error = '';
+        try { this.disks = await ProxUtils.apiJson(`/api/node/${node}/disks`); }
+        catch (e) { this.error = e.message; }
+        finally { this.loading = false; }
+      },
+      init() { this.load(); },
+    };
+  }
+
+  function nodeZfs(node) {
+    return {
+      pools: [], loading: true,
+      fmtBytes: ProxUtils.formatBytes,
+      poolPct(p) { return p.size ? ((p.alloc / p.size) * 100).toFixed(0) : 0; },
+      poolBarCls(p) { const pct = +this.poolPct(p); return pct > 85 ? 'crit' : pct > 65 ? 'hot' : 'okc'; },
+      async load() {
+        this.loading = true;
+        try { this.pools = await ProxUtils.apiJson(`/api/node/${node}/zfs`); }
+        catch (e) { this.pools = []; }
+        finally { this.loading = false; }
+      },
+      init() { this.load(); },
+    };
+  }
+
+  function nodeGuests(initial) {
+    return {
+      guests: initial,
+      sortKey: 'status', sortDir: 'asc',
+      barCls(pct) { pct = pct || 0; return pct > 80 ? 'crit' : pct > 60 ? 'hot' : 'okc'; },
+      statusRank(g) {
+        if (g.template) return 2;
+        return g.status === 'running' ? 0 : 1;
+      },
+      setSort(key) {
+        if (this.sortKey === key) { this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc'; }
+        else { this.sortKey = key; this.sortDir = 'asc'; }
+      },
+      sortIcon(key) {
+        if (this.sortKey !== key) return 'bi-arrow-down-up';
+        return this.sortDir === 'asc' ? 'bi-arrow-up' : 'bi-arrow-down';
+      },
+      get sorted() {
+        const dir = this.sortDir === 'asc' ? 1 : -1;
+        const byNameAsc = (a, b) => (a.name || '').localeCompare(b.name || '');
+        return [...this.guests].sort((a, b) => {
+          switch (this.sortKey) {
+            case 'name': return dir * byNameAsc(a, b);
+            case 'type': return dir * (a.type || '').localeCompare(b.type || '') || byNameAsc(a, b);
+            case 'cpu': return dir * ((a.cpu_percent || 0) - (b.cpu_percent || 0)) || byNameAsc(a, b);
+            case 'memory': return dir * ((a.mem_percent || 0) - (b.mem_percent || 0)) || byNameAsc(a, b);
+            default: return (this.statusRank(a) - this.statusRank(b)) || byNameAsc(a, b);
+          }
+        });
+      },
+    };
+  }
+
+  function register() {
+    window.Alpine.data('nodeMetrics', nodeMetrics);
+    window.Alpine.data('nodeDisks', nodeDisks);
+    window.Alpine.data('nodeZfs', nodeZfs);
+    window.Alpine.data('nodeGuests', nodeGuests);
+  }
+  if (window.Alpine) register();
+  else document.addEventListener('alpine:init', register);
+</script>
+{% endblock %}
