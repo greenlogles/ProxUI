@@ -123,6 +123,38 @@ export function createAdaptivePoller(fn, baseMs = 30000) {
   };
 }
 
+/**
+ * Format a Unix timestamp (seconds) for a chart x-axis label, using the
+ * *browser's* local timezone — Date's locale methods are always
+ * timezone-correct for whoever is viewing the page, unlike formatting the
+ * timestamp on the server (which depends on the server/container's own
+ * timezone and is frequently wrong, e.g. Docker images defaulting to UTC).
+ */
+export function formatChartLabel(unixSeconds, timeframe) {
+  const d = new Date(unixSeconds * 1000);
+  switch (timeframe) {
+    case 'hour':
+    case 'day':
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    case 'week':
+      return d.toLocaleDateString([], { month: '2-digit', day: '2-digit' }) + ' ' +
+        d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    case 'month':
+      return d.toLocaleDateString([], { month: '2-digit', day: '2-digit' });
+    default: // year
+      return d.toLocaleDateString([], { year: 'numeric', month: '2-digit' });
+  }
+}
+
+/** Format a Unix timestamp (seconds) as a full local date+time string. */
+export function formatDateTime(unixSeconds) {
+  if (!unixSeconds) return 'Unknown';
+  return new Date(unixSeconds * 1000).toLocaleString([], {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+}
+
 export function notify(message, type = 'info') {
   const cls = type === 'error' ? 'danger' : type;
   const el = document.createElement('div');

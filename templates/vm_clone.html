@@ -3,86 +3,76 @@
 {% block title %}Clone VM {{ config.name or vmid }} - Proxmox Manager{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-            <h1><i class="bi bi-files"></i> Clone VM {{ config.name or vmid }}</h1>
-            <div>
-                <span class="badge bg-{{ 'success' if vm.status == 'running' else 'danger' if vm.status == 'stopped' else 'warning' }}">
-                    {{ vm.status }}
-                </span>
-                <a href="{{ url_for('vm_detail', node=node, vmid=vmid) }}" class="btn btn-outline-secondary ms-2">
-                    <i class="bi bi-arrow-left"></i> Back to VM
-                </a>
-            </div>
-        </div>
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-3">
+    <div>
+        <div class="sec-title"><i class="bi bi-files"></i> Clone VM {{ config.name or vmid }}</div>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+        <span class="pill {{ 'run' if vm.status == 'running' else 'stop' if vm.status == 'stopped' else 'maint' }}">
+            <span class="d"></span>{{ vm.status }}
+        </span>
+        <a href="{{ url_for('vm_detail', node=node, vmid=vmid) }}" class="btn-x">
+            <i class="bi bi-arrow-left"></i> Back to VM
+        </a>
     </div>
 </div>
 
 <div x-data="vmClone('{{ node }}', '{{ vmid }}')">
-<div class="row justify-content-center">
-    <div class="col-md-8">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-files"></i> Clone Configuration</h5>
-            </div>
-            <div class="card-body">
+<div class="row g-3 justify-content-center">
+    <div class="col-12 col-xl-8">
+        <div class="card-x">
+            <div class="cx-head"><i class="bi bi-files" style="color:var(--accent)"></i><span class="cx-title">Clone Configuration</span></div>
+            <div class="cx-body">
                 <!-- Source VM Info -->
                 <div class="mb-4">
-                    <h6 class="text-primary mb-3"><i class="bi bi-pc-display"></i> Source VM</h6>
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="bg-light p-3 rounded">
-                                <div><strong>ID:</strong> {{ vmid }}</div>
-                                <div><strong>Name:</strong> {{ config.name or 'Unnamed' }}</div>
-                                <div><strong>Node:</strong> {{ node }}</div>
-                                <div><strong>Memory:</strong>
-                                    {% if config.memory %}
-                                        {% if config.memory | string | length > 3 %}
-                                            {{ ((config.memory | int) / 1024) | round(1) }} GB
-                                        {% else %}
-                                            {{ config.memory }} MB
-                                        {% endif %}
-                                    {% else %}
-                                        Unknown
-                                    {% endif %}
-                                </div>
-                                <div><strong>CPU:</strong> {{ config.cores or 1 }} cores</div>
-                            </div>
-                        </div>
-                    </div>
+                    <div class="sub-h" style="margin-top:0"><i class="bi bi-pc-display"></i> Source VM</div>
+                    <div class="kv"><span class="k">ID</span><span class="v">{{ vmid }}</span></div>
+                    <div class="kv"><span class="k">Name</span><span class="v">{{ config.name or 'Unnamed' }}</span></div>
+                    <div class="kv"><span class="k">Node</span><span class="v">{{ node }}</span></div>
+                    <div class="kv"><span class="k">Memory</span><span class="v">
+                        {% if config.memory %}
+                            {% if config.memory | string | length > 3 %}
+                                {{ ((config.memory | int) / 1024) | round(1) }} GB
+                            {% else %}
+                                {{ config.memory }} MB
+                            {% endif %}
+                        {% else %}
+                            Unknown
+                        {% endif %}
+                    </span></div>
+                    <div class="kv"><span class="k">CPU</span><span class="v">{{ config.cores or 1 }} cores</span></div>
                 </div>
 
                 <form @submit.prevent="submit()">
                     <!-- Clone Options -->
                     <div class="mb-4">
-                        <h6 class="text-primary mb-3"><i class="bi bi-gear"></i> Clone Settings</h6>
+                        <div class="sub-h" style="margin-top:0"><i class="bi bi-gear"></i> Clone Settings</div>
 
-                        <div class="mb-3">
-                            <label for="clone_name" class="form-label">New VM Name <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" id="clone_name" name="clone_name"
+                        <div class="field">
+                            <label for="clone_name">New VM Name <span style="color:var(--danger)">*</span></label>
+                            <input type="text" class="inp" id="clone_name" name="clone_name"
                                    x-model="cloneName"
                                    placeholder="Enter name for the cloned VM" required>
                         </div>
 
-                        <div class="mb-3">
-                            <label for="clone_vmid" class="form-label">New VM ID <span class="text-danger">*</span></label>
-                            <input type="number" class="form-control" id="clone_vmid" name="clone_vmid"
+                        <div class="field">
+                            <label for="clone_vmid">New VM ID <span style="color:var(--danger)">*</span></label>
+                            <input type="number" class="inp" id="clone_vmid" name="clone_vmid"
                                    min="100" max="999999999"
                                    placeholder="Auto-generate"
                                    x-model="cloneVmid"
                                    :class="vmidInputCls"
                                    @input="onVmidInput()"
                                    required>
-                            <div :class="'form-text ' + vmidFeedbackCls">
+                            <div class="hint" :class="vmidFeedbackCls">
                                 <i class="bi" :class="vmidFeedbackIcon" x-show="vmidState !== 'empty'"></i>
                                 <span x-text="vmidFeedbackMsg"></span>
                             </div>
                         </div>
 
-                        <div class="mb-3">
-                            <label for="target_node" class="form-label">Target Node</label>
-                            <select class="form-select" id="target_node" name="target_node"
+                        <div class="field">
+                            <label for="target_node">Target Node</label>
+                            <select class="inp" id="target_node" name="target_node"
                                     x-model="targetNode" @change="loadStorages()">
                                 {% for available_node in available_nodes %}
                                 <option value="{{ available_node }}" {{ 'selected' if available_node == node else '' }}>
@@ -90,26 +80,26 @@
                                 </option>
                                 {% endfor %}
                             </select>
-                            <div class="form-text">Node where the cloned VM will be created</div>
+                            <div class="hint">Node where the cloned VM will be created</div>
                         </div>
                     </div>
 
                     <!-- Storage Options -->
                     <div class="mb-4">
-                        <h6 class="text-primary mb-3"><i class="bi bi-hdd"></i> Storage Configuration</h6>
+                        <div class="sub-h" style="margin-top:0"><i class="bi bi-hdd"></i> Storage Configuration</div>
 
-                        <div class="form-check">
+                        <div class="form-check mb-2">
                             <input class="form-check-input" type="radio" name="clone_type" id="clone_full"
                                    value="full" x-model="cloneType">
                             <label class="form-check-label" for="clone_full">
                                 <strong>Full Clone</strong>
                             </label>
-                            <div class="form-text">Creates a complete independent copy of the VM (recommended)</div>
+                            <div class="hint">Creates a complete independent copy of the VM (recommended)</div>
                         </div>
 
-                        <div class="mb-3 mt-2">
-                            <label for="target_storage" class="form-label">Target Storage</label>
-                            <select class="form-select" id="target_storage" name="target_storage"
+                        <div class="field">
+                            <label for="target_storage">Target Storage</label>
+                            <select class="inp" id="target_storage" name="target_storage"
                                     x-model="targetStorage">
                                 <option value="">Same as source (default)</option>
                                 <template x-for="s in storages" :key="s.storage">
@@ -118,28 +108,28 @@
                                     </option>
                                 </template>
                             </select>
-                            <div class="form-text">Storage where cloned disks will be placed</div>
+                            <div class="hint">Storage where cloned disks will be placed</div>
                         </div>
                     </div>
 
                     <!-- Advanced Options -->
                     <div class="mb-4">
-                        <h6 class="text-primary mb-3"><i class="bi bi-sliders"></i> Advanced Options</h6>
+                        <div class="sub-h" style="margin-top:0"><i class="bi bi-sliders"></i> Advanced Options</div>
 
-                        <div class="mb-3">
-                            <label for="clone_description" class="form-label">Description</label>
-                            <textarea class="form-control" id="clone_description" name="clone_description"
+                        <div class="field">
+                            <label for="clone_description">Description</label>
+                            <textarea class="inp" id="clone_description" name="clone_description"
                                       rows="3" placeholder="Optional description for the cloned VM"
                                       x-model="description"></textarea>
                         </div>
 
-                        <div class="mb-3">
+                        <div class="field mb-0">
                             <div class="form-check">
                                 <input class="form-check-input" type="checkbox" id="clone_agent"
                                        x-model="agentEnabled">
                                 <label class="form-check-label" for="clone_agent">Enable QEMU guest agent</label>
                             </div>
-                            <div class="form-text">
+                            <div class="hint">
                                 Applied after the clone finishes. Leave off unless <code>qemu-guest-agent</code>
                                 is installed in the guest — enabling it without the agent running makes detail
                                 pages slow to load.
@@ -147,12 +137,13 @@
                         </div>
                     </div>
 
-                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
-                        <button type="button" class="btn btn-secondary" @click="window.history.back()">
+                    <div class="divider mb-3"></div>
+                    <div class="d-flex gap-2 justify-content-end">
+                        <button type="button" class="btn-x ghost" @click="window.history.back()">
                             <i class="bi bi-x-circle"></i> Cancel
                         </button>
-                        <button type="submit" class="btn btn-primary" :disabled="submitting">
-                            <span x-show="submitting" class="spinner-border spinner-border-sm me-1" role="status"></span>
+                        <button type="submit" class="btn-x primary" :disabled="submitting">
+                            <span x-show="submitting" class="spinner-border spinner-border-sm" role="status"></span>
                             <i class="bi bi-files" x-show="!submitting"></i> Clone VM
                         </button>
                     </div>
@@ -160,14 +151,27 @@
             </div>
         </div>
     </div>
+
+    <div class="col-12 col-xl-4">
+        <div class="card-x">
+            <div class="cx-head"><i class="bi bi-clipboard-check" style="color:var(--accent)"></i><span class="cx-title">Summary</span></div>
+            <div class="cx-body">
+                <div class="summary-row"><span class="k">Name</span><span class="v" x-text="cloneName || '—'"></span></div>
+                <div class="summary-row"><span class="k">VM ID</span><span class="v mono" x-text="cloneVmid || '—'"></span></div>
+                <div class="summary-row"><span class="k">Target node</span><span class="v" x-text="targetNode"></span></div>
+                <div class="summary-row"><span class="k">Storage</span><span class="v" x-text="targetStorage || 'Same as source'"></span></div>
+                <div class="summary-row"><span class="k">Clone type</span><span class="v" x-text="cloneType === 'full' ? 'Full clone' : cloneType"></span></div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- Loading overlay -->
 <div class="position-fixed top-0 start-0 w-100 h-100 align-items-center justify-content-center"
-     style="background-color: rgba(0,0,0,0.5); z-index: 9999;"
+     style="background: var(--scrim); z-index: 9999;"
      x-show="submitting"
      x-cloak>
-    <div class="bg-white rounded p-4 text-center">
+    <div class="card-x p-4 text-center">
         <div class="spinner-border text-primary mb-2" role="status"></div>
         <div>Cloning VM...</div>
     </div>

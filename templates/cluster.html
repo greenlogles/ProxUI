@@ -3,70 +3,58 @@
 {% block title %}Cluster - Proxmox Manager{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <h1><i class="bi bi-diagram-2"></i> Cluster Information</h1>
-        <p class="text-muted">{{ cluster.name }}</p>
-    </div>
+<div class="mb-3">
+    <div class="sec-title">Cluster Information</div>
+    <div class="sec-sub">{{ cluster.name }} · {{ cluster.nodes|length }} nodes</div>
 </div>
 
-<div class="row mt-3">
+<div class="row g-3">
     {% for node in cluster.nodes %}
-    <div class="col-md-6 mb-3">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">
+    <div class="col-12 col-lg-6">
+        <div class="card-x">
+            <div class="cx-head">
+                <span class="nc-dot {{ 'offline' if node.error else 'online' }}" style="width:10px;height:10px"></span>
+                <a href="{{ url_for('node_detail', node=node.host) }}" class="cx-title" style="color:var(--text)">
                     <i class="bi bi-server"></i> {{ node.host }}
-                    {% if node.error %}
-                        <span class="badge bg-danger float-end">Offline</span>
-                    {% else %}
-                        <span class="badge bg-success float-end">Online</span>
-                    {% endif %}
-                </h5>
-            </div>
-            <div class="card-body">
+                </a>
                 {% if node.error %}
-                    <div class="alert alert-danger">
-                        <i class="bi bi-exclamation-triangle"></i> Connection Error: {{ node.error }}
-                    </div>
+                <span class="pill err ms-2"><span class="d"></span>Offline</span>
                 {% else %}
-                    <dl class="row">
-                        <dt class="col-sm-4">CPU Model:</dt>
-                        <dd class="col-sm-8">{{ node.cpuinfo.model|default('N/A') }}</dd>
-                        
-                        <dt class="col-sm-4">CPU Cores:</dt>
-                        <dd class="col-sm-8">{{ node.cpuinfo.cpus|default('N/A') }}</dd>
-                        
-                        <dt class="col-sm-4">CPU Usage:</dt>
-                        <dd class="col-sm-8">
-                            <div class="progress" style="height: 20px;">
-                                <div class="progress-bar bg-{{ 'danger' if (node.cpu * 100) > 80 else 'warning' if (node.cpu * 100) > 60 else 'success' }}" 
-                                     style="width: {{ (node.cpu * 100)|round(1) }}%">
-                                    {{ (node.cpu * 100)|round(1) }}%
-                                </div>
-                            </div>
-                        </dd>
-                        
-                        <dt class="col-sm-4">Memory:</dt>
-                        <dd class="col-sm-8">
-                            <div class="progress" style="height: 20px;">
-                                <div class="progress-bar bg-{{ 'danger' if ((node.memory.used / node.memory.total) * 100) > 80 else 'warning' if ((node.memory.used / node.memory.total) * 100) > 60 else 'success' }}" 
-                                     style="width: {{ ((node.memory.used / node.memory.total) * 100)|round(1) }}%">
-                                    {{ ((node.memory.used / node.memory.total) * 100)|round(1) }}%
-                                </div>
-                            </div>
-                            <small>{{ (node.memory.used / 1024 / 1024 / 1024)|round(1) }} / {{ (node.memory.total / 1024 / 1024 / 1024)|round(1) }} GB</small>
-                        </dd>
-                        
-                        <dt class="col-sm-4">Uptime:</dt>
-                        <dd class="col-sm-8">{{ node.uptime|humanize_uptime }}</dd>
-                        
-                        <dt class="col-sm-4">Kernel:</dt>
-                        <dd class="col-sm-8">{{ node.kversion|default('N/A') }}</dd>
-                        
-                        <dt class="col-sm-4">PVE Version:</dt>
-                        <dd class="col-sm-8">{{ node.pveversion|default('N/A') }}</dd>
-                    </dl>
+                <span class="pill ok ms-2"><span class="d"></span>Online</span>
+                {% endif %}
+                <a href="{{ url_for('node_detail', node=node.host) }}" class="btn-x sm ms-auto" style="text-decoration:none">
+                    <i class="bi bi-arrow-right"></i> Details
+                </a>
+            </div>
+            <div class="cx-body">
+                {% if node.error %}
+                <div class="callout danger">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <div><div class="t">Connection Error</div><div class="b">{{ node.error }}</div></div>
+                </div>
+                {% else %}
+                <div class="row g-3 mb-3">
+                    <div class="col-6">
+                        <div class="text-faint" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:700">CPU Usage</div>
+                        <div class="usage-cell mt-1">
+                            <div class="ubar" style="flex:1"><i class="{{ 'crit' if (node.cpu * 100) > 80 else 'hot' if (node.cpu * 100) > 60 else 'okc' }}" style="width:{{ (node.cpu * 100)|round(1) }}%"></i></div>
+                            <span class="pct">{{ (node.cpu * 100)|round(1) }}%</span>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="text-faint" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:700">Memory</div>
+                        <div class="usage-cell mt-1">
+                            <div class="ubar" style="flex:1"><i class="{{ 'crit' if ((node.memory.used / node.memory.total) * 100) > 80 else 'hot' if ((node.memory.used / node.memory.total) * 100) > 60 else 'okc' }}" style="width:{{ ((node.memory.used / node.memory.total) * 100)|round(1) }}%"></i></div>
+                            <span class="pct">{{ ((node.memory.used / node.memory.total) * 100)|round(1) }}%</span>
+                        </div>
+                        <div class="text-faint mono" style="font-size:10.5px">{{ (node.memory.used / 1024 / 1024 / 1024)|round(1) }} / {{ (node.memory.total / 1024 / 1024 / 1024)|round(1) }} GB</div>
+                    </div>
+                </div>
+                <div class="summary-row"><span class="k">CPU Model</span><span class="v" style="font-size:12px">{{ node.cpuinfo.model|default('N/A') }}</span></div>
+                <div class="summary-row"><span class="k">CPU Cores</span><span class="v">{{ node.cpuinfo.cpus|default('N/A') }}</span></div>
+                <div class="summary-row"><span class="k">Uptime</span><span class="v mono">{{ node.uptime|humanize_uptime }}</span></div>
+                <div class="summary-row"><span class="k">Kernel</span><span class="v mono" style="font-size:11.5px">{{ node.kversion.split(' ')[:2]|join(' ') if node.kversion else 'N/A' }}</span></div>
+                <div class="summary-row"><span class="k">PVE Version</span><span class="v mono" style="font-size:11.5px">{{ node.pveversion|default('N/A') }}</span></div>
                 {% endif %}
             </div>
         </div>

@@ -3,57 +3,39 @@
 {% block title %}Networks - Proxmox Manager{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <h1><i class="bi bi-diagram-3"></i> Networks</h1>
-    </div>
+<div class="mb-3">
+    <div class="sec-title">Networks</div>
+    <div class="sec-sub">Bridges and interfaces across the cluster</div>
 </div>
 
-<div class="row mt-3">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">Network Interfaces</h5>
-            </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>Interface</th>
-                                <th>Node</th>
-                                <th>Type</th>
-                                <th>Active</th>
-                                <th>IP Address</th>
-                                <th>Bridge Ports</th>
-                                <th>Comments</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for network in networks %}
-                            <tr>
-                                <td><strong>{{ network.iface }}</strong></td>
-                                <td>{{ network.node }}</td>
-                                <td>
-                                    <span class="badge bg-info">{{ network.type }}</span>
-                                </td>
-                                <td>
-                                    {% if network.active %}
-                                        <span class="badge bg-success">Active</span>
-                                    {% else %}
-                                        <span class="badge bg-danger">Inactive</span>
-                                    {% endif %}
-                                </td>
-                                <td>{{ network.address|default('-') }}</td>
-                                <td>{{ network.bridge_ports|default('-') }}</td>
-                                <td>{{ network.comments|default('-') }}</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
+<div class="card-x">
+    <div class="cx-head"><i class="bi bi-diagram-3" style="color:var(--accent)"></i><span class="cx-title">Network Interfaces</span></div>
+    <div class="cx-body flush tbl-scroll">
+        <table class="tbl">
+            <thead><tr><th>Interface</th><th>Node</th><th>Type</th><th>Active</th><th>IP Address</th><th>Bridge Ports</th><th>Comment</th></tr></thead>
+            <tbody>
+                {% for network in networks %}
+                <tr>
+                    <td><span class="nm mono">{{ network.iface }}</span></td>
+                    <td class="text-muted-2">{{ network.node }}</td>
+                    <td><span class="type-chip">{{ network.type }}</span></td>
+                    <td>
+                        {% if network.active %}
+                        <span class="pill ok"><span class="d"></span>Active</span>
+                        {% else %}
+                        <span class="pill stop"><span class="d"></span>Down</span>
+                        {% endif %}
+                    </td>
+                    <td class="mono text-muted-2" style="font-size:12px">{{ network.address|default('—') }}</td>
+                    <td class="mono text-faint" style="font-size:12px">{{ network.bridge_ports|default('—') }}</td>
+                    <td class="text-faint" style="font-size:12px">{{ network.comments|default('—') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if not networks %}
+        <div class="empty-hint"><i class="bi bi-inbox" style="font-size:26px"></i><div class="mt-2">No network interfaces found.</div></div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

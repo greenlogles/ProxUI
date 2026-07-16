@@ -5,11 +5,9 @@
 {% block content %}
 <div x-data="isosManager()">
 
-  <div class="row">
-    <div class="col-12">
-      <h1><i class="bi bi-disc"></i> ISOs & Templates</h1>
-      <p class="text-muted">Manage ISO images, VM templates, and container templates across all cluster nodes.</p>
-    </div>
+  <div class="mb-3">
+    <div class="sec-title">ISOs &amp; Templates</div>
+    <div class="sec-sub">Manage ISO images, VM templates, and container templates across all cluster nodes.</div>
   </div>
 
   <!-- Loading state -->
@@ -19,8 +17,9 @@
   </div>
 
   <!-- No nodes available -->
-  <div x-show="!loading && nodes.length === 0" class="alert alert-warning">
-    <i class="bi bi-exclamation-triangle"></i> No online nodes available.
+  <div x-show="!loading && nodes.length === 0" class="callout warn">
+    <i class="bi bi-exclamation-triangle"></i>
+    <div><div class="b">No online nodes available.</div></div>
   </div>
 
   <!-- Node Tabs -->
@@ -47,49 +46,52 @@
            :id="'node-content-' + node.name"
            role="tabpanel"
            :aria-labelledby="'node-tab-' + node.name">
-        <div class="row">
+        <div class="row g-3">
 
           <!-- ISO Images -->
-          <div class="col-12 mb-4">
-            <div class="card">
-              <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="bi bi-disc"></i> ISO Images</h5>
-                <button class="btn btn-success btn-sm" @click="openDownload(node.name)">
+          <div class="col-12">
+            <div class="card-x">
+              <div class="cx-head">
+                <i class="bi bi-disc" style="color:var(--accent)"></i><span class="cx-title">ISO Images</span>
+                <button class="btn-x sm primary ms-auto" @click="openDownload(node.name)">
                   <i class="bi bi-download"></i> Download from URL
                 </button>
               </div>
-              <div class="card-body">
+              <div class="cx-body">
                 <div x-show="perNode[node.name] && perNode[node.name].loadingIsos" class="text-center py-3">
                   <div class="spinner-border spinner-border-sm" role="status"></div>
                   Loading ISO images...
                 </div>
                 <div x-show="perNode[node.name] && perNode[node.name].isoError"
-                     class="alert alert-danger"
-                     x-text="'Error: ' + (perNode[node.name] && perNode[node.name].isoError)">
+                     class="callout danger">
+                  <i class="bi bi-exclamation-triangle"></i>
+                  <div><div class="b" x-text="'Error: ' + (perNode[node.name] && perNode[node.name].isoError)"></div></div>
                 </div>
                 <div x-show="perNode[node.name] && !perNode[node.name].loadingIsos && !perNode[node.name].isoError && perNode[node.name].isos.length === 0"
-                     class="text-muted">
+                     class="empty-hint">
                   No ISO images found.
                 </div>
                 <div x-show="perNode[node.name] && !perNode[node.name].loadingIsos && perNode[node.name].isos.length > 0"
-                     class="table-responsive">
-                  <table class="table table-sm">
+                     class="tbl-scroll">
+                  <table class="tbl">
                     <thead>
-                      <tr><th>Name</th><th>Storage</th><th>Size</th><th>Format</th><th>Actions</th></tr>
+                      <tr><th>Name</th><th>Storage</th><th>Size</th><th>Format</th><th class="num">Actions</th></tr>
                     </thead>
                     <tbody>
                       <template x-for="iso in (perNode[node.name] ? perNode[node.name].isos : [])" :key="iso.volid">
                         <tr>
-                          <td><strong x-text="isoFilename(iso.volid)"></strong></td>
-                          <td><span class="badge bg-secondary" x-text="isoStorage(iso.volid)"></span></td>
+                          <td><span class="nm" x-text="isoFilename(iso.volid)"></span></td>
+                          <td><span class="type-chip" x-text="isoStorage(iso.volid)"></span></td>
                           <td x-text="isoSizeGB(iso) + ' GB'"></td>
                           <td x-text="iso.format || 'iso'"></td>
                           <td>
-                            <button class="btn btn-sm btn-outline-danger"
-                                    @click="deleteIso(node.name, iso.volid)"
-                                    title="Delete ISO">
-                              <i class="bi bi-trash"></i>
-                            </button>
+                            <div class="act-row">
+                              <button class="act-btn stopc"
+                                      @click="deleteIso(node.name, iso.volid)"
+                                      title="Delete ISO">
+                                <i class="bi bi-trash"></i>
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       </template>
@@ -101,48 +103,49 @@
           </div>
 
           <!-- VM Templates -->
-          <div class="col-12 mb-4">
-            <div class="card">
-              <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="bi bi-pc-display"></i> VM Templates</h5>
-                <button class="btn btn-success btn-sm" @click="openCloud(node.name)">
+          <div class="col-12">
+            <div class="card-x">
+              <div class="cx-head">
+                <i class="bi bi-pc-display" style="color:var(--accent)"></i><span class="cx-title">VM Templates</span>
+                <button class="btn-x sm primary ms-auto" @click="openCloud(node.name)">
                   <i class="bi bi-cloud-download"></i> Create Cloud Template
                 </button>
               </div>
-              <div class="card-body">
+              <div class="cx-body">
                 <div x-show="perNode[node.name] && perNode[node.name].loadingTemplates" class="text-center py-3">
                   <div class="spinner-border spinner-border-sm" role="status"></div>
                   Loading VM templates...
                 </div>
                 <div x-show="perNode[node.name] && perNode[node.name].templateError"
-                     class="alert alert-danger"
-                     x-text="'Error: ' + (perNode[node.name] && perNode[node.name].templateError)">
+                     class="callout danger">
+                  <i class="bi bi-exclamation-triangle"></i>
+                  <div><div class="b" x-text="'Error: ' + (perNode[node.name] && perNode[node.name].templateError)"></div></div>
                 </div>
                 <div x-show="perNode[node.name] && !perNode[node.name].loadingTemplates && !perNode[node.name].templateError && perNode[node.name].vmTemplates.length === 0"
-                     class="text-muted">
+                     class="empty-hint">
                   No VM templates found.
                 </div>
                 <div x-show="perNode[node.name] && !perNode[node.name].loadingTemplates && perNode[node.name].vmTemplates.length > 0"
-                     class="table-responsive">
-                  <table class="table table-sm">
+                     class="tbl-scroll">
+                  <table class="tbl">
                     <thead>
-                      <tr><th>ID</th><th>Name</th><th>Memory</th><th>CPU</th><th>Status</th><th>Actions</th></tr>
+                      <tr><th>ID</th><th>Name</th><th>Memory</th><th>CPU</th><th>Status</th><th class="num">Actions</th></tr>
                     </thead>
                     <tbody>
                       <template x-for="vm in (perNode[node.name] ? perNode[node.name].vmTemplates : [])" :key="vm.vmid">
                         <tr>
-                          <td><strong x-text="vm.vmid"></strong></td>
+                          <td class="mono" x-text="vm.vmid"></td>
                           <td x-text="vm.name || 'Unnamed'"></td>
                           <td x-text="vmMemGB(vm) + ' GB'"></td>
                           <td x-text="vmCpuInfo(vm)"></td>
-                          <td><span class="badge bg-info">Template</span></td>
+                          <td><span class="pill tmpl"><span class="d"></span>Template</span></td>
                           <td>
-                            <div class="btn-group btn-group-sm">
+                            <div class="act-row">
                               <a :href="'/vm/' + node.name + '/' + vm.vmid + '/clone'"
-                                 class="btn btn-outline-primary" title="Clone">
+                                 class="act-btn pri" title="Clone">
                                 <i class="bi bi-files"></i>
                               </a>
-                              <button class="btn btn-outline-danger"
+                              <button class="act-btn stopc"
                                       @click="deleteVmTemplate(node.name, vm.vmid, vm.name || 'Unnamed')"
                                       title="Delete Template">
                                 <i class="bi bi-trash"></i>
@@ -159,44 +162,44 @@
           </div>
 
           <!-- Container Templates -->
-          <div class="col-12 mb-4">
-            <div class="card">
-              <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="bi bi-box"></i> Container Templates</h5>
-                <button class="btn btn-success btn-sm" @click="openLxcImport(node.name)">
+          <div class="col-12">
+            <div class="card-x">
+              <div class="cx-head">
+                <i class="bi bi-box" style="color:var(--accent)"></i><span class="cx-title">Container Templates</span>
+                <button class="btn-x sm primary ms-auto" @click="openLxcImport(node.name)">
                   <i class="bi bi-download"></i> Import Template
                 </button>
               </div>
-              <div class="card-body">
+              <div class="cx-body">
                 <div x-show="perNode[node.name] && perNode[node.name].loadingTemplates" class="text-center py-3">
                   <div class="spinner-border spinner-border-sm" role="status"></div>
                   Loading container templates...
                 </div>
                 <div x-show="perNode[node.name] && !perNode[node.name].loadingTemplates && !perNode[node.name].templateError && perNode[node.name].lxcTemplates.length === 0"
-                     class="text-muted">
+                     class="empty-hint">
                   No container templates found.
                 </div>
                 <div x-show="perNode[node.name] && !perNode[node.name].loadingTemplates && perNode[node.name].lxcTemplates.length > 0"
-                     class="table-responsive">
-                  <table class="table table-sm">
+                     class="tbl-scroll">
+                  <table class="tbl">
                     <thead>
-                      <tr><th>Template</th><th>Storage</th><th>Size</th><th>Filename</th><th>Actions</th></tr>
+                      <tr><th>Template</th><th>Storage</th><th>Size</th><th>Filename</th><th class="num">Actions</th></tr>
                     </thead>
                     <tbody>
                       <template x-for="t in (perNode[node.name] ? perNode[node.name].lxcTemplates : [])" :key="t.volid">
                         <tr>
-                          <td><strong x-text="lxcOsInfo(t)"></strong></td>
-                          <td><span class="badge bg-secondary" x-text="isoStorage(t.volid)"></span></td>
+                          <td><span class="nm" x-text="lxcOsInfo(t)"></span></td>
+                          <td><span class="type-chip" x-text="isoStorage(t.volid)"></span></td>
                           <td x-text="lxcSizeGB(t) + ' GB'"></td>
-                          <td><small class="text-muted" x-text="isoFilename(t.volid)"></small></td>
+                          <td><span class="text-faint" style="font-size:11.5px" x-text="isoFilename(t.volid)"></span></td>
                           <td>
-                            <div class="btn-group btn-group-sm">
-                              <button class="btn btn-outline-success"
+                            <div class="act-row">
+                              <button class="act-btn go"
                                       @click="openCreateCt(node.name, t.volid)"
                                       title="Create Container">
                                 <i class="bi bi-plus-circle"></i>
                               </button>
-                              <button class="btn btn-outline-danger"
+                              <button class="act-btn stopc"
                                       @click="deleteLxcTemplate(node.name, t.volid)"
                                       title="Delete Template">
                                 <i class="bi bi-trash"></i>
@@ -227,56 +230,60 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
         </div>
         <div class="modal-body">
-          <div class="mb-3">
-            <label class="form-label">ISO URL <span class="text-danger">*</span></label>
-            <input type="url" class="form-control" x-model="dl.url"
+          <div class="field">
+            <label>ISO URL <span class="text-danger">*</span></label>
+            <input type="url" class="inp" x-model="dl.url"
                    @change="dlAutofillFilename()"
                    placeholder="https://example.com/image.iso">
-            <div class="form-text">Enter the direct URL to download the ISO image</div>
+            <div class="hint">Enter the direct URL to download the ISO image</div>
           </div>
-          <div class="mb-3">
-            <label class="form-label">Filename</label>
-            <input type="text" class="form-control" x-model="dl.filename"
+          <div class="field">
+            <label>Filename</label>
+            <input type="text" class="inp" x-model="dl.filename"
                    placeholder="Auto-detect from URL">
-            <div class="form-text">Leave empty to auto-detect from URL</div>
+            <div class="hint">Leave empty to auto-detect from URL</div>
           </div>
-          <div class="mb-3">
-            <label class="form-label">Storage <span class="text-danger">*</span></label>
+          <div class="field">
+            <label>Storage <span class="text-danger">*</span></label>
             <div x-show="dl.loadingStorages" class="text-muted">
               <span class="spinner-border spinner-border-sm"></span> Loading storages...
             </div>
-            <select class="form-select" x-model="dl.storage" x-show="!dl.loadingStorages">
+            <select class="inp" x-model="dl.storage" x-show="!dl.loadingStorages">
               <option value="">Select storage...</option>
               <template x-for="s in dl.storages" :key="s.storage">
                 <option :value="s.storage" x-text="storageLabel(s)"></option>
               </template>
             </select>
-            <div class="form-text">Select storage that supports ISO content</div>
+            <div class="hint">Select storage that supports ISO content</div>
           </div>
 
           <!-- Progress feedback -->
           <div x-show="dl.showProgress" class="mt-3">
             <template x-if="dl.showProgress && !dl.manualUrl">
-              <div class="alert alert-info">
-                <i class="bi bi-download"></i> Download started. Check the Jobs panel for progress.
+              <div class="callout info">
+                <i class="bi bi-download"></i>
+                <div><div class="b">Download started. Check the Jobs panel for progress.</div></div>
               </div>
             </template>
             <template x-if="dl.showProgress && dl.manualUrl">
-              <div class="alert alert-warning">
-                <h6><i class="bi bi-exclamation-triangle"></i> Manual Download Required</h6>
-                <p class="mb-2">This URL requires manual download due to redirects or authentication.</p>
-                <div class="d-flex gap-2">
-                  <button type="button" class="btn btn-sm btn-secondary" @click="copyToClipboard(dl.manualUrl)">
-                    <i class="bi bi-clipboard"></i> Copy URL
-                  </button>
+              <div class="callout warn">
+                <i class="bi bi-exclamation-triangle"></i>
+                <div>
+                  <div class="t">Manual Download Required</div>
+                  <div class="b">This URL requires manual download due to redirects or authentication.</div>
+                  <div class="d-flex gap-2 mt-2">
+                    <button type="button" class="btn-x sm" @click="copyToClipboard(dl.manualUrl)">
+                      <i class="bi bi-clipboard"></i> Copy URL
+                    </button>
+                  </div>
                 </div>
               </div>
             </template>
           </div>
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-          <button type="button" class="btn btn-primary" @click="startDownload()" :disabled="dl.busy">
+          <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn-x primary" @click="startDownload()" :disabled="dl.busy">
             <span x-show="dl.busy" class="spinner-border spinner-border-sm"></span>
             <span x-show="!dl.busy"><i class="bi bi-download"></i></span>
             <span x-text="dl.busy ? ' Starting...' : ' Start Download'"></span>
@@ -299,10 +306,10 @@
 
           <!-- Cloud Image Selection -->
           <div class="mb-4">
-            <h6 class="text-primary"><i class="bi bi-image"></i> Cloud Image</h6>
-            <div class="mb-3">
-              <label class="form-label">Select Image <span class="text-danger">*</span></label>
-              <select class="form-select" x-model="cloud.image" @change="onCloudImageChange()">
+            <div class="sub-h" style="margin-top:0"><i class="bi bi-image"></i> Cloud Image</div>
+            <div class="field">
+              <label>Select Image <span class="text-danger">*</span></label>
+              <select class="inp" x-model="cloud.image" @change="onCloudImageChange()">
                 <option value="">Select a cloud image...</option>
                 <template x-for="group in cloudImageGroups" :key="group.label">
                   <optgroup :label="group.label">
@@ -312,7 +319,7 @@
                   </optgroup>
                 </template>
               </select>
-              <div class="form-text">
+              <div class="hint">
                 <template x-if="cloudSelectedImage">
                   <span>
                     <small x-text="cloudSelectedImage.description"></small><br>
@@ -325,122 +332,143 @@
 
           <!-- VM Configuration -->
           <div class="mb-4">
-            <h6 class="text-primary"><i class="bi bi-gear"></i> VM Configuration</h6>
+            <div class="sub-h"><i class="bi bi-gear"></i> VM Configuration</div>
             <div class="row">
-              <div class="col-md-6 mb-3">
-                <label class="form-label">Template Name</label>
-                <input type="text" class="form-control" x-model="cloud.name" placeholder="Auto-generated from image">
+              <div class="col-md-6">
+                <div class="field">
+                  <label>Template Name</label>
+                  <input type="text" class="inp" x-model="cloud.name" placeholder="Auto-generated from image">
+                </div>
               </div>
-              <div class="col-md-6 mb-3">
-                <label class="form-label">VM ID</label>
-                <input type="number" class="form-control" x-model.number="cloud.vmid"
-                       @input.debounce.300ms="checkVmid('cloud')"
-                       :class="cloud.vmidStatus.valid === true ? 'is-valid' : cloud.vmidStatus.valid === false ? 'is-invalid' : ''"
-                       placeholder="Auto (next available)">
-                <div class="form-text"
-                     :class="cloud.vmidStatus.valid === true ? 'text-success' : cloud.vmidStatus.valid === false ? 'text-danger' : 'text-muted'">
-                  <template x-if="cloud.vmidStatus.checking">
-                    <span><i class="bi bi-arrow-clockwise spin"></i> Checking...</span>
-                  </template>
-                  <template x-if="!cloud.vmidStatus.checking && cloud.vmidStatus.msg">
-                    <span x-text="cloud.vmidStatus.msg"></span>
-                  </template>
+              <div class="col-md-6">
+                <div class="field">
+                  <label>VM ID</label>
+                  <input type="number" class="inp" x-model.number="cloud.vmid"
+                         @input.debounce.300ms="checkVmid('cloud')"
+                         :class="cloud.vmidStatus.valid === true ? 'is-valid' : cloud.vmidStatus.valid === false ? 'is-invalid' : ''"
+                         placeholder="Auto (next available)">
+                  <div class="hint"
+                       :class="cloud.vmidStatus.valid === true ? 'text-success' : cloud.vmidStatus.valid === false ? 'text-danger' : 'text-muted'">
+                    <template x-if="cloud.vmidStatus.checking">
+                      <span><i class="bi bi-arrow-clockwise spin"></i> Checking...</span>
+                    </template>
+                    <template x-if="!cloud.vmidStatus.checking && cloud.vmidStatus.msg">
+                      <span x-text="cloud.vmidStatus.msg"></span>
+                    </template>
+                  </div>
                 </div>
               </div>
             </div>
             <div class="row">
-              <div class="col-md-4 mb-3">
-                <label class="form-label">CPU Cores</label>
-                <input type="number" class="form-control" x-model.number="cloud.cores" min="1" max="128">
+              <div class="col-md-4">
+                <div class="field">
+                  <label>CPU Cores</label>
+                  <input type="number" class="inp" x-model.number="cloud.cores" min="1" max="128">
+                </div>
               </div>
-              <div class="col-md-4 mb-3">
-                <label class="form-label">Memory (MB)</label>
-                <input type="number" class="form-control" x-model.number="cloud.memory" min="512" step="512">
+              <div class="col-md-4">
+                <div class="field">
+                  <label>Memory (MB)</label>
+                  <input type="number" class="inp" x-model.number="cloud.memory" min="512" step="512">
+                </div>
               </div>
-              <div class="col-md-4 mb-3">
-                <label class="form-label">Disk Size</label>
-                <input type="text" class="form-control" x-model="cloud.diskSize" placeholder="10G">
+              <div class="col-md-4">
+                <div class="field">
+                  <label>Disk Size</label>
+                  <input type="text" class="inp" x-model="cloud.diskSize" placeholder="10G">
+                </div>
               </div>
             </div>
             <div class="row">
-              <div class="col-md-6 mb-3">
-                <label class="form-label">Storage <span class="text-danger">*</span></label>
-                <select class="form-select" x-model="cloud.storage">
-                  <option value="">Select storage...</option>
-                  <template x-for="s in cloud.storages" :key="s.storage">
-                    <option :value="s.storage" x-text="storageLabel(s)"></option>
-                  </template>
-                </select>
+              <div class="col-md-6">
+                <div class="field">
+                  <label>Storage <span class="text-danger">*</span></label>
+                  <select class="inp" x-model="cloud.storage">
+                    <option value="">Select storage...</option>
+                    <template x-for="s in cloud.storages" :key="s.storage">
+                      <option :value="s.storage" x-text="storageLabel(s)"></option>
+                    </template>
+                  </select>
+                </div>
               </div>
-              <div class="col-md-6 mb-3">
-                <label class="form-label">Network Bridge</label>
-                <select class="form-select" x-model="cloud.bridge">
-                  <template x-for="net in cloud.bridges" :key="net.iface">
-                    <option :value="net.iface" x-text="bridgeLabel(net)"></option>
-                  </template>
-                </select>
+              <div class="col-md-6">
+                <div class="field">
+                  <label>Network Bridge</label>
+                  <select class="inp" x-model="cloud.bridge">
+                    <template x-for="net in cloud.bridges" :key="net.iface">
+                      <option :value="net.iface" x-text="bridgeLabel(net)"></option>
+                    </template>
+                  </select>
+                </div>
               </div>
             </div>
           </div>
 
           <!-- Cloud-Init -->
           <div class="mb-4">
-            <h6 class="text-primary"><i class="bi bi-cloud"></i> Cloud-Init Configuration</h6>
+            <div class="sub-h"><i class="bi bi-cloud"></i> Cloud-Init Configuration</div>
             <div class="row">
-              <div class="col-md-6 mb-3">
-                <label class="form-label">Default User</label>
-                <input type="text" class="form-control" x-model="cloud.ciUser" placeholder="e.g., ubuntu, debian">
-                <div class="form-text">Leave empty to use image default</div>
+              <div class="col-md-6">
+                <div class="field">
+                  <label>Default User</label>
+                  <input type="text" class="inp" x-model="cloud.ciUser" placeholder="e.g., ubuntu, debian">
+                  <div class="hint">Leave empty to use image default</div>
+                </div>
               </div>
-              <div class="col-md-6 mb-3">
-                <label class="form-label">Password</label>
-                <input type="password" class="form-control" x-model="cloud.ciPassword" placeholder="Optional">
+              <div class="col-md-6">
+                <div class="field">
+                  <label>Password</label>
+                  <input type="password" class="inp" x-model="cloud.ciPassword" placeholder="Optional">
+                </div>
               </div>
             </div>
-            <div class="mb-3">
-              <label class="form-label">SSH Public Keys</label>
-              <textarea class="form-control" x-model="cloud.ciSshKeys" rows="3"
+            <div class="field">
+              <label>SSH Public Keys</label>
+              <textarea class="inp" x-model="cloud.ciSshKeys" rows="3"
                         placeholder="ssh-rsa AAAA... or ssh-ed25519 AAAA..."></textarea>
-              <div class="form-text">One key per line. Recommended over password authentication.</div>
+              <div class="hint">One key per line. Recommended over password authentication.</div>
             </div>
-            <div class="mb-3">
-              <label class="form-label">IP Configuration</label>
-              <input type="text" class="form-control" x-model="cloud.ciIpConfig">
-              <div class="form-text">Use ip=dhcp for DHCP or ip=x.x.x.x/24,gw=x.x.x.x for static</div>
+            <div class="field">
+              <label>IP Configuration</label>
+              <input type="text" class="inp" x-model="cloud.ciIpConfig">
+              <div class="hint">Use ip=dhcp for DHCP or ip=x.x.x.x/24,gw=x.x.x.x for static</div>
             </div>
           </div>
 
           <!-- Progress -->
-          <div x-show="cloud.showProgress" class="alert alert-info">
-            <span class="spinner-border spinner-border-sm"></span> Starting background job...
+          <div x-show="cloud.showProgress" class="callout info">
+            <span class="spinner-border spinner-border-sm"></span>
+            <div><div class="b">Starting background job...</div></div>
           </div>
 
           <!-- Result -->
           <div x-show="cloud.result">
             <template x-if="cloud.result && cloud.result.success">
-              <div class="alert alert-info">
-                <i class="bi bi-check-circle"></i> <strong>Job started successfully!</strong><br>
-                <p class="mb-2">Template creation is running in the background.</p>
-                <p class="mb-0">
-                  <strong>Job ID:</strong> <span x-text="cloud.result.job_id"></span><br>
-                  <strong>VMID:</strong> <span x-text="cloud.result.vmid"></span>
-                </p>
-                <hr>
-                <small class="text-muted">Track progress via the Jobs icon in the top navbar.</small>
+              <div class="callout info">
+                <i class="bi bi-check-circle"></i>
+                <div>
+                  <div class="t">Job started successfully!</div>
+                  <div class="b">
+                    Template creation is running in the background.<br>
+                    <strong>Job ID:</strong> <span x-text="cloud.result.job_id"></span><br>
+                    <strong>VMID:</strong> <span x-text="cloud.result.vmid"></span><br>
+                    <small class="text-muted">Track progress via the Jobs icon in the top bar.</small>
+                  </div>
+                </div>
               </div>
             </template>
             <template x-if="cloud.result && !cloud.result.success">
-              <div class="alert alert-danger">
-                <i class="bi bi-exclamation-triangle"></i> <strong>Error:</strong>
-                <span x-text="cloud.result.error || 'Unknown error'"></span>
+              <div class="callout danger">
+                <i class="bi bi-exclamation-triangle"></i>
+                <div><div class="t">Error</div><div class="b" x-text="cloud.result.error || 'Unknown error'"></div></div>
               </div>
             </template>
           </div>
 
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-          <button type="button" class="btn btn-primary" @click="createCloudTemplate()" :disabled="cloud.busy">
+          <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn-x primary" @click="createCloudTemplate()" :disabled="cloud.busy">
             <span x-show="cloud.busy" class="spinner-border spinner-border-sm"></span>
             <span x-show="!cloud.busy"><i class="bi bi-plus-circle"></i></span>
             <span x-text="cloud.busy ? ' Creating...' : ' Create Template'"></span>
@@ -490,28 +518,28 @@
 
             <!-- Proxmox Templates tab -->
             <div class="tab-pane fade show active" id="proxmox-source" role="tabpanel">
-              <div class="mb-3">
-                <label class="form-label">Storage <span class="text-danger">*</span></label>
-                <select class="form-select" x-model="lxc.lxcStorage">
+              <div class="field">
+                <label>Storage <span class="text-danger">*</span></label>
+                <select class="inp" x-model="lxc.lxcStorage">
                   <option value="">Select storage...</option>
                   <template x-for="s in lxc.storages" :key="s.storage">
                     <option :value="s.storage" x-text="storageLabel(s)"></option>
                   </template>
                 </select>
-                <div class="form-text">Select storage that supports container templates</div>
+                <div class="hint">Select storage that supports container templates</div>
               </div>
-              <div class="mb-3">
-                <label class="form-label">Category</label>
-                <select class="form-select" x-model="lxc.filterSection">
+              <div class="field">
+                <label>Category</label>
+                <select class="inp" x-model="lxc.filterSection">
                   <option value="">All Categories</option>
                   <template x-for="sec in lxcSections" :key="sec.value">
                     <option :value="sec.value" x-text="sec.label"></option>
                   </template>
                 </select>
               </div>
-              <div class="mb-3">
-                <label class="form-label">Template <span class="text-danger">*</span></label>
-                <select class="form-select" x-model="lxc.selectedTemplate" @change="onLxcTemplateChange()">
+              <div class="field">
+                <label>Template <span class="text-danger">*</span></label>
+                <select class="inp" x-model="lxc.selectedTemplate" @change="onLxcTemplateChange()">
                   <option value="">Select template...</option>
                   <template x-for="group in lxcTemplateGroups" :key="group.label">
                     <optgroup :label="group.label">
@@ -521,15 +549,15 @@
                     </optgroup>
                   </template>
                 </select>
-                <div class="form-text">
+                <div class="hint">
                   <template x-if="lxc.templateData">
                     <span>
                       <strong x-text="lxc.templateData.headline"></strong>
                       <template x-if="lxc.templateData.os">
-                        <span class="badge bg-secondary ms-1" x-text="lxc.templateData.os"></span>
+                        <span class="type-chip ms-1" x-text="lxc.templateData.os"></span>
                       </template>
                       <template x-if="lxc.templateData.version">
-                        <span class="badge bg-info ms-1" x-text="lxc.templateData.version"></span>
+                        <span class="type-chip ms-1" x-text="lxc.templateData.version"></span>
                       </template>
                     </span>
                   </template>
@@ -539,96 +567,105 @@
 
             <!-- URL tab -->
             <div class="tab-pane fade" id="url-source" role="tabpanel">
-              <div class="mb-3">
-                <label class="form-label">Storage <span class="text-danger">*</span></label>
-                <select class="form-select" x-model="lxc.lxcUrlStorage">
+              <div class="field">
+                <label>Storage <span class="text-danger">*</span></label>
+                <select class="inp" x-model="lxc.lxcUrlStorage">
                   <option value="">Select storage...</option>
                   <template x-for="s in lxc.storages" :key="s.storage">
                     <option :value="s.storage" x-text="storageLabel(s)"></option>
                   </template>
                 </select>
               </div>
-              <div class="mb-3">
-                <label class="form-label">Template URL <span class="text-danger">*</span></label>
-                <input type="url" class="form-control" x-model="lxc.lxcUrl"
+              <div class="field">
+                <label>Template URL <span class="text-danger">*</span></label>
+                <input type="url" class="inp" x-model="lxc.lxcUrl"
                        @change="lxcUrlAutofill()"
                        placeholder="https://example.com/template.tar.xz">
-                <div class="form-text">Direct URL to a container template (.tar.xz, .tar.gz, or .tar.zst)</div>
+                <div class="hint">Direct URL to a container template (.tar.xz, .tar.gz, or .tar.zst)</div>
               </div>
-              <div class="mb-3">
-                <label class="form-label">Filename</label>
-                <input type="text" class="form-control" x-model="lxc.lxcUrlFilename" placeholder="Auto-detect from URL">
-                <div class="form-text">Leave empty to auto-detect from URL</div>
+              <div class="field">
+                <label>Filename</label>
+                <input type="text" class="inp" x-model="lxc.lxcUrlFilename" placeholder="Auto-detect from URL">
+                <div class="hint">Leave empty to auto-detect from URL</div>
               </div>
             </div>
 
             <!-- OCI tab -->
             <div class="tab-pane fade" id="oci-source" role="tabpanel">
-              <div class="mb-3">
-                <label class="form-label">Storage <span class="text-danger">*</span></label>
-                <select class="form-select" x-model="lxc.lxcOciStorage">
+              <div class="field">
+                <label>Storage <span class="text-danger">*</span></label>
+                <select class="inp" x-model="lxc.lxcOciStorage">
                   <option value="">Select storage...</option>
                   <template x-for="s in lxc.storages" :key="s.storage">
                     <option :value="s.storage" x-text="storageLabel(s)"></option>
                   </template>
                 </select>
               </div>
-              <div class="mb-3">
-                <label class="form-label">OCI Image <span class="text-danger">*</span></label>
-                <input type="text" class="form-control" x-model="lxc.lxcOciImage"
+              <div class="field">
+                <label>OCI Image <span class="text-danger">*</span></label>
+                <input type="text" class="inp" x-model="lxc.lxcOciImage"
                        placeholder="docker.io/library/alpine:latest">
-                <div class="form-text">OCI image reference (e.g., docker.io/library/alpine:latest)</div>
+                <div class="hint">OCI image reference (e.g., docker.io/library/alpine:latest)</div>
               </div>
-              <div class="alert alert-info">
-                <i class="bi bi-info-circle"></i> <strong>Note:</strong> OCI registry support requires Proxmox VE 8.0+. The image will be converted to an LXC template.
+              <div class="callout info">
+                <i class="bi bi-info-circle"></i>
+                <div><div class="t">Note</div><div class="b">OCI registry support requires Proxmox VE 8.0+. The image will be converted to an LXC template.</div></div>
               </div>
             </div>
 
           </div><!-- /tab-content -->
 
           <!-- Progress -->
-          <div x-show="lxc.showProgress" class="alert alert-info mt-3">
+          <div x-show="lxc.showProgress" class="callout info mt-3">
             <span class="spinner-border spinner-border-sm"></span>
-            <span x-text="lxc.progressMsg || 'Starting download...'"></span>
+            <div><div class="b" x-text="lxc.progressMsg || 'Starting download...'"></div></div>
           </div>
 
           <!-- Result -->
           <div x-show="lxc.result" class="mt-3">
             <template x-if="lxc.result && lxc.result.success">
-              <div class="alert alert-info">
-                <i class="bi bi-check-circle"></i> <strong>Download started!</strong><br>
-                <p class="mb-2" x-text="lxc.result.message"></p>
-                <template x-if="lxc.result.job_id">
-                  <p class="mb-0"><strong>Job ID:</strong> <span x-text="lxc.result.job_id"></span></p>
-                </template>
-                <hr>
-                <small class="text-muted">Track progress via the Jobs icon in the top navbar.</small>
+              <div class="callout info">
+                <i class="bi bi-check-circle"></i>
+                <div>
+                  <div class="t">Download started!</div>
+                  <div class="b">
+                    <span x-text="lxc.result.message"></span>
+                    <template x-if="lxc.result.job_id">
+                      <div><strong>Job ID:</strong> <span x-text="lxc.result.job_id"></span></div>
+                    </template>
+                    <small class="text-muted">Track progress via the Jobs icon in the top bar.</small>
+                  </div>
+                </div>
               </div>
             </template>
             <template x-if="lxc.result && !lxc.result.success && lxc.result.manual_command">
-              <div class="alert alert-warning">
-                <i class="bi bi-exclamation-triangle"></i> <strong>Manual download required</strong><br>
-                <p x-text="lxc.result.error"></p>
-                <hr>
-                <p class="mb-1"><strong>Run this command on the Proxmox node:</strong></p>
-                <code class="d-block p-2 bg-dark text-light rounded" x-text="lxc.result.manual_command"></code>
-                <button class="btn btn-sm btn-secondary mt-2" @click="copyToClipboard(lxc.result.manual_command)">
-                  <i class="bi bi-clipboard"></i> Copy Command
-                </button>
+              <div class="callout warn">
+                <i class="bi bi-exclamation-triangle"></i>
+                <div>
+                  <div class="t">Manual download required</div>
+                  <div class="b">
+                    <span x-text="lxc.result.error"></span><br>
+                    <strong>Run this command on the Proxmox node:</strong>
+                    <code class="d-block p-2 bg-dark text-light rounded mt-1" x-text="lxc.result.manual_command"></code>
+                    <button class="btn-x sm mt-2" @click="copyToClipboard(lxc.result.manual_command)">
+                      <i class="bi bi-clipboard"></i> Copy Command
+                    </button>
+                  </div>
+                </div>
               </div>
             </template>
             <template x-if="lxc.result && !lxc.result.success && !lxc.result.manual_command">
-              <div class="alert alert-danger">
-                <i class="bi bi-exclamation-triangle"></i> <strong>Error:</strong>
-                <span x-text="lxc.result.error || 'Unknown error'"></span>
+              <div class="callout danger">
+                <i class="bi bi-exclamation-triangle"></i>
+                <div><div class="t">Error</div><div class="b" x-text="lxc.result.error || 'Unknown error'"></div></div>
               </div>
             </template>
           </div>
 
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-          <button type="button" class="btn btn-primary" @click="importLxcTemplate()" :disabled="lxc.busy">
+          <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn-x primary" @click="importLxcTemplate()" :disabled="lxc.busy">
             <span x-show="lxc.busy" class="spinner-border spinner-border-sm"></span>
             <span x-show="!lxc.busy"><i class="bi bi-download"></i></span>
             <span x-text="lxc.busy ? ' Importing...' : ' Import Template'"></span>
@@ -650,112 +687,139 @@
         <div class="modal-body">
 
           <!-- Template info -->
-          <div class="alert alert-info mb-3">
-            <i class="bi bi-box"></i> Template: <strong x-text="ct.templateInfo"></strong>
+          <div class="callout info mb-3">
+            <i class="bi bi-box"></i>
+            <div><div class="b">Template: <strong x-text="ct.templateInfo"></strong></div></div>
           </div>
 
           <!-- Basic Settings -->
-          <div class="row mb-3">
+          <div class="row">
             <div class="col-md-6">
-              <label class="form-label">Container ID</label>
-              <input type="number" class="form-control" x-model.number="ct.vmid"
-                     @input.debounce.300ms="checkVmid('ct')"
-                     :class="ct.vmidStatus.valid === true ? 'is-valid' : ct.vmidStatus.valid === false ? 'is-invalid' : ''"
-                     placeholder="Auto (next available)">
-              <div class="form-text"
-                   :class="ct.vmidStatus.valid === true ? 'text-success' : ct.vmidStatus.valid === false ? 'text-danger' : 'text-muted'">
-                <template x-if="ct.vmidStatus.checking">
-                  <span><i class="bi bi-arrow-clockwise spin"></i> Checking...</span>
-                </template>
-                <template x-if="!ct.vmidStatus.checking && ct.vmidStatus.msg">
-                  <span x-text="ct.vmidStatus.msg"></span>
-                </template>
-                <template x-if="!ct.vmidStatus.checking && !ct.vmidStatus.msg">
-                  <span>Leave empty for next available ID</span>
-                </template>
+              <div class="field">
+                <label>Container ID</label>
+                <input type="number" class="inp" x-model.number="ct.vmid"
+                       @input.debounce.300ms="checkVmid('ct')"
+                       :class="ct.vmidStatus.valid === true ? 'is-valid' : ct.vmidStatus.valid === false ? 'is-invalid' : ''"
+                       placeholder="Auto (next available)">
+                <div class="hint"
+                     :class="ct.vmidStatus.valid === true ? 'text-success' : ct.vmidStatus.valid === false ? 'text-danger' : 'text-muted'">
+                  <template x-if="ct.vmidStatus.checking">
+                    <span><i class="bi bi-arrow-clockwise spin"></i> Checking...</span>
+                  </template>
+                  <template x-if="!ct.vmidStatus.checking && ct.vmidStatus.msg">
+                    <span x-text="ct.vmidStatus.msg"></span>
+                  </template>
+                  <template x-if="!ct.vmidStatus.checking && !ct.vmidStatus.msg">
+                    <span>Leave empty for next available ID</span>
+                  </template>
+                </div>
               </div>
             </div>
             <div class="col-md-6">
-              <label class="form-label">Hostname <span class="text-danger">*</span></label>
-              <input type="text" class="form-control" x-model="ct.hostname"
-                     pattern="[a-zA-Z0-9\-]+" placeholder="my-container" required>
+              <div class="field">
+                <label>Hostname <span class="text-danger">*</span></label>
+                <input type="text" class="inp" x-model="ct.hostname"
+                       pattern="[a-zA-Z0-9\-]+" placeholder="my-container" required>
+              </div>
             </div>
           </div>
 
           <!-- Resources -->
-          <div class="row mb-3">
+          <div class="row">
             <div class="col-md-4">
-              <label class="form-label">CPU Cores</label>
-              <input type="number" class="form-control" x-model.number="ct.cores" min="1" max="128">
+              <div class="field">
+                <label>CPU Cores</label>
+                <input type="number" class="inp" x-model.number="ct.cores" min="1" max="128">
+              </div>
             </div>
             <div class="col-md-4">
-              <label class="form-label">Memory (MB)</label>
-              <input type="number" class="form-control" x-model.number="ct.memory" min="16" step="128">
+              <div class="field">
+                <label>Memory (MB)</label>
+                <input type="number" class="inp" x-model.number="ct.memory" min="16" step="128">
+              </div>
             </div>
             <div class="col-md-4">
-              <label class="form-label">Swap (MB)</label>
-              <input type="number" class="form-control" x-model.number="ct.swap" min="0" step="128">
+              <div class="field">
+                <label>Swap (MB)</label>
+                <input type="number" class="inp" x-model.number="ct.swap" min="0" step="128">
+              </div>
             </div>
           </div>
 
           <!-- Storage -->
-          <div class="row mb-3">
+          <div class="row">
             <div class="col-md-6">
-              <label class="form-label">Root Disk Storage <span class="text-danger">*</span></label>
-              <select class="form-select" x-model="ct.storage">
-                <option value="">Select storage...</option>
-                <template x-for="s in ct.storages" :key="s.storage">
-                  <option :value="s.storage" x-text="storageLabel(s)"></option>
-                </template>
-              </select>
+              <div class="field">
+                <label>Root Disk Storage <span class="text-danger">*</span></label>
+                <select class="inp" x-model="ct.storage">
+                  <option value="">Select storage...</option>
+                  <template x-for="s in ct.storages" :key="s.storage">
+                    <option :value="s.storage" x-text="storageLabel(s)"></option>
+                  </template>
+                </select>
+              </div>
             </div>
             <div class="col-md-6">
-              <label class="form-label">Root Disk Size (GB)</label>
-              <input type="number" class="form-control" x-model.number="ct.diskSize" min="1">
+              <div class="field">
+                <label>Root Disk Size (GB)</label>
+                <input type="number" class="inp" x-model.number="ct.diskSize" min="1">
+              </div>
             </div>
           </div>
 
           <!-- Network -->
-          <div class="row mb-3">
+          <div class="row">
             <div class="col-md-6">
-              <label class="form-label">Network Bridge</label>
-              <select class="form-select" x-model="ct.bridge">
-                <template x-for="net in ct.bridges" :key="net.iface">
-                  <option :value="net.iface" x-text="bridgeLabel(net)"></option>
-                </template>
-              </select>
+              <div class="field">
+                <label>Network Bridge</label>
+                <select class="inp" x-model="ct.bridge">
+                  <template x-for="net in ct.bridges" :key="net.iface">
+                    <option :value="net.iface" x-text="bridgeLabel(net)"></option>
+                  </template>
+                </select>
+              </div>
             </div>
             <div class="col-md-6">
-              <label class="form-label">IP Configuration</label>
-              <select class="form-select" x-model="ct.ipConfig">
-                <option value="dhcp">DHCP</option>
-                <option value="static">Static IP</option>
-              </select>
+              <div class="field">
+                <label>IP Configuration</label>
+                <select class="inp" x-model="ct.ipConfig">
+                  <option value="dhcp">DHCP</option>
+                  <option value="static">Static IP</option>
+                </select>
+              </div>
             </div>
           </div>
 
           <!-- Static IP fields -->
-          <div class="row mb-3" x-show="ct.ipConfig === 'static'">
+          <div class="row" x-show="ct.ipConfig === 'static'">
             <div class="col-md-6">
-              <label class="form-label">IP Address (CIDR)</label>
-              <input type="text" class="form-control" x-model="ct.ip" placeholder="192.168.1.100/24">
+              <div class="field">
+                <label>IP Address (CIDR)</label>
+                <input type="text" class="inp" x-model="ct.ip" placeholder="192.168.1.100/24">
+              </div>
             </div>
             <div class="col-md-6">
-              <label class="form-label">Gateway</label>
-              <input type="text" class="form-control" x-model="ct.gateway" placeholder="192.168.1.1">
+              <div class="field">
+                <label>Gateway</label>
+                <input type="text" class="inp" x-model="ct.gateway" placeholder="192.168.1.1">
+              </div>
             </div>
           </div>
 
           <!-- Password -->
-          <div class="row mb-3">
+          <div class="row">
             <div class="col-md-6">
-              <label class="form-label">Root Password</label>
-              <input type="password" class="form-control" x-model="ct.password" placeholder="Leave empty for no password">
+              <div class="field">
+                <label>Root Password</label>
+                <input type="password" class="inp" x-model="ct.password" placeholder="Leave empty for no password">
+              </div>
             </div>
             <div class="col-md-6">
-              <label class="form-label">SSH Public Key</label>
-              <textarea class="form-control" x-model="ct.sshKeys" rows="2"
-                        placeholder="ssh-rsa AAAA... or ssh-ed25519 AAAA..."></textarea>
+              <div class="field">
+                <label>SSH Public Key</label>
+                <textarea class="inp" x-model="ct.sshKeys" rows="2"
+                          placeholder="ssh-rsa AAAA... or ssh-ed25519 AAAA..."></textarea>
+              </div>
             </div>
           </div>
 
@@ -776,34 +840,39 @@
           </div>
 
           <!-- Progress -->
-          <div x-show="ct.showProgress" class="alert alert-info">
-            <span class="spinner-border spinner-border-sm"></span> Creating container...
+          <div x-show="ct.showProgress" class="callout info">
+            <span class="spinner-border spinner-border-sm"></span>
+            <div><div class="b">Creating container...</div></div>
           </div>
 
           <!-- Result -->
           <div x-show="ct.result">
             <template x-if="ct.result && ct.result.success">
-              <div class="alert alert-success">
-                <i class="bi bi-check-circle"></i> <strong>Container created successfully!</strong><br>
-                <p class="mb-0">Container ID: <strong x-text="ct.result.vmid"></strong></p>
-                <hr>
-                <a :href="'/vm/' + ct.node + '/' + ct.result.vmid" class="btn btn-sm btn-primary">
-                  <i class="bi bi-box"></i> Go to Container
-                </a>
+              <div class="callout ok">
+                <i class="bi bi-check-circle"></i>
+                <div>
+                  <div class="t">Container created successfully!</div>
+                  <div class="b">
+                    Container ID: <strong x-text="ct.result.vmid"></strong><br>
+                    <a :href="'/vm/' + ct.node + '/' + ct.result.vmid" class="btn-x sm primary mt-2">
+                      <i class="bi bi-box"></i> Go to Container
+                    </a>
+                  </div>
+                </div>
               </div>
             </template>
             <template x-if="ct.result && !ct.result.success">
-              <div class="alert alert-danger">
-                <i class="bi bi-exclamation-triangle"></i> <strong>Error:</strong>
-                <span x-text="ct.result.error || 'Unknown error'"></span>
+              <div class="callout danger">
+                <i class="bi bi-exclamation-triangle"></i>
+                <div><div class="t">Error</div><div class="b" x-text="ct.result.error || 'Unknown error'"></div></div>
               </div>
             </template>
           </div>
 
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-          <button type="button" class="btn btn-success" @click="createContainer()" :disabled="ct.busy">
+          <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn-x primary" @click="createContainer()" :disabled="ct.busy">
             <span x-show="ct.busy" class="spinner-border spinner-border-sm"></span>
             <span x-show="!ct.busy"><i class="bi bi-plus-circle"></i></span>
             <span x-text="ct.busy ? ' Creating...' : ' Create Container'"></span>

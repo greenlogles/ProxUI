@@ -1,25 +1,23 @@
 {% extends "base.html" %}
 
-{% block title %}Create VM - Proxmox Manager{% endblock %}
+{% block title %}Create - Proxmox Manager{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <h1><i class="bi bi-plus-circle"></i> Create New VM/Container</h1>
-    </div>
+<div class="mb-4">
+    <div class="sec-title">Create VM or Container</div>
+    <div class="sec-sub">Configure a new virtual machine or LXC container on the cluster</div>
 </div>
 
-<div class="row mt-3">
-    <div class="col-md-8 mx-auto">
-        <div class="card">
-            <div class="card-body">
-                <form method="POST" action="{{ url_for('create_vm') }}" id="createVmForm"
-                      x-data="createVmForm()">
+<div class="row g-3" x-data="createVmForm()">
+    <div class="col-12 col-xl-8">
+        <div class="card-x">
+            <div class="cx-body">
+                <form method="POST" action="{{ url_for('create_vm') }}" id="createVmForm">
 
                     <!-- Type Selection -->
-                    <div class="mb-3">
-                        <label for="type" class="form-label">Type</label>
-                        <select class="form-select" id="type" name="type" required
+                    <div class="field">
+                        <label for="type">Type</label>
+                        <select class="inp" id="type" name="type" required
                                 x-model="vmType" @change="onTypeChange()">
                             <option value="qemu">Virtual Machine (KVM)</option>
                             <option value="lxc">Container (LXC)</option>
@@ -27,9 +25,9 @@
                     </div>
 
                     <!-- Node Selection -->
-                    <div class="mb-3">
-                        <label for="node" class="form-label">Node</label>
-                        <select class="form-select" id="node" name="node" required
+                    <div class="field">
+                        <label for="node">Node</label>
+                        <select class="inp" id="node" name="node" required
                                 x-model="node" @change="onNodeChange()">
                             <option value="">Select node...</option>
                             {% for node in nodes %}
@@ -39,9 +37,9 @@
                     </div>
 
                     <!-- Creation Method -->
-                    <div class="mb-3">
-                        <label for="creation_method" class="form-label">Creation Method</label>
-                        <select class="form-select" id="creation_method" name="creation_method"
+                    <div class="field">
+                        <label for="creation_method">Creation Method</label>
+                        <select class="inp" id="creation_method" name="creation_method"
                                 x-model="creationMethod" @change="onMethodChange()">
                             <option value="blank">Create Blank VM/Container</option>
                             <option value="template">Use Template</option>
@@ -49,9 +47,9 @@
                     </div>
 
                     <!-- Template Selection -->
-                    <div class="mb-3" x-show="creationMethod === 'template'">
-                        <label for="template" class="form-label">Template</label>
-                        <select class="form-select" id="template" name="template" x-model="selectedTemplate">
+                    <div class="field" x-show="creationMethod === 'template'">
+                        <label for="template">Template</label>
+                        <select class="inp" id="template" name="template" x-model="selectedTemplate">
                             <option value="">Select template...</option>
                             <template x-for="t in templates" :key="t.value">
                                 <option :value="t.value" x-text="t.label"></option>
@@ -60,47 +58,53 @@
                     </div>
 
                     <!-- Basic Settings -->
-                    <div class="mb-3">
-                        <label for="vmid" class="form-label">VM ID</label>
-                        <input type="number" class="form-control" id="vmid" name="vmid"
+                    <div class="field">
+                        <label for="vmid">VM ID</label>
+                        <input type="number" class="inp" id="vmid" name="vmid"
                                min="100" max="999999" required placeholder="e.g., 100"
                                x-model="vmid"
                                @input="scheduleVmidCheck()"
                                :class="vmidValid === true ? 'is-valid' : vmidValid === false ? 'is-invalid' : ''">
-                        <div class="form-text" :class="vmidCls" x-text="vmidMsg"></div>
+                        <div class="hint" :class="vmidCls" x-text="vmidMsg"></div>
                     </div>
 
-                    <div class="mb-3">
-                        <label for="name" class="form-label">Name</label>
-                        <input type="text" class="form-control" id="name" name="name"
+                    <div class="field">
+                        <label for="name">Name</label>
+                        <input type="text" class="inp" id="name" name="name"
                                required placeholder="e.g., my-server">
                     </div>
 
                     <!-- Hardware Resources -->
                     <div class="row">
-                        <div class="col-md-4 mb-3">
-                            <label for="cores" class="form-label">CPU Cores</label>
-                            <input type="number" class="form-control" id="cores" name="cores"
-                                   min="1" max="128" value="2" required>
+                        <div class="col-md-4">
+                            <div class="field">
+                                <label for="cores">CPU Cores</label>
+                                <input type="number" class="inp" id="cores" name="cores"
+                                       min="1" max="128" value="2" required>
+                            </div>
                         </div>
 
-                        <div class="col-md-4 mb-3">
-                            <label for="memory" class="form-label">Memory (MB)</label>
-                            <input type="number" class="form-control" id="memory" name="memory"
-                                   min="512" max="524288" value="2048" step="512" required>
+                        <div class="col-md-4">
+                            <div class="field">
+                                <label for="memory">Memory (MB)</label>
+                                <input type="number" class="inp" id="memory" name="memory"
+                                       min="512" max="524288" value="2048" step="512" required>
+                            </div>
                         </div>
 
-                        <div class="col-md-4 mb-3" x-show="vmType === 'qemu'">
-                            <label for="sockets" class="form-label">CPU Sockets</label>
-                            <input type="number" class="form-control" id="sockets" name="sockets"
-                                   min="1" max="4" value="1" :required="vmType === 'qemu'">
+                        <div class="col-md-4" x-show="vmType === 'qemu'">
+                            <div class="field">
+                                <label for="sockets">CPU Sockets</label>
+                                <input type="number" class="inp" id="sockets" name="sockets"
+                                       min="1" max="4" value="1" :required="vmType === 'qemu'">
+                            </div>
                         </div>
                     </div>
 
                     <!-- Storage -->
-                    <div class="mb-3">
-                        <label for="storage" class="form-label">Storage</label>
-                        <select class="form-select" id="storage" name="storage" required
+                    <div class="field">
+                        <label for="storage">Storage</label>
+                        <select class="inp" id="storage" name="storage" required
                                 x-model="selectedStorage">
                             <option value="">Select storage...</option>
                             <template x-for="s in storages" :key="s.value">
@@ -109,16 +113,16 @@
                         </select>
                     </div>
 
-                    <div class="mb-3">
-                        <label for="disk_size" class="form-label">Disk Size (GB)</label>
-                        <input type="number" class="form-control" id="disk_size" name="disk_size"
+                    <div class="field">
+                        <label for="disk_size">Disk Size (GB)</label>
+                        <input type="number" class="inp" id="disk_size" name="disk_size"
                                min="1" max="2048" value="20" required>
                     </div>
 
                     <!-- Network -->
-                    <div class="mb-3">
-                        <label for="bridge" class="form-label">Network Bridge</label>
-                        <select class="form-select" id="bridge" name="bridge" x-model="selectedBridge">
+                    <div class="field">
+                        <label for="bridge">Network Bridge</label>
+                        <select class="inp" id="bridge" name="bridge" x-model="selectedBridge">
                             <option value="">Select network bridge...</option>
                             <template x-for="b in bridges" :key="b.value">
                                 <option :value="b.value" x-text="b.label"></option>
@@ -127,33 +131,33 @@
                     </div>
 
                     <!-- VM-specific: ISO -->
-                    <div class="mb-3" x-show="vmType === 'qemu'">
-                        <label for="iso" class="form-label">ISO Image (Optional)</label>
-                        <select class="form-select" id="iso" name="iso" x-model="selectedIso">
+                    <div class="field" x-show="vmType === 'qemu'">
+                        <label for="iso">ISO Image (Optional)</label>
+                        <select class="inp" id="iso" name="iso" x-model="selectedIso">
                             <option value="">No ISO (blank VM)</option>
                             <template x-for="iso in isos" :key="iso.value">
                                 <option :value="iso.value" x-text="iso.label"></option>
                             </template>
                         </select>
-                        <div class="form-text">Select an ISO image to attach to the VM for OS installation</div>
+                        <div class="hint">Select an ISO image to attach to the VM for OS installation</div>
                     </div>
 
                     <!-- VM-specific: QEMU guest agent -->
-                    <div class="mb-3" x-show="vmType === 'qemu'">
+                    <div class="field" x-show="vmType === 'qemu'">
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="agent" name="agent" value="1">
                             <label class="form-check-label" for="agent">Enable QEMU guest agent</label>
                         </div>
-                        <div class="form-text">
+                        <div class="hint">
                             Leave off unless <code>qemu-guest-agent</code> is installed in the guest — enabling it
                             without the agent running makes detail pages slow to load.
                         </div>
                     </div>
 
                     <!-- Container-specific: OS Template -->
-                    <div class="mb-3" x-show="vmType === 'lxc'">
-                        <label for="ostemplate" class="form-label">OS Template</label>
-                        <select class="form-select" id="ostemplate" name="ostemplate" x-model="selectedOsTemplate">
+                    <div class="field" x-show="vmType === 'lxc'">
+                        <label for="ostemplate">OS Template</label>
+                        <select class="inp" id="ostemplate" name="ostemplate" x-model="selectedOsTemplate">
                             <option value="">Select OS template...</option>
                             <template x-for="t in osTemplates" :key="t.value">
                                 <option :value="t.value" x-text="t.label"></option>
@@ -161,13 +165,27 @@
                         </select>
                     </div>
 
-                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
-                        <a href="{{ url_for('vms') }}" class="btn btn-secondary">Cancel</a>
-                        <button type="submit" class="btn btn-primary">
-                            <i class="bi bi-plus-circle"></i> Create
-                        </button>
+                    <div class="divider my-4"></div>
+                    <div class="d-flex gap-2 justify-content-end">
+                        <a href="{{ url_for('vms') }}" class="btn-x ghost">Cancel</a>
+                        <button type="submit" class="btn-x primary"><i class="bi bi-plus-lg"></i> Create</button>
                     </div>
                 </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-4" x-cloak>
+        <div class="card-x">
+            <div class="cx-head"><i class="bi bi-clipboard-check" style="color:var(--accent)"></i><span class="cx-title">Configuration</span></div>
+            <div class="cx-body">
+                <div class="summary-row"><span class="k">Type</span><span class="v" x-text="vmType === 'qemu' ? 'VM (KVM)' : 'Container (LXC)'"></span></div>
+                <div class="summary-row"><span class="k">Node</span><span class="v" x-text="node || '—'"></span></div>
+                <div class="summary-row"><span class="k">VM ID</span><span class="v mono" x-text="vmid || '—'"></span></div>
+                <div class="summary-row"><span class="k">Storage</span><span class="v" x-text="selectedStorage || '—'"></span></div>
+                <div class="summary-row" x-show="vmType === 'qemu'"><span class="k">Bridge</span><span class="v" x-text="selectedBridge || '—'"></span></div>
+                <div class="summary-row" x-show="vmType === 'qemu' && creationMethod !== 'template'"><span class="k">ISO</span><span class="v" x-text="selectedIso || 'None'"></span></div>
+                <div class="summary-row" x-show="vmType === 'lxc'"><span class="k">OS Template</span><span class="v" x-text="selectedOsTemplate || '—'"></span></div>
             </div>
         </div>
     </div>

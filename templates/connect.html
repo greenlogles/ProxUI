@@ -3,303 +3,273 @@
 {% block title %}Cluster Management - Proxmox Manager{% endblock %}
 
 {% block content %}
-<div class="row" x-data="connectPage()">
+<div x-data="connectPage()">
     <!-- Existing Clusters -->
     {% if existing_clusters %}
-    <div class="col-12 mb-4">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">
-                    <i class="bi bi-diagram-2 text-primary"></i>
-                    Configured Clusters
-                </h5>
-                <small class="text-muted">{{ existing_clusters|length }} cluster(s)</small>
-            </div>
-            <div class="card-body">
-                <div class="row">
-                    {% for cluster in existing_clusters %}
-                    <div class="col-md-6 col-lg-4 mb-3">
-                        <div class="card border {% if cluster.id == current_cluster.id %}border-primary{% endif %}">
-                            <div class="card-body">
-                                <div class="d-flex justify-content-between align-items-start mb-2">
-                                    <h6 class="card-title mb-0">
-                                        {{ cluster.name }}
-                                        {% if cluster.id == current_cluster.id %}
-                                        <span class="badge bg-primary ms-1">Active</span>
+    <div class="card-x mb-4">
+        <div class="cx-head d-flex justify-content-between align-items-center">
+            <span class="cx-title"><i class="bi bi-diagram-2" style="color:var(--accent)"></i> Configured Clusters</span>
+            <span class="text-faint" style="font-size:12px">{{ existing_clusters|length }} cluster(s)</span>
+        </div>
+        <div class="cx-body">
+            <div class="row g-3">
+                {% for cluster in existing_clusters %}
+                <div class="col-md-6 col-lg-4">
+                    <div class="card-x h-100" {% if cluster.id == current_cluster.id %}style="border-color:var(--accent)"{% endif %}>
+                        <div class="cx-body">
+                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                <div>
+                                    <span class="nm">{{ cluster.name }}</span>
+                                    {% if cluster.id == current_cluster.id %}
+                                    <span class="tag ms-1">Active</span>
+                                    {% endif %}
+                                </div>
+                                <div class="dropdown">
+                                    <button class="act-btn" type="button" data-bs-toggle="dropdown"><i class="bi bi-three-dots"></i></button>
+                                    <ul class="dropdown-menu dropdown-menu-end">
+                                        {% if cluster.id != current_cluster.id %}
+                                        <li><a class="dropdown-item" href="#"
+                                               @click.prevent="switchCluster('{{ cluster.id }}')">
+                                            <i class="bi bi-arrow-right-circle"></i> Switch to
+                                        </a></li>
                                         {% endif %}
-                                    </h6>
-                                    <div class="dropdown">
-                                        <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                                            <i class="bi bi-three-dots"></i>
-                                        </button>
-                                        <ul class="dropdown-menu">
-                                            {% if cluster.id != current_cluster.id %}
-                                            <li><a class="dropdown-item" href="#"
-                                                   @click.prevent="switchCluster('{{ cluster.id }}')">
-                                                <i class="bi bi-arrow-right-circle"></i> Switch to
-                                            </a></li>
-                                            {% endif %}
-                                            <li><a class="dropdown-item" href="#"
-                                                   @click.prevent="openEdit('{{ cluster.id }}')">
-                                                <i class="bi bi-pencil"></i> Edit
-                                            </a></li>
-                                            <li><a class="dropdown-item text-danger" href="#"
-                                                   @click.prevent="deleteCluster('{{ cluster.id }}', '{{ cluster.name }}')">
-                                                <i class="bi bi-trash"></i> Delete
-                                            </a></li>
-                                        </ul>
-                                    </div>
+                                        <li><a class="dropdown-item" href="#"
+                                               @click.prevent="openEdit('{{ cluster.id }}')">
+                                            <i class="bi bi-pencil"></i> Edit
+                                        </a></li>
+                                        <li><a class="dropdown-item text-danger" href="#"
+                                               @click.prevent="deleteCluster('{{ cluster.id }}', '{{ cluster.name }}')">
+                                            <i class="bi bi-trash"></i> Delete
+                                        </a></li>
+                                    </ul>
                                 </div>
-                                <small class="text-muted d-block mb-2">ID: {{ cluster.id }}</small>
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <small class="text-muted">
-                                        <i class="bi bi-hdd-network"></i>
-                                        {{ cluster.nodes|length }} node(s)
-                                    </small>
-                                    <!-- Per-cluster status island -->
-                                    <div x-data="{
-                                            status: 'checking',
-                                            init() {
-                                                fetch('/api/cluster-status/{{ cluster.id }}')
-                                                    .then(r => r.json())
-                                                    .then(d => { this.status = d.success ? 'online' : 'offline'; })
-                                                    .catch(() => { this.status = 'error'; });
-                                            }
-                                        }">
-                                        <small x-show="status === 'checking'" class="text-muted">
-                                            <i class="bi bi-arrow-clockwise spin"></i> Checking...
-                                        </small>
-                                        <small x-show="status === 'online'" class="text-success">
-                                            <i class="bi bi-check-circle-fill"></i> Online
-                                        </small>
-                                        <small x-show="status === 'offline'" class="text-danger">
-                                            <i class="bi bi-exclamation-triangle-fill"></i> Offline
-                                        </small>
-                                        <small x-show="status === 'error'" class="text-warning">
-                                            <i class="bi bi-exclamation-triangle-fill"></i> Error
-                                        </small>
-                                    </div>
+                            </div>
+                            <div class="text-faint mono" style="font-size:11px" class="mb-2">ID: {{ cluster.id }}</div>
+                            <div class="d-flex justify-content-between align-items-center mt-2">
+                                <span class="text-faint" style="font-size:12px"><i class="bi bi-hdd-network"></i> {{ cluster.nodes|length }} node(s)</span>
+                                <!-- Per-cluster status island -->
+                                <div x-data="{
+                                        status: 'checking',
+                                        init() {
+                                            fetch('/api/cluster-status/{{ cluster.id }}')
+                                                .then(r => r.json())
+                                                .then(d => { this.status = d.success ? 'online' : 'offline'; })
+                                                .catch(() => { this.status = 'error'; });
+                                        }
+                                    }">
+                                    <span x-show="status === 'checking'" class="pill" style="background:var(--panel-2);color:var(--text-muted)"><span class="d" style="background:var(--text-faint)"></span><i class="bi bi-arrow-clockwise spin"></i> Checking</span>
+                                    <span x-show="status === 'online'" class="pill ok"><span class="d"></span>Online</span>
+                                    <span x-show="status === 'offline'" class="pill err"><span class="d"></span>Offline</span>
+                                    <span x-show="status === 'error'" class="pill maint"><span class="d"></span>Error</span>
                                 </div>
-                                <div class="mt-2">
-                                    {% for node in cluster.nodes %}
-                                    <small class="d-block text-muted">
-                                        <i class="bi bi-server"></i> {{ node.host }}
-                                    </small>
-                                    {% endfor %}
-                                </div>
+                            </div>
+                            <div class="mt-2">
+                                {% for node in cluster.nodes %}
+                                <div class="text-faint" style="font-size:11.5px"><i class="bi bi-server"></i> {{ node.host }}</div>
+                                {% endfor %}
                             </div>
                         </div>
                     </div>
-                    {% endfor %}
                 </div>
+                {% endfor %}
             </div>
         </div>
     </div>
     {% endif %}
 
     <!-- Add New Cluster -->
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">
-                    <i class="bi bi-plus-circle text-success"></i>
-                    {% if existing_clusters %}Add New Cluster{% else %}Connect to Proxmox{% endif %}
-                </h5>
+    <div class="card-x">
+        <div class="cx-head"><i class="bi bi-plus-circle" style="color:var(--ok)"></i><span class="cx-title">{% if existing_clusters %}Add New Cluster{% else %}Connect to Proxmox{% endif %}</span></div>
+        <div class="cx-body">
+            {% if not existing_clusters %}
+            <div class="callout info mb-4">
+                <i class="bi bi-info-circle"></i>
+                <div><div class="t">Welcome!</div><div class="b">No Proxmox configuration was found. Please enter your Proxmox cluster details to get started.</div></div>
             </div>
-            <div class="card-body">
-                {% if not existing_clusters %}
-                <div class="alert alert-info mb-4">
-                    <i class="bi bi-info-circle"></i>
-                    <strong>Welcome!</strong> No Proxmox configuration was found.
-                    Please enter your Proxmox cluster details to get started.
-                </div>
-                {% endif %}
+            {% endif %}
 
-                <form method="POST" action="{{ url_for('connect') }}" id="connectForm">
-                    <!-- Cluster Information -->
-                    <div class="mb-4">
-                        <h5 class="text-primary mb-3">
-                            <i class="bi bi-diagram-2"></i> Cluster Information
-                        </h5>
+            <form method="POST" action="{{ url_for('connect') }}" id="connectForm">
+                <!-- Cluster Information -->
+                <div class="mb-4">
+                    <div class="sub-h" style="margin-top:0"><i class="bi bi-diagram-2"></i> Cluster Information</div>
 
-                        <div class="mb-3">
-                            <label for="cluster_name" class="form-label">Cluster Name</label>
-                            <input type="text" class="form-control" id="cluster_name" name="cluster_name"
-                                   value="My Proxmox Cluster" required
-                                   @input="document.getElementById('cluster_id').value = generateId($event.target.value)">
-                            <div class="form-text">A friendly name for your Proxmox cluster</div>
-                        </div>
+                    <div class="field">
+                        <label for="cluster_name">Cluster Name</label>
+                        <input type="text" class="inp" id="cluster_name" name="cluster_name"
+                               value="My Proxmox Cluster" required
+                               @input="document.getElementById('cluster_id').value = generateId($event.target.value)">
+                        <div class="hint">A friendly name for your Proxmox cluster</div>
+                    </div>
 
-                        <div class="mb-3">
-                            <label for="cluster_id" class="form-label">Cluster ID</label>
-                            <input type="text" class="form-control" id="cluster_id" name="cluster_id"
-                                   value="main" required pattern="[a-zA-Z0-9_-]+">
-                            <div class="form-text">Unique identifier (letters, numbers, underscores, and dashes only)</div>
-                        </div>
+                    <div class="field">
+                        <label for="cluster_id">Cluster ID</label>
+                        <input type="text" class="inp" id="cluster_id" name="cluster_id"
+                               value="main" required pattern="[a-zA-Z0-9_-]+">
+                        <div class="hint">Unique identifier (letters, numbers, underscores, and dashes only)</div>
+                    </div>
 
-                        <div class="form-check mb-3">
+                    <div class="field">
+                        <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="incremental_vmid" name="incremental_vmid">
                             <label class="form-check-label" for="incremental_vmid">
                                 Incremental VMID (prevent reuse)
                             </label>
-                            <div class="form-text">When enabled, updates the cluster's next-id lower bound after each VM/container creation to prevent VMID reuse. This avoids mixing backups and monitoring data from deleted VMs.</div>
+                        </div>
+                        <div class="hint">When enabled, updates the cluster's next-id lower bound after each VM/container creation to prevent VMID reuse. This avoids mixing backups and monitoring data from deleted VMs.</div>
+                    </div>
+                </div>
+
+                <!-- Node Connection -->
+                <div class="mb-4">
+                    <div class="sub-h"><i class="bi bi-hdd-network"></i> Node Connection</div>
+
+                    <div class="field">
+                        <label for="node_host">Proxmox Host</label>
+                        <input type="text" class="inp" id="node_host" name="node_host"
+                               placeholder="192.168.1.100 or pve.example.com" required>
+                        <div class="hint">IP address or hostname of your Proxmox node</div>
+                    </div>
+
+                    <div class="field">
+                        <label for="node_user">Username</label>
+                        <input type="text" class="inp" id="node_user" name="node_user"
+                               value="root@pam" required>
+                        <div class="hint">Usually root@pam (for API token, use user@realm format without token suffix)</div>
+                    </div>
+
+                    <!-- Authentication Type -->
+                    <div class="field">
+                        <label>Authentication Method</label>
+                        <div class="btn-group w-100" role="group">
+                            <input type="radio" class="btn-check" name="auth_type" id="auth_password"
+                                   value="password" x-model="authType">
+                            <label class="btn btn-outline-primary" for="auth_password">
+                                <i class="bi bi-key"></i> Password
+                            </label>
+                            <input type="radio" class="btn-check" name="auth_type" id="auth_token"
+                                   value="token" x-model="authType">
+                            <label class="btn btn-outline-primary" for="auth_token">
+                                <i class="bi bi-shield-lock"></i> API Token
+                            </label>
                         </div>
                     </div>
 
-                    <!-- Node Connection -->
-                    <div class="mb-4">
-                        <h5 class="text-primary mb-3">
-                            <i class="bi bi-hdd-network"></i> Node Connection
-                        </h5>
+                    <!-- Password Fields -->
+                    <div class="field" x-show="authType === 'password'">
+                        <label for="node_password">Password</label>
+                        <input type="password" class="inp" id="node_password" name="node_password"
+                               :required="authType === 'password'">
+                        <div class="hint">Root password for Proxmox</div>
+                    </div>
 
-                        <div class="mb-3">
-                            <label for="node_host" class="form-label">Proxmox Host</label>
-                            <input type="text" class="form-control" id="node_host" name="node_host"
-                                   placeholder="192.168.1.100 or pve.example.com" required>
-                            <div class="form-text">IP address or hostname of your Proxmox node</div>
-                        </div>
-
-                        <div class="mb-3">
-                            <label for="node_user" class="form-label">Username</label>
-                            <input type="text" class="form-control" id="node_user" name="node_user"
-                                   value="root@pam" required>
-                            <div class="form-text">Usually root@pam (for API token, use user@realm format without token suffix)</div>
-                        </div>
-
-                        <!-- Authentication Type -->
-                        <div class="mb-3">
-                            <label class="form-label">Authentication Method</label>
-                            <div class="btn-group w-100" role="group">
-                                <input type="radio" class="btn-check" name="auth_type" id="auth_password"
-                                       value="password" x-model="authType">
-                                <label class="btn btn-outline-primary" for="auth_password">
-                                    <i class="bi bi-key"></i> Password
-                                </label>
-                                <input type="radio" class="btn-check" name="auth_type" id="auth_token"
-                                       value="token" x-model="authType">
-                                <label class="btn btn-outline-primary" for="auth_token">
-                                    <i class="bi bi-shield-lock"></i> API Token
-                                </label>
-                            </div>
-                        </div>
-
-                        <!-- Password Fields -->
-                        <div class="mb-3" x-show="authType === 'password'">
-                            <label for="node_password" class="form-label">Password</label>
-                            <input type="password" class="form-control" id="node_password" name="node_password"
-                                   :required="authType === 'password'">
-                            <div class="form-text">Root password for Proxmox</div>
-                        </div>
-
-                        <!-- API Token Fields -->
-                        <div class="mb-3" x-show="authType === 'token'">
-                            <div class="row">
-                                <div class="col-md-6 mb-3">
-                                    <label for="token_name" class="form-label">Token Name</label>
-                                    <input type="text" class="form-control" id="token_name" name="token_name"
+                    <!-- API Token Fields -->
+                    <div x-show="authType === 'token'">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="field">
+                                    <label for="token_name">Token Name</label>
+                                    <input type="text" class="inp" id="token_name" name="token_name"
                                            placeholder="mytoken" :required="authType === 'token'">
-                                    <div class="form-text">Token ID (without user prefix)</div>
+                                    <div class="hint">Token ID (without user prefix)</div>
                                 </div>
-                                <div class="col-md-6 mb-3">
-                                    <label for="token_value" class="form-label">Token Secret</label>
-                                    <input type="password" class="form-control" id="token_value" name="token_value"
+                            </div>
+                            <div class="col-md-6">
+                                <div class="field">
+                                    <label for="token_value">Token Secret</label>
+                                    <input type="password" class="inp" id="token_value" name="token_value"
                                            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
                                            :required="authType === 'token'">
-                                    <div class="form-text">Token secret value (UUID format)</div>
+                                    <div class="hint">Token secret value (UUID format)</div>
                                 </div>
                             </div>
-                            <div class="alert alert-info small">
-                                <i class="bi bi-info-circle"></i>
-                                <strong>API Token Format:</strong> Create tokens in Proxmox under Datacenter → Permissions → API Tokens.
-                                The token is in format <code>user@realm!tokenid</code> - enter just the token ID here.
-                            </div>
                         </div>
+                        <div class="callout info mb-3">
+                            <i class="bi bi-info-circle"></i>
+                            <div><div class="t">API Token Format</div><div class="b">Create tokens in Proxmox under Datacenter → Permissions → API Tokens. The token is in format <code>user@realm!tokenid</code> - enter just the token ID here.</div></div>
+                        </div>
+                    </div>
 
-                        <div class="form-check mb-3">
+                    <div class="field">
+                        <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="verify_ssl" name="verify_ssl">
                             <label class="form-check-label" for="verify_ssl">
                                 Verify SSL Certificate
                             </label>
-                            <div class="form-text">Uncheck if using self-signed certificates (common for home labs)</div>
                         </div>
-
-                        <div class="alert alert-secondary small mb-0">
-                            <i class="bi bi-info-circle"></i>
-                            <strong>Note:</strong> some features (writing custom cloud-init snippets to
-                            node storage) need filesystem access to a node. When ProxUI runs remotely it
-                            reaches nodes over <strong>SSH</strong> (port 22) or the node <strong>Shell/termproxy</strong>
-                            (over the API port). You'll be guided to install ProxUI's SSH key — a one-time
-                            step using root's password — from the Cloud-Init tab when needed. Basic
-                            cloud-init (user, password, SSH keys, IP/DNS) works over the API alone.
-                        </div>
+                        <div class="hint">Uncheck if using self-signed certificates (common for home labs)</div>
                     </div>
 
-                    <!-- Actions -->
-                    <div class="d-grid gap-2">
-                        <button type="submit" class="btn btn-primary btn-lg">
-                            <i class="bi bi-plug"></i> Connect to Proxmox
-                        </button>
-                        <button type="button" class="btn btn-outline-secondary"
-                                @click="testConnection()" :disabled="testing">
-                            <i class="bi bi-wifi" :class="testing && 'spin'"></i>
-                            <span x-text="testing ? 'Testing...' : 'Test Connection'"></span>
-                        </button>
+                    <div class="callout mb-0">
+                        <i class="bi bi-info-circle"></i>
+                        <div><div class="t">Note</div><div class="b">Some features (writing custom cloud-init snippets to
+                        node storage) need filesystem access to a node. When ProxUI runs remotely it
+                        reaches nodes over <strong>SSH</strong> (port 22) or the node <strong>Shell/termproxy</strong>
+                        (over the API port). You'll be guided to install ProxUI's SSH key — a one-time
+                        step using root's password — from the Cloud-Init tab when needed. Basic
+                        cloud-init (user, password, SSH keys, IP/DNS) works over the API alone.</div></div>
                     </div>
-                </form>
+                </div>
 
-                <!-- Connection Status -->
-                <div class="mt-3">
-                    <div class="alert alert-success" x-show="testSuccess === true">
-                        <i class="bi bi-check-circle"></i>
-                        <strong>Connection successful!</strong><br>
-                        Connected to <span x-text="testNode"></span> running Proxmox VE <span x-text="testVersion"></span>
-                        <div x-show="testWarning" class="mt-2">
-                            <i class="bi bi-exclamation-triangle"></i> <strong>Warning:</strong>
-                            <span x-text="testWarning"></span>
+                <!-- Actions -->
+                <div class="d-grid gap-2">
+                    <button type="submit" class="btn-x primary" style="justify-content:center;padding:10px 14px">
+                        <i class="bi bi-plug"></i> Connect to Proxmox
+                    </button>
+                    <button type="button" class="btn-x" style="justify-content:center"
+                            @click="testConnection()" :disabled="testing">
+                        <i class="bi bi-wifi" :class="testing && 'spin'"></i>
+                        <span x-text="testing ? 'Testing...' : 'Test Connection'"></span>
+                    </button>
+                </div>
+            </form>
+
+            <!-- Connection Status -->
+            <div class="mt-3">
+                <div class="callout ok" x-show="testSuccess === true">
+                    <i class="bi bi-check-circle"></i>
+                    <div>
+                        <div class="t">Connection successful!</div>
+                        <div class="b">Connected to <span x-text="testNode"></span> running Proxmox VE <span x-text="testVersion"></span>
+                        <template x-if="testWarning"><div class="mt-1"><i class="bi bi-exclamation-triangle"></i> <strong>Warning:</strong> <span x-text="testWarning"></span></div></template>
                         </div>
                     </div>
-                    <div class="alert alert-danger" x-show="testSuccess === false">
-                        <i class="bi bi-exclamation-triangle"></i>
-                        <strong>Connection failed:</strong><br>
-                        <span x-text="testError"></span>
-                    </div>
+                </div>
+                <div class="callout danger" x-show="testSuccess === false">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <div><div class="t">Connection failed</div><div class="b" x-text="testError"></div></div>
                 </div>
             </div>
         </div>
+    </div>
 
-        <!-- Help Card -->
-        <div class="card mt-4">
-            <div class="card-header">
-                <h6 class="mb-0">
-                    <i class="bi bi-question-circle"></i> Need Help?
-                </h6>
-            </div>
-            <div class="card-body">
-                <h6>Common Issues:</h6>
-                <ul class="mb-3">
-                    <li><strong>Connection refused:</strong> Check if Proxmox web interface is accessible</li>
-                    <li><strong>SSL errors:</strong> Uncheck "Verify SSL Certificate" for self-signed certs</li>
-                    <li><strong>Authentication failed:</strong> Verify username/password or token credentials</li>
-                    <li><strong>Network timeout:</strong> Ensure firewall allows port 8006</li>
-                    <li><strong>No data with API token:</strong> Ensure "Privilege Separation" is unchecked when creating the token, or assign PVEAuditor role to the token</li>
-                </ul>
+    <!-- Help Card -->
+    <div class="card-x mt-4">
+        <div class="cx-head"><i class="bi bi-question-circle" style="color:var(--accent)"></i><span class="cx-title">Need Help?</span></div>
+        <div class="cx-body">
+            <div class="sub-h" style="margin-top:0">Common Issues</div>
+            <ul class="mb-3">
+                <li><strong>Connection refused:</strong> Check if Proxmox web interface is accessible</li>
+                <li><strong>SSL errors:</strong> Uncheck "Verify SSL Certificate" for self-signed certs</li>
+                <li><strong>Authentication failed:</strong> Verify username/password or token credentials</li>
+                <li><strong>Network timeout:</strong> Ensure firewall allows port 8006</li>
+                <li><strong>No data with API token:</strong> Ensure "Privilege Separation" is unchecked when creating the token, or assign PVEAuditor role to the token</li>
+            </ul>
 
-                <h6>Default Settings:</h6>
-                <ul class="mb-3">
-                    <li><strong>Web Interface:</strong> https://your-ip:8006</li>
-                    <li><strong>Username:</strong> root@pam</li>
-                    <li><strong>Port:</strong> 8006 (HTTPS)</li>
-                </ul>
+            <div class="sub-h">Default Settings</div>
+            <ul class="mb-3">
+                <li><strong>Web Interface:</strong> https://your-ip:8006</li>
+                <li><strong>Username:</strong> root@pam</li>
+                <li><strong>Port:</strong> 8006 (HTTPS)</li>
+            </ul>
 
-                <h6>API Token Setup:</h6>
-                <ul class="mb-0">
-                    <li>Go to Datacenter → Permissions → API Tokens</li>
-                    <li>Click "Add" and select a user (e.g., root@pam)</li>
-                    <li>Enter a token ID (e.g., "proxui")</li>
-                    <li><strong>Uncheck "Privilege Separation"</strong> for full user permissions</li>
-                    <li>Copy the token secret (shown only once!)</li>
-                </ul>
-            </div>
+            <div class="sub-h">API Token Setup</div>
+            <ul class="mb-0">
+                <li>Go to Datacenter → Permissions → API Tokens</li>
+                <li>Click "Add" and select a user (e.g., root@pam)</li>
+                <li>Enter a token ID (e.g., "proxui")</li>
+                <li><strong>Uncheck "Privilege Separation"</strong> for full user permissions</li>
+                <li>Copy the token secret (shown only once!)</li>
+            </ul>
         </div>
     </div>
 
@@ -310,46 +280,44 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="editClusterModalLabel">
-                        <i class="bi bi-pencil text-primary"></i> Edit Cluster
+                        <i class="bi bi-pencil" style="color:var(--accent)"></i> Edit Cluster
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
                     <!-- Cluster Information -->
                     <div class="mb-4">
-                        <h6 class="text-primary mb-3">
-                            <i class="bi bi-diagram-2"></i> Cluster Information
-                        </h6>
-                        <div class="mb-3">
-                            <label class="form-label">Cluster Name</label>
-                            <input type="text" class="form-control" x-model="editName" required>
+                        <div class="sub-h" style="margin-top:0"><i class="bi bi-diagram-2"></i> Cluster Information</div>
+                        <div class="field">
+                            <label>Cluster Name</label>
+                            <input type="text" class="inp" x-model="editName" required>
                         </div>
-                        <div class="form-check mb-3">
-                            <input class="form-check-input" type="checkbox" x-model="editIncrementalVmid">
-                            <label class="form-check-label">
-                                Incremental VMID (prevent reuse)
-                            </label>
-                            <div class="form-text">When enabled, updates the cluster's next-id lower bound after each VM/container creation to prevent VMID reuse.</div>
+                        <div class="field">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" x-model="editIncrementalVmid">
+                                <label class="form-check-label">
+                                    Incremental VMID (prevent reuse)
+                                </label>
+                            </div>
+                            <div class="hint">When enabled, updates the cluster's next-id lower bound after each VM/container creation to prevent VMID reuse.</div>
                         </div>
                     </div>
 
                     <!-- Node Connection -->
                     <div class="mb-4">
-                        <h6 class="text-primary mb-3">
-                            <i class="bi bi-hdd-network"></i> Node Connection
-                        </h6>
-                        <div class="mb-3">
-                            <label class="form-label">Proxmox Host</label>
-                            <input type="text" class="form-control" x-model="editHost" required>
+                        <div class="sub-h"><i class="bi bi-hdd-network"></i> Node Connection</div>
+                        <div class="field">
+                            <label>Proxmox Host</label>
+                            <input type="text" class="inp" x-model="editHost" required>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label">Username</label>
-                            <input type="text" class="form-control" x-model="editUser" required>
+                        <div class="field">
+                            <label>Username</label>
+                            <input type="text" class="inp" x-model="editUser" required>
                         </div>
 
                         <!-- Auth Type -->
-                        <div class="mb-3">
-                            <label class="form-label">Authentication Method</label>
+                        <div class="field">
+                            <label>Authentication Method</label>
                             <div class="btn-group w-100" role="group">
                                 <input type="radio" class="btn-check" name="edit_auth_type"
                                        id="edit_auth_password" value="password" x-model="editAuthType">
@@ -365,40 +333,46 @@
                         </div>
 
                         <!-- Password Fields -->
-                        <div class="mb-3" x-show="editAuthType === 'password'">
-                            <label class="form-label">Password</label>
-                            <input type="password" class="form-control" x-model="editPassword"
+                        <div class="field" x-show="editAuthType === 'password'">
+                            <label>Password</label>
+                            <input type="password" class="inp" x-model="editPassword"
                                    placeholder="Leave empty to keep existing">
-                            <div class="form-text">Leave empty to keep existing password</div>
+                            <div class="hint">Leave empty to keep existing password</div>
                         </div>
 
                         <!-- API Token Fields -->
-                        <div class="mb-3" x-show="editAuthType === 'token'">
+                        <div x-show="editAuthType === 'token'">
                             <div class="row">
-                                <div class="col-md-6 mb-3">
-                                    <label class="form-label">Token Name</label>
-                                    <input type="text" class="form-control" x-model="editTokenName"
-                                           placeholder="mytoken">
-                                    <div class="form-text">Token ID (without user prefix)</div>
+                                <div class="col-md-6">
+                                    <div class="field">
+                                        <label>Token Name</label>
+                                        <input type="text" class="inp" x-model="editTokenName"
+                                               placeholder="mytoken">
+                                        <div class="hint">Token ID (without user prefix)</div>
+                                    </div>
                                 </div>
-                                <div class="col-md-6 mb-3">
-                                    <label class="form-label">Token Secret</label>
-                                    <input type="password" class="form-control" x-model="editTokenValue"
-                                           placeholder="Leave empty to keep existing">
-                                    <div class="form-text">Leave empty to keep existing token</div>
+                                <div class="col-md-6">
+                                    <div class="field">
+                                        <label>Token Secret</label>
+                                        <input type="password" class="inp" x-model="editTokenValue"
+                                               placeholder="Leave empty to keep existing">
+                                        <div class="hint">Leave empty to keep existing token</div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
 
-                        <div class="form-check mb-3">
-                            <input class="form-check-input" type="checkbox" x-model="editVerifySsl">
-                            <label class="form-check-label">Verify SSL Certificate</label>
+                        <div class="field mb-0">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" x-model="editVerifySsl">
+                                <label class="form-check-label">Verify SSL Certificate</label>
+                            </div>
                         </div>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-primary" @click="saveEdit()" :disabled="saving">
+                    <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-x primary" @click="saveEdit()" :disabled="saving">
                         <i class="bi bi-check-lg" x-show="!saving"></i>
                         <span class="spinner-border spinner-border-sm" x-show="saving"></span>
                         Save Changes

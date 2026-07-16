@@ -3,142 +3,118 @@
 {% block title %}VMs & Containers - Proxmox Manager{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <h1><i class="bi bi-pc-display"></i> Virtual Machines & Containers</h1>
+<div class="d-flex align-items-center flex-wrap gap-3 mb-3">
+    <div class="me-auto">
+        <div class="sec-title">Virtual Machines &amp; Containers</div>
+        <div class="sec-sub">{{ resources|length }} guests</div>
     </div>
+    <a href="{{ url_for('create_vm') }}" class="btn-x primary"><i class="bi bi-plus-lg"></i> Create</a>
 </div>
 
-<div class="row mt-3">
-    <div class="col-12">
-        <div class="card" x-data="{ search: '' }">
-            <div class="card-header">
-                <div class="d-flex flex-column flex-sm-row justify-content-between align-items-stretch align-items-sm-center gap-2">
-                    <div class="input-group input-group-sm flex-grow-1" style="max-width: 300px;">
-                        <span class="input-group-text"><i class="bi bi-search"></i></span>
-                        <input type="text" class="form-control" placeholder="Search..." autofocus
-                               x-model="search" @keydown.escape="search = ''">
-                    <a href="{{ url_for('create_vm') }}" class="btn btn-success btn-sm">
-                        <i class="bi bi-plus-circle"></i> Create
-                    </a>
-                </div>
+<div class="card-x" x-data="{ search: '' }">
+    <div class="cx-head">
+        <div class="filter-bar w-100">
+            <div class="search-inp">
+                <i class="bi bi-search"></i>
+                <input type="text" class="inp" placeholder="Search name, VMID, or node…" autofocus
+                       x-model="search" @keydown.escape="search = ''">
             </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>Status</th>
-                                <th>
-                                    <a href="?sort=name&order={{ 'asc' if request.args.get('sort') == 'name' and request.args.get('order') == 'desc' else 'desc' }}">
-                                        Name <i class="bi bi-arrow-down-up"></i>
-                                    </a>
-                                </th>
-                                <th>Type</th>
-                                <th>Node</th>
-                                <th>
-                                    <a href="?sort=cpu&order={{ 'asc' if request.args.get('sort') == 'cpu' and request.args.get('order') == 'desc' else 'desc' }}">
-                                        CPU <i class="bi bi-arrow-down-up"></i>
-                                    </a>
-                                </th>
-                                <th>
-                                    <a href="?sort=memory&order={{ 'asc' if request.args.get('sort') == 'memory' and request.args.get('order') == 'desc' else 'desc' }}">
-                                        Memory <i class="bi bi-arrow-down-up"></i>
-                                    </a>
-                                </th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for vm in resources %}
-                            <tr x-show="!search || '{{ (vm.name ~ ' ' ~ vm.vmid ~ ' ' ~ vm.node)|lower }}'.includes(search.toLowerCase())">
-                                <td>
-                                    {% if vm.status == 'running' %}
-                                        <span class="badge bg-success"><i class="bi bi-play-circle"></i> Running</span>
-                                    {% elif vm.status == 'stopped' %}
-                                        <span class="badge bg-danger"><i class="bi bi-stop-circle"></i> Stopped</span>
-                                    {% else %}
-                                        <span class="badge bg-warning">{{ vm.status }}</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}">
-                                        <strong>{{ vm.name }}</strong>
-                                    </a>
-                                    <br>
-                                    <small class="text-muted">VMID: {{ vm.vmid }}</small>
-                                </td>
-                                <td>
-                                    {% if vm.get('template') == 1 %}
-                                        <span class="badge bg-secondary">Template</span>
-                                    {% else %}
-                                        <span class="badge bg-{{ 'primary' if vm.type == 'qemu' else 'info' }}">
-                                            {{ 'VM' if vm.type == 'qemu' else 'LXC' }}
-                                        </span>
-                                    {% endif %}
-                                </td>
-                                <td>{{ vm.node }}</td>
-                                <td>
-                                    <div class="progress" style="height: 20px; min-width: 100px;">
-                                        <div class="progress-bar bg-{{ 'danger' if vm.cpu_percent > 80 else 'warning' if vm.cpu_percent > 60 else 'success' }}" 
-                                             style="width: {{ vm.cpu_percent }}%">
-                                            {{ "%.1f"|format(vm.cpu_percent) }}%
-                                        </div>
-                                    </div>
-                                    <small>{{ vm.maxcpu }} vCPU</small>
-                                </td>
-                                <td>
-                                    <div class="progress" style="height: 20px; min-width: 100px;">
-                                        <div class="progress-bar bg-{{ 'danger' if vm.mem_percent > 80 else 'warning' if vm.mem_percent > 60 else 'success' }}"
-                                             style="width: {{ vm.mem_percent }}%">
-                                            {{ "%.1f"|format(vm.mem_percent) }}%
-                                        </div>
-                                    </div>
-                                    <small>{% if vm.maxmem %}{{ (vm.maxmem / 1024 / 1024 / 1024)|round(1) }} GB{% else %}N/A{% endif%}</small>
-                                </td>
-                                <td>
-                                    <div class="btn-group btn-group-sm" role="group">
-                                        <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}"
-                                           class="btn btn-outline-primary" title="Details">
-                                            <i class="bi bi-info-circle"></i>
-                                        </a>
-
-                                        {% if vm.get('template') == 1 %}
-                                        <a href="{{ url_for('vm_clone', node=vm.node, vmid=vm.vmid) }}" class="btn btn-sm btn-outline-primary">
-                                            <i class="bi bi-files"></i> Clone
-                                        </a>
-
-                                        {% else %}
-                                            {% if vm.type == 'qemu' and vm.status == 'running' %}
-                                            <a href="{{ url_for('vm_console', node=vm.node, vmid=vm.vmid) }}"
-                                               class="btn btn-outline-info" title="Console">
-                                                <i class="bi bi-display"></i>
-                                            </a>
-                                            {% endif %}
-
-                                            {% if vm.status == 'stopped' %}
-                                            <form method="POST" action="{{ url_for('vm_action', node=vm.node, vmid=vm.vmid, action='start') }}" style="display: inline;">
-                                                <button type="submit" class="btn btn-outline-success" title="Start">
-                                                    <i class="bi bi-play-fill"></i>
-                                                </button>
-                                            </form>
-                                            {% else %}
-                                            <form method="POST" action="{{ url_for('vm_action', node=vm.node, vmid=vm.vmid, action='shutdown') }}" style="display: inline;">
-                                                <button type="submit" class="btn btn-outline-warning" title="Shutdown">
-                                                    <i class="bi bi-power"></i>
-                                                </button>
-                                            </form>
-                                            {% endif %}
-                                        {% endif %}
-                                    </div>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+            <span class="text-faint ms-auto" style="font-size:12px" x-text="'Filtering ' + {{ resources|length }} + ' guests'"></span>
         </div>
+    </div>
+    <div class="cx-body flush tbl-scroll">
+        <table class="tbl">
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>
+                        <a href="?sort=name&order={{ 'asc' if request.args.get('sort') == 'name' and request.args.get('order') == 'desc' else 'desc' }}">
+                            Name <i class="bi bi-arrow-down-up"></i>
+                        </a>
+                    </th>
+                    <th>Type</th>
+                    <th>Node</th>
+                    <th style="width:150px">
+                        <a href="?sort=cpu&order={{ 'asc' if request.args.get('sort') == 'cpu' and request.args.get('order') == 'desc' else 'desc' }}">
+                            CPU <i class="bi bi-arrow-down-up"></i>
+                        </a>
+                    </th>
+                    <th style="width:170px">
+                        <a href="?sort=memory&order={{ 'asc' if request.args.get('sort') == 'memory' and request.args.get('order') == 'desc' else 'desc' }}">
+                            Memory <i class="bi bi-arrow-down-up"></i>
+                        </a>
+                    </th>
+                    <th class="num">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for vm in resources %}
+                <tr x-show="!search || '{{ (vm.name ~ ' ' ~ vm.vmid ~ ' ' ~ vm.node)|lower }}'.includes(search.toLowerCase())">
+                    <td>
+                        {% if vm.get('template') == 1 %}
+                        <span class="pill tmpl"><span class="d"></span>Template</span>
+                        {% elif vm.status == 'running' %}
+                        <span class="pill run"><span class="d"></span>Running</span>
+                        {% elif vm.status == 'stopped' %}
+                        <span class="pill stop"><span class="d"></span>Stopped</span>
+                        {% else %}
+                        <span class="pill maint"><span class="d"></span>{{ vm.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}" class="nm">{{ vm.name }}</a>
+                        <div class="text-faint mono" style="font-size:11px">VMID: {{ vm.vmid }}</div>
+                    </td>
+                    <td>
+                        {% if vm.get('template') == 1 %}
+                        <span class="type-chip">TMPL</span>
+                        {% else %}
+                        <span class="type-chip {{ 'vm' if vm.type == 'qemu' else 'lxc' }}">{{ 'VM' if vm.type == 'qemu' else 'LXC' }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-muted-2">{{ vm.node }}</td>
+                    <td>
+                        <div class="usage-cell">
+                            <div class="ubar"><i class="{{ 'crit' if vm.cpu_percent > 80 else 'hot' if vm.cpu_percent > 60 else 'okc' }}" style="width:{{ vm.cpu_percent }}%"></i></div>
+                            <span class="pct">{{ "%.1f"|format(vm.cpu_percent) }}%</span>
+                        </div>
+                        <div class="text-faint" style="font-size:10.5px">{{ vm.maxcpu }} vCPU</div>
+                    </td>
+                    <td>
+                        <div class="usage-cell">
+                            <div class="ubar"><i class="{{ 'crit' if vm.mem_percent > 80 else 'hot' if vm.mem_percent > 60 else 'okc' }}" style="width:{{ vm.mem_percent }}%"></i></div>
+                            <span class="pct">{{ "%.1f"|format(vm.mem_percent) }}%</span>
+                        </div>
+                        <div class="text-faint" style="font-size:10.5px">{% if vm.maxmem %}{{ (vm.maxmem / 1024 / 1024 / 1024)|round(1) }} GB{% else %}N/A{% endif %}</div>
+                    </td>
+                    <td>
+                        <div class="act-row">
+                            <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}" class="act-btn" title="Details"><i class="bi bi-info-circle"></i></a>
+                            {% if vm.get('template') == 1 %}
+                            <a href="{{ url_for('vm_clone', node=vm.node, vmid=vm.vmid) }}" class="act-btn pri" title="Clone"><i class="bi bi-files"></i></a>
+                            {% else %}
+                                {% if vm.type == 'qemu' and vm.status == 'running' %}
+                                <a href="{{ url_for('vm_console', node=vm.node, vmid=vm.vmid) }}" class="act-btn pri" title="Console"><i class="bi bi-terminal"></i></a>
+                                {% endif %}
+                                {% if vm.status == 'stopped' %}
+                                <form method="POST" action="{{ url_for('vm_action', node=vm.node, vmid=vm.vmid, action='start') }}" class="d-inline">
+                                    <button type="submit" class="act-btn go" title="Start"><i class="bi bi-play-fill"></i></button>
+                                </form>
+                                {% else %}
+                                <form method="POST" action="{{ url_for('vm_action', node=vm.node, vmid=vm.vmid, action='shutdown') }}" class="d-inline">
+                                    <button type="submit" class="act-btn stopc" title="Shutdown"><i class="bi bi-power"></i></button>
+                                </form>
+                                {% endif %}
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if not resources %}
+        <div class="empty-hint"><i class="bi bi-inbox" style="font-size:26px"></i><div class="mt-2">No guests found.</div></div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

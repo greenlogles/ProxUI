@@ -248,7 +248,7 @@ class TestIntegration(unittest.TestCase):
         app.cluster_nodes.append({"name": "test-node", "status": "online"})
 
         # Test VM creation form
-        response = self.client.get("/create_vm")
+        response = self.client.get("/create")
         self.assertEqual(response.status_code, 200)
 
         # Test VM creation POST
@@ -266,7 +266,7 @@ class TestIntegration(unittest.TestCase):
             "bridge": "vmbr0",
         }
 
-        response = self.client.post("/create_vm", data=vm_data)
+        response = self.client.post("/create", data=vm_data)
         # Should redirect on success
         self.assertEqual(response.status_code, 302)
 

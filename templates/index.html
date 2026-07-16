@@ -3,287 +3,212 @@
 {% block title %}Dashboard - Proxmox Manager{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <h1><i class="bi bi-speedometer2"></i> Dashboard</h1>
+<div class="d-flex align-items-center flex-wrap gap-3 mb-4">
+    <div class="me-auto">
+        <div class="sec-title">Cluster overview</div>
+        <div class="sec-sub">Live health and utilization across the current cluster</div>
     </div>
 </div>
 
-<div class="row mt-4">
-    <!-- Statistics Cards -->
-    <div class="col-6 col-lg mb-3">
-        <div class="card text-white bg-primary h-100">
-            <div class="card-body py-2 px-3">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <h6 class="card-title mb-1 small">Virtual Machines</h6>
-                        <h3 class="mb-0">{{ total_vms }}</h3>
-                    </div>
-                    <i class="bi bi-pc-display fs-2 opacity-75"></i>
-                </div>
-            </div>
+<!-- Statistics tiles -->
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-4 col-xl-2">
+        <div class="stat">
+            <div class="ico blue"><i class="bi bi-pc-display"></i></div>
+            <div><div class="val">{{ total_vms }}</div><div class="lbl">Virtual Machines</div></div>
         </div>
     </div>
-
-    <div class="col-6 col-lg mb-3">
-        <div class="card text-white bg-info h-100">
-            <div class="card-body py-2 px-3">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <h6 class="card-title mb-1 small">Containers</h6>
-                        <h3 class="mb-0">{{ total_containers }}</h3>
-                    </div>
-                    <i class="bi bi-box fs-2 opacity-75"></i>
-                </div>
-            </div>
+    <div class="col-6 col-md-4 col-xl-2">
+        <div class="stat">
+            <div class="ico violet"><i class="bi bi-box"></i></div>
+            <div><div class="val">{{ total_containers }}</div><div class="lbl">Containers</div></div>
         </div>
     </div>
-
-    <div class="col-6 col-lg mb-3">
-        <div class="card text-white bg-secondary h-100">
-            <div class="card-body py-2 px-3">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <h6 class="card-title mb-1 small">Templates</h6>
-                        <h3 class="mb-0">{{ total_templates }}</h3>
-                    </div>
-                    <i class="bi bi-copy fs-2 opacity-75"></i>
-                </div>
-            </div>
+    <div class="col-6 col-md-4 col-xl-2">
+        <div class="stat">
+            <div class="ico slate"><i class="bi bi-collection"></i></div>
+            <div><div class="val">{{ total_templates }}</div><div class="lbl">Templates</div></div>
         </div>
     </div>
-
-    <div class="col-6 col-lg mb-3">
-        <div class="card text-white bg-success h-100">
-            <div class="card-body py-2 px-3">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <h6 class="card-title mb-1 small">Running</h6>
-                        <h3 class="mb-0">{{ running }}</h3>
-                    </div>
-                    <i class="bi bi-play-circle fs-2 opacity-75"></i>
-                </div>
-            </div>
+    <div class="col-6 col-md-4 col-xl-2">
+        <div class="stat">
+            <div class="ico ok"><i class="bi bi-play-circle"></i></div>
+            <div><div class="val">{{ running }}</div><div class="lbl">Running</div></div>
         </div>
     </div>
-
-    <div class="col-6 col-lg mb-3">
-        <div class="card text-white bg-danger h-100">
-            <div class="card-body py-2 px-3">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <h6 class="card-title mb-1 small">Stopped</h6>
-                        <h3 class="mb-0">{{ stopped }}</h3>
-                    </div>
-                    <i class="bi bi-stop-circle fs-2 opacity-75"></i>
-                </div>
+    <div class="col-6 col-md-4 col-xl-2">
+        <div class="stat">
+            <div class="ico danger"><i class="bi bi-stop-circle"></i></div>
+            <div><div class="val">{{ stopped }}</div><div class="lbl">Stopped</div></div>
+        </div>
+    </div>
+    <div class="col-6 col-md-4 col-xl-2">
+        <div class="stat">
+            <div class="ico slate"><i class="bi bi-hdd-network"></i></div>
+            <div>
+                <div class="val">{{ total_nodes }}</div>
+                <div class="lbl">Nodes</div>
+                <div class="trend" style="color:var(--ok)"><i class="bi bi-circle-fill" style="font-size:6px"></i> {{ online_nodes }} online</div>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Node Metrics -->
-<div class="row mt-4">
-    <div class="col-12">
-        <div class="card" x-data="dashboardNodes()">
-            <div class="card-header d-flex justify-content-between align-items-center py-2">
-                <h5 class="mb-0"><i class="bi bi-hdd-rack"></i> Node Status</h5>
-                <button class="btn btn-sm btn-outline-primary" @click="refresh()" :disabled="loading" title="Refresh">
+<!-- Node health -->
+<div class="d-flex align-items-center gap-2 mb-2">
+    <div class="sec-title" style="font-size:14px">Node health</div>
+</div>
+
+<div class="card-x mb-4" x-data="dashboardNodes()">
+    <div class="cx-head d-flex justify-content-between align-items-center">
+        <span class="cx-title"><i class="bi bi-hdd-rack"></i> Node Status</span>
+        <button class="icon-btn" style="width:32px;height:32px;font-size:15px" @click="refresh()" :disabled="loading" title="Refresh">
+            <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
+        </button>
+    </div>
+    <div class="cx-body">
+        <template x-if="loading && nodes.length === 0">
+            <div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div> Loading node metrics...</div>
+        </template>
+        <template x-if="error">
+            <div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> Error: <span x-text="error"></span></div>
+        </template>
+        <template x-if="!loading && !error && nodes.length === 0">
+            <div class="empty-hint">No nodes available</div>
+        </template>
+        <div class="node-strip" x-show="nodes.length > 0">
+            <template x-for="node in nodes" :key="node.name">
+                <div class="node-card" style="cursor:default">
+                    <div class="nc-top">
+                        <span class="nc-dot" :class="node.online ? 'online' : 'offline'"></span>
+                        <div style="flex:1;min-width:0">
+                            <div class="nc-name" x-text="node.name || 'Unknown'"></div>
+                            <div class="nc-role" x-text="node.online ? fmtUptime(node.uptime) : 'Offline'"></div>
+                        </div>
+                    </div>
+                    <template x-if="node.online">
+                        <div>
+                            <div class="nc-metric"><span class="k">CPU</span><div class="ubar" style="flex:1"><i :class="cpuBarCls(node)" :style="'width:'+cpuPct(node)+'%'"></i></div><span class="pct" x-text="cpuPct(node)+'%'"></span></div>
+                            <div class="nc-metric"><span class="k">MEM</span><div class="ubar" style="flex:1"><i :class="memBarCls(node)" :style="'width:'+memPct(node)+'%'"></i></div><span class="pct" x-text="memPct(node)+'%'"></span></div>
+                        </div>
+                    </template>
+                </div>
+            </template>
+        </div>
+    </div>
+</div>
+
+<!-- Top consumers + recent tasks -->
+<div class="row g-3">
+    <div class="col-12 col-xl-4">
+        <div class="card-x h-100">
+            <div class="cx-head"><i class="bi bi-cpu" style="color:var(--accent)"></i><span class="cx-title">Top CPU Usage</span></div>
+            <div class="cx-body tight">
+                {% if top_cpu %}
+                <table class="tbl">
+                    <thead><tr><th>Name</th><th>Node</th><th class="num">CPU</th></tr></thead>
+                    <tbody>
+                        {% for vm in top_cpu %}
+                        <tr>
+                            <td>
+                                <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}" class="nm">{{ vm.name }}</a>
+                                <span class="type-chip {{ 'vm' if vm.type == 'qemu' else 'lxc' }}">{{ 'VM' if vm.type == 'qemu' else 'CT' }}</span>
+                            </td>
+                            <td class="text-muted-2">{{ vm.node }}</td>
+                            <td>
+                                <div class="usage-cell justify-content-end">
+                                    <div class="ubar" style="width:56px"><i class="{{ 'crit' if vm.cpu_percent > 80 else 'hot' if vm.cpu_percent > 60 else 'okc' }}" style="width:{{ vm.cpu_percent }}%"></i></div>
+                                    <span class="pct">{{ "%.1f"|format(vm.cpu_percent) }}%</span>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="empty-hint">No running VMs</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-4">
+        <div class="card-x h-100">
+            <div class="cx-head"><i class="bi bi-memory" style="color:var(--accent)"></i><span class="cx-title">Top Memory Usage</span></div>
+            <div class="cx-body tight">
+                {% if top_memory %}
+                <table class="tbl">
+                    <thead><tr><th>Name</th><th>Node</th><th class="num">Memory</th></tr></thead>
+                    <tbody>
+                        {% for vm in top_memory %}
+                        <tr>
+                            <td>
+                                <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}" class="nm">{{ vm.name }}</a>
+                                <span class="type-chip {{ 'vm' if vm.type == 'qemu' else 'lxc' }}">{{ 'VM' if vm.type == 'qemu' else 'CT' }}</span>
+                            </td>
+                            <td class="text-muted-2">{{ vm.node }}</td>
+                            <td>
+                                <div class="usage-cell justify-content-end">
+                                    <div class="ubar" style="width:56px"><i class="{{ 'crit' if vm.mem_percent > 80 else 'hot' if vm.mem_percent > 60 else 'okc' }}" style="width:{{ vm.mem_percent }}%"></i></div>
+                                    <span class="pct">{{ "%.1f"|format(vm.mem_percent) }}%</span>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="empty-hint">No running VMs</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-4">
+        <div class="card-x h-100" x-data="dashboardTasks()">
+            <div class="cx-head">
+                <i class="bi bi-clock-history" style="color:var(--accent)"></i><span class="cx-title">Recent Tasks</span>
+                <button class="icon-btn ms-auto" style="width:28px;height:28px;font-size:13px" @click="refresh()" :disabled="loading" title="Refresh">
                     <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
                 </button>
+                <a href="{{ url_for('tasks') }}" style="font-size:12px;font-weight:600">View all</a>
             </div>
-            <div class="card-body py-2">
-                <template x-if="loading && nodes.length === 0">
-                    <div class="text-center py-3"><div class="spinner-border spinner-border-sm" role="status"></div> Loading node metrics...</div>
-                </template>
-                <template x-if="error">
-                    <div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> Error: <span x-text="error"></span></div>
-                </template>
-                <template x-if="!loading && !error && nodes.length === 0">
-                    <div class="text-muted p-3">No nodes available</div>
-                </template>
-                <div class="row g-3" x-show="nodes.length > 0">
-                    <template x-for="node in nodes" :key="node.name">
-                        <div class="col-md-6 col-lg-4">
-                            <div class="border rounded p-2" :class="!node.online && 'bg-light'">
-                                <div class="d-flex justify-content-between align-items-center mb-2">
-                                    <strong>
-                                        <i class="bi bi-hdd-network" :class="node.online ? 'text-success' : 'text-danger'"></i>
-                                        <span x-text="node.name || 'Unknown'"></span>
-                                    </strong>
-                                    <span x-show="!node.online" class="badge bg-danger">Offline</span>
-                                    <small x-show="node.online" class="text-muted"><i class="bi bi-clock"></i> <span x-text="fmtUptime(node.uptime)"></span></small>
-                                </div>
-                                <div class="row g-2 small" x-show="node.online">
-                                    <div class="col-6">
-                                        <div class="text-muted mb-1">CPU <span x-text="cpuPct(node)"></span>%</div>
-                                        <div class="progress" style="height:6px;">
-                                            <div class="progress-bar" :class="'bg-' + cpuColor(node)" :style="`width:${cpuPct(node)}%`"></div>
-                                        </div>
-                                    </div>
-                                    <div class="col-6">
-                                        <div class="text-muted mb-1">Mem <span x-text="memUsedGB(node)"></span>/<span x-text="memTotalGB(node)"></span> GB</div>
-                                        <div class="progress" style="height:6px;">
-                                            <div class="progress-bar" :class="'bg-' + memColor(node)" :style="`width:${memPct(node)}%`"></div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </template>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="row mt-4">
-    <!-- Top CPU Usage -->
-    <div class="col-md-6 mb-4">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-cpu"></i> Top CPU Usage</h5>
-            </div>
-            <div class="card-body">
-                {% if top_cpu %}
-                <div class="table-responsive">
-                    <table class="table table-sm table-hover">
-                        <thead class="table-light">
-                            <tr>
-                                <th>Name</th>
-                                <th class="d-none d-md-table-cell">Node</th>
-                                <th style="width: 40%">CPU</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for vm in top_cpu %}
-                            <tr>
-                                <td>
-                                    <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}" class="text-decoration-none">
-                                        {{ vm.name }}
-                                    </a>
-                                    <span class="badge bg-{{ 'primary' if vm.type == 'qemu' else 'info' }} ms-1">
-                                        {{ 'VM' if vm.type == 'qemu' else 'CT' }}
-                                    </span>
-                                </td>
-                                <td class="d-none d-md-table-cell text-muted">{{ vm.node }}</td>
-                                <td>
-                                    <div class="progress" style="height: 18px;">
-                                        <div class="progress-bar bg-{{ 'danger' if vm.cpu_percent > 80 else 'warning' if vm.cpu_percent > 60 else 'success' }}"
-                                             style="width: {{ vm.cpu_percent }}%">
-                                            {{ "%.1f"|format(vm.cpu_percent) }}%
-                                        </div>
-                                    </div>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-                {% else %}
-                <div class="text-muted text-center py-4">No running VMs</div>
-                {% endif %}
-            </div>
-        </div>
-    </div>
-
-    <!-- Top Memory Usage -->
-    <div class="col-md-6 mb-4">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-memory"></i> Top Memory Usage</h5>
-            </div>
-            <div class="card-body">
-                {% if top_memory %}
-                <div class="table-responsive">
-                    <table class="table table-sm table-hover">
-                        <thead class="table-light">
-                            <tr>
-                                <th>Name</th>
-                                <th class="d-none d-md-table-cell">Node</th>
-                                <th style="width: 40%">Memory</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for vm in top_memory %}
-                            <tr>
-                                <td>
-                                    <a href="{{ url_for('vm_detail', node=vm.node, vmid=vm.vmid) }}" class="text-decoration-none">
-                                        {{ vm.name }}
-                                    </a>
-                                    <span class="badge bg-{{ 'primary' if vm.type == 'qemu' else 'info' }} ms-1">
-                                        {{ 'VM' if vm.type == 'qemu' else 'CT' }}
-                                    </span>
-                                </td>
-                                <td class="d-none d-md-table-cell text-muted">{{ vm.node }}</td>
-                                <td>
-                                    <div class="progress" style="height: 18px;">
-                                        <div class="progress-bar bg-{{ 'danger' if vm.mem_percent > 80 else 'warning' if vm.mem_percent > 60 else 'success' }}"
-                                             style="width: {{ vm.mem_percent }}%">
-                                            {{ "%.1f"|format(vm.mem_percent) }}%
-                                        </div>
-                                    </div>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-                {% else %}
-                <div class="text-muted text-center py-4">No running VMs</div>
-                {% endif %}
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="row">
-    <!-- Recent Tasks -->
-    <div class="col-md-6 mb-4">
-        <div class="card" x-data="dashboardTasks()">
-            <div class="card-header d-flex justify-content-between align-items-center py-2">
-                <h5 class="mb-0"><i class="bi bi-list-task"></i> Recent Tasks</h5>
-                <div class="d-flex gap-2">
-                    <button class="btn btn-sm btn-outline-primary" @click="refresh()" :disabled="loading" title="Refresh Tasks">
-                        <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
-                    </button>
-                    <a href="{{ url_for('tasks') }}" class="btn btn-sm btn-outline-secondary">View All</a>
-                </div>
-            </div>
-            <div class="card-body p-0" style="max-height:350px;overflow-y:auto;">
+            <div class="cx-body tight" style="max-height:350px;overflow-y:auto">
                 <template x-if="loading && tasks.length === 0">
-                    <div class="text-center p-4"><div class="spinner-border spinner-border-sm" role="status"></div> Loading recent tasks...</div>
+                    <div class="text-center py-4"><div class="spinner-border spinner-border-sm" role="status"></div> Loading recent tasks...</div>
                 </template>
                 <template x-if="error">
-                    <div class="text-danger p-4"><i class="bi bi-exclamation-triangle"></i> Error loading tasks</div>
+                    <div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> Error loading tasks</div>
                 </template>
                 <template x-if="!loading && !error && tasks.length === 0">
-                    <div class="text-muted p-4"><i class="bi bi-info-circle"></i> No recent tasks</div>
+                    <div class="empty-hint"><i class="bi bi-info-circle"></i> No recent tasks</div>
                 </template>
-                <div class="list-group list-group-flush" x-show="tasks.length > 0">
-                    <template x-for="task in tasks" :key="task.upid || (task.node + task.type + task.starttime)">
-                        <div class="list-group-item list-group-item-action">
-                            <div class="d-flex w-100 justify-content-between align-items-start">
-                                <div>
-                                    <h6 class="mb-1" x-text="displayName(task)"></h6>
-                                    <p class="mb-1 text-muted small">
-                                        Node: <span class="badge bg-secondary" x-text="task.node || 'Unknown'"></span>
+                <table class="tbl" x-show="tasks.length > 0">
+                    <tbody>
+                        <template x-for="task in tasks" :key="task.upid || (task.node + task.type + task.starttime)">
+                            <tr>
+                                <td style="width:26px">
+                                    <span class="job-ico" :class="dotCls(task)" style="width:26px;height:26px;font-size:13px">
+                                        <i class="bi" :class="dotIcon(task)"></i>
+                                    </span>
+                                </td>
+                                <td>
+                                    <div class="nm" x-text="displayName(task)"></div>
+                                    <div class="text-faint" style="font-size:11px">
+                                        <span x-text="task.node || 'Unknown'"></span>
                                         <template x-if="task.id && isVmTask(task)">
-                                            <span> | VM/CT <a :href="vmLink(task)" class="text-decoration-none" x-text="task.id"></a></span>
+                                            <span> · VM/CT <a :href="vmLink(task)" x-text="task.id"></a></span>
                                         </template>
                                         <template x-if="task.id && !isVmTask(task)">
-                                            <span> | <span x-text="task.id"></span></span>
+                                            <span> · <span x-text="task.id"></span></span>
                                         </template>
-                                    </p>
-                                </div>
-                                <div>
-                                    <span class="badge" :class="'bg-' + statusClass(task)" x-text="task.status || 'unknown'"></span><br>
-                                    <small class="text-muted" x-text="task.start_time_formatted || 'Unknown'"></small>
-                                </div>
-                            </div>
-                        </div>
-                    </template>
-                </div>
+                                    </div>
+                                </td>
+                                <td class="text-faint mono" style="font-size:11px;text-align:right" x-text="fmtDateTime(task.starttime)"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
@@ -295,6 +220,8 @@
   import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
 
   const ALLOWED_STATUS = new Set(['primary','secondary','success','danger','warning','info','dark']);
+  const JOB_ICO = { success: 'ok', danger: 'err', primary: 'run', secondary: 'ok' };
+  const JOB_ICON = { success: 'bi-check-circle', danger: 'bi-x-circle', primary: 'bi-arrow-repeat spin', secondary: 'bi-dash-circle' };
 
   function dashboardNodes() {
     return {
@@ -304,8 +231,8 @@
       memPct(n)     { return ((n.mem_used / n.mem_total) * 100).toFixed(1); },
       memUsedGB(n)  { return (n.mem_used / 1073741824).toFixed(1); },
       memTotalGB(n) { return (n.mem_total / 1073741824).toFixed(1); },
-      cpuColor(n)   { const p = +this.cpuPct(n); return p > 80 ? 'danger' : p > 60 ? 'warning' : 'success'; },
-      memColor(n)   { const p = +this.memPct(n); return p > 80 ? 'danger' : p > 60 ? 'warning' : 'info'; },
+      cpuBarCls(n)  { const p = +this.cpuPct(n); return p > 80 ? 'crit' : p > 60 ? 'hot' : 'okc'; },
+      memBarCls(n)  { const p = +this.memPct(n); return p > 80 ? 'crit' : p > 60 ? 'hot' : 'okc'; },
       async load() {
         this.loading = true; this.error = '';
         try { this.nodes = await ProxUtils.apiJson('/api/nodes/status'); }
@@ -326,8 +253,11 @@
       tasks: [], loading: true, error: '', _poller: null,
       displayName(t) { return ProxUtils.taskTypeName(t.type); },
       statusClass(t) { return ALLOWED_STATUS.has(t.status_class) ? t.status_class : 'secondary'; },
+      dotCls(t)      { return JOB_ICO[this.statusClass(t)] || 'ok'; },
+      dotIcon(t)     { return JOB_ICON[this.statusClass(t)] || 'bi-dash-circle'; },
       isVmTask(t)    { const ty = t.type || ''; return ty.startsWith('qm') || ty.startsWith('vz'); },
       vmLink(t)      { return `/vm/${encodeURIComponent(t.node)}/${encodeURIComponent(t.id)}`; },
+      fmtDateTime: ProxUtils.formatDateTime,
       async load() {
         this.loading = true; this.error = '';
         try {
