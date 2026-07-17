@@ -47,7 +47,7 @@ ProxUI isn't a replacement for Proxmox web interface, but a light-weight additio
 ## Screencast
 
 <div style="display: flex; gap: 10px;">
-  <img src="misc/screenshots/mobile.gif" alt="ProxUI screen cast" width="400">
+  <img src="misc/screenshots/demo.gif" alt="ProxUI screen cast" width="800">
 </div>
 
 ## Demo
