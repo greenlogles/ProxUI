@@ -96,6 +96,7 @@
         ('networks', 'bi-diagram-3', 'Networks'),
         ('isos_templates', 'bi-disc', 'ISOs & Templates'),
         ('cluster', 'bi-diagram-2', 'Cluster'),
+        ('maintenance', 'bi-wrench', 'Maintenance'),
     ] %}
     {% set _pt = namespace(title='Proxmox Manager') %}
     {% for endpoint, icon, label in _nav %}
@@ -122,7 +123,7 @@
                     <i class="bi {{ icon }}"></i><span class="lbl">{{ label }}</span>
                 </a>
                 {% endfor %}
-                {# Operations section (Maintenance / Backups / Updates) intentionally hidden for now. #}
+                {# Backups / Updates (separate from node package maintenance) intentionally hidden for now. #}
             </nav>
 
             <div class="sidebar-foot">
@@ -184,7 +185,7 @@
                                                         <small class="text-truncate" style="max-width: 200px;"
                                                                :title="job.description" x-text="job.description"></small>
                                                     </div>
-                                                    <small class="text-muted d-block text-truncate" x-text="job.current_step || 'Waiting...'"></small>
+                                                    <small class="text-muted d-block job-step-text" x-text="job.current_step || 'Waiting...'"></small>
                                                     <div x-show="job.status === 'running'" class="progress mt-1" style="height: 4px;">
                                                         <div class="progress-bar progress-bar-striped progress-bar-animated" :style="'width: ' + job.progress + '%'"></div>
                                                     </div>
