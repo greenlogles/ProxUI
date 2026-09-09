@@ -321,8 +321,8 @@ class JobQueue:
         self.jobs = {}  # job_id -> job_info
         self.lock = threading.Lock()
 
-    def create_job(self, job_type, description, params):
-        """Create a new job and return its ID"""
+    def _new_job(self, job_type, description, params):
+        """Build a job record. Caller is responsible for holding ``self.lock``."""
         job_id = str(uuid.uuid4())[:8]
         job = {
             "id": job_id,
@@ -339,9 +339,32 @@ class JobQueue:
             "started_at": None,
             "completed_at": None,
         }
+        return job_id, job
+
+    def create_job(self, job_type, description, params):
+        """Create a new job and return its ID."""
         with self.lock:
+            job_id, job = self._new_job(job_type, description, params)
             self.jobs[job_id] = job
         return job_id
+
+    def create_unique_job(self, job_type, description, params):
+        """Create a job unless an active job with the same type and params exists.
+
+        The lookup and insert share one lock so callers cannot start competing
+        destructive operations from simultaneous requests.
+        """
+        with self.lock:
+            for job in self.jobs.values():
+                if (
+                    job["type"] == job_type
+                    and job["params"] == params
+                    and job["status"] in {"queued", "running"}
+                ):
+                    return job["id"], False
+            job_id, job = self._new_job(job_type, description, params)
+            self.jobs[job_id] = job
+            return job_id, True
 
     def get_job(self, job_id):
         """Get job info by ID"""
@@ -3013,6 +3036,44 @@ def cluster():
     cluster_info["nodes"].sort(key=lambda x: x["host"])
 
     return render_template("cluster.html", cluster=cluster_info)
+
+
+def _dedupe_apt_updates(raw):
+    """Collapse Proxmox's apt/update entries to one per package name.
+
+    A package can appear twice (e.g. offered by two Origins/repos for the same
+    candidate version) — apt itself and Proxmox's own Updates grid only ever
+    count/show it once, so do the same here rather than over-counting pending
+    updates.
+    """
+    seen = {}
+    for u in raw:
+        pkg = u.get("Package", "")
+        if pkg not in seen:
+            seen[pkg] = u
+    return sorted(seen.values(), key=lambda u: u.get("Package", ""))
+
+
+@app.route("/maintenance")
+def maintenance():
+    """Show pending package updates for every node in the current cluster"""
+    nodes_summary = []
+    for node_info in cluster_nodes:
+        name = node_info["name"]
+        proxmox = get_proxmox_connection(name, auto_renew=True)
+        entry = {"node": name, "online": False, "updates": [], "error": None}
+        entry.update(_get_node_reboot_status(name))
+        if proxmox:
+            try:
+                raw = proxmox.nodes(name).apt.update.get()
+                entry["online"] = True
+                entry["updates"] = _dedupe_apt_updates(raw)
+            except Exception as e:
+                entry["error"] = str(e)
+        nodes_summary.append(entry)
+
+    nodes_summary.sort(key=lambda x: x["node"])
+    return render_template("maintenance.html", nodes=nodes_summary)
 
 
 @app.route("/node/<node>")
@@ -7446,6 +7507,300 @@ def api_snippets_ssh_setup():
         return _proxmox_error_response(e)
 
 
+def _wait_apt_task(proxmox, node, upid, timeout=90, poll_interval=2):
+    """Poll a Proxmox task (e.g. an apt index refresh) until it stops. Returns True on success."""
+    waited = 0
+    while waited < timeout:
+        try:
+            status = proxmox.nodes(node).tasks(upid).status.get()
+            if status.get("status") == "stopped":
+                return status.get("exitstatus") == "OK"
+        except Exception:
+            pass
+        time.sleep(poll_interval)
+        waited += poll_interval
+    return False
+
+
+def _node_address_from_connection(proxmox, node: str) -> str | None:
+    """Return ``node``'s management address using a connection pinned by caller."""
+    try:
+        for entry in proxmox.cluster.status.get():
+            if (
+                entry.get("type") == "node"
+                and entry.get("name") == node
+                and entry.get("ip")
+            ):
+                return entry["ip"]
+    except Exception:
+        return None
+    return None
+
+
+@app.route("/api/node/<node>/apt/updates")
+def api_node_apt_updates(node):
+    """List pending apt updates for a node, optionally refreshing the index first."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        if request.args.get("refresh") == "1":
+            upid = proxmox.nodes(node).apt.update.post()
+            _wait_apt_task(proxmox, node, upid)
+        updates = _dedupe_apt_updates(proxmox.nodes(node).apt.update.get())
+        return jsonify({"updates": updates})
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+def _ssh_stream_command(client, job_id, cmd):
+    """Run `cmd` on an open SSH client, streaming each stdout/stderr line into the
+    job log as it arrives. Returns the command's exit status."""
+    stdin, stdout, stderr = client.exec_command(f"bash -lc {shlex.quote(cmd)} 2>&1")
+    stdin.close()
+    for line in iter(stdout.readline, ""):
+        line = line.rstrip("\n")
+        if line:
+            job_queue.add_step(job_id, line)
+    return stdout.channel.recv_exit_status()
+
+
+def _check_reboot_required(client):
+    """Check an open-root SSH client's node for whether a reboot is needed.
+
+    /var/run/reboot-required is only ever written by update-notifier-common's
+    hook, which Proxmox hosts don't normally have installed — so a kernel
+    upgrade there never creates the file. Cross-check the running kernel
+    against the newest one actually installed (via /lib/modules), which works
+    regardless of that package's presence. Returns (reboot_required, packages).
+    """
+    _, check_stdout, _ = client.exec_command(
+        "test -f /var/run/reboot-required && echo YES || echo NO"
+    )
+    reboot_flag_file = (
+        check_stdout.read().decode("utf-8", errors="replace").strip() == "YES"
+    )
+
+    _, kernel_stdout, _ = client.exec_command("uname -r")
+    running_kernel = kernel_stdout.read().decode("utf-8", errors="replace").strip()
+
+    _, latest_stdout, _ = client.exec_command(
+        "ls -1 /lib/modules 2>/dev/null | sort -V | tail -n1"
+    )
+    latest_kernel = latest_stdout.read().decode("utf-8", errors="replace").strip()
+    kernel_mismatch = bool(latest_kernel) and latest_kernel != running_kernel
+
+    reboot_packages = []
+    if reboot_flag_file:
+        _, pkgs_stdout, _ = client.exec_command(
+            "cat /var/run/reboot-required.pkgs 2>/dev/null"
+        )
+        reboot_packages = [
+            p.strip()
+            for p in pkgs_stdout.read().decode("utf-8", errors="replace").splitlines()
+            if p.strip()
+        ]
+    if kernel_mismatch:
+        reboot_packages.append(f"kernel ({running_kernel} -> {latest_kernel})")
+
+    return (reboot_flag_file or kernel_mismatch), reboot_packages
+
+
+# Last-known reboot-required status per node, so a full page reload of
+# /maintenance reflects the result of the last check/upgrade instead of
+# always coming up blank (the per-node SSH check is too slow to run on every
+# page render, so it's only refreshed by an upgrade job or an explicit check).
+_node_reboot_status = {}
+_node_reboot_status_lock = threading.Lock()
+
+
+def _set_node_reboot_status(node, reboot_required, reboot_packages):
+    with _node_reboot_status_lock:
+        _node_reboot_status[node] = {
+            "reboot_required": reboot_required,
+            "reboot_packages": reboot_packages,
+        }
+
+
+def _get_node_reboot_status(node):
+    with _node_reboot_status_lock:
+        return _node_reboot_status.get(
+            node, {"reboot_required": False, "reboot_packages": []}
+        )
+
+
+@app.route("/api/node/<node>/reboot-status")
+def api_node_reboot_status(node):
+    """Return the last-known reboot-required status, or run a fresh SSH check with ?refresh=1."""
+    if request.args.get("refresh") != "1":
+        return jsonify(_get_node_reboot_status(node))
+    try:
+        host = _node_address(node)
+        if not host:
+            return (
+                jsonify(
+                    {
+                        "error": f"Could not resolve {node}'s own address via cluster status."
+                    }
+                ),
+                502,
+            )
+        client = _ssh_connect_root(node, timeout=20, host=host)
+    except Exception as e:
+        return jsonify({"error": f"SSH connection failed: {e}"}), 502
+    try:
+        reboot_required, reboot_packages = _check_reboot_required(client)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        client.close()
+    _set_node_reboot_status(node, reboot_required, reboot_packages)
+    return jsonify(
+        {"reboot_required": reboot_required, "reboot_packages": reboot_packages}
+    )
+
+
+def run_node_upgrade_job(job_id, node, host, proxmox):
+    """Background job: apt-get update && apt-get dist-upgrade on `node` over SSH,
+    streaming output into the job log, then autoremove/autoclean unused packages
+    (old kernels etc.), refresh Proxmox's own apt cache so the UI stops showing
+    stale counts, and check whether a reboot is required (e.g. new kernel)."""
+    job_queue.set_running(job_id)
+    try:
+        # ``host`` and ``proxmox`` are captured while the request is on the
+        # selected cluster. Do not re-read process-global cluster state here:
+        # users can switch clusters while this background job is starting.
+        job_queue.add_step(job_id, f"Connecting to {node} ({host}) via SSH...")
+        client = _ssh_connect_root(node, timeout=20, host=host)
+    except Exception as e:
+        job_queue.set_failed(job_id, f"SSH connection failed: {e}")
+        return
+
+    try:
+        # dist-upgrade (not plain upgrade) matches what Proxmox's own pveupgrade
+        # and PVE upgrade docs use — plain "upgrade" refuses to pull in the new
+        # dependencies a kernel/zfs/pve-stack bump needs and silently keeps
+        # those packages back instead of installing them.
+        upgrade_cmd = (
+            "export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a; "
+            "apt-get update && "
+            "apt-get -y "
+            "-o Dpkg::Options::=--force-confdef "
+            "-o Dpkg::Options::=--force-confold "
+            "dist-upgrade"
+        )
+        job_queue.add_step(
+            job_id,
+            "Running apt-get update && apt-get dist-upgrade (non-interactive)...",
+        )
+        rc = _ssh_stream_command(client, job_id, upgrade_cmd)
+        if rc != 0:
+            job_queue.set_failed(job_id, f"apt-get exited with status {rc}")
+            return
+
+        job_queue.add_step(job_id, "Removing unused packages (apt-get autoremove)...")
+        autoremove_cmd = (
+            "export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a; "
+            "apt-get -y autoremove"
+        )
+        rc_autoremove = _ssh_stream_command(client, job_id, autoremove_cmd)
+        if rc_autoremove != 0:
+            job_queue.add_step(
+                job_id,
+                f"apt-get autoremove exited with status {rc_autoremove} (continuing)",
+            )
+
+        job_queue.add_step(
+            job_id, "Cleaning downloaded package files (apt-get autoclean)..."
+        )
+        autoclean_cmd = (
+            "export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a; "
+            "apt-get -y autoclean"
+        )
+        rc_autoclean = _ssh_stream_command(client, job_id, autoclean_cmd)
+        if rc_autoclean != 0:
+            job_queue.add_step(
+                job_id,
+                f"apt-get autoclean exited with status {rc_autoclean} (continuing)",
+            )
+
+        job_queue.add_step(job_id, "Refreshing Proxmox's package index cache...")
+        try:
+            refresh_upid = proxmox.nodes(node).apt.update.post()
+            _wait_apt_task(proxmox, node, refresh_upid)
+        except Exception as e:
+            job_queue.add_step(job_id, f"Could not refresh Proxmox's apt cache: {e}")
+
+        job_queue.add_step(job_id, "Checking whether a reboot is required...")
+        reboot_required, reboot_packages = _check_reboot_required(client)
+        _set_node_reboot_status(node, reboot_required, reboot_packages)
+
+        if reboot_required:
+            job_queue.add_step(job_id, "Reboot required to apply installed updates.")
+        else:
+            job_queue.add_step(job_id, "No reboot required.")
+
+        job_queue.set_completed(
+            job_id,
+            result={
+                "node": node,
+                "reboot_required": reboot_required,
+                "reboot_packages": reboot_packages,
+            },
+        )
+    except Exception as e:
+        job_queue.set_failed(job_id, str(e))
+    finally:
+        client.close()
+
+
+@app.route("/api/node/<node>/apt/upgrade", methods=["POST"])
+def api_node_apt_upgrade(node):
+    """Start a background job that non-interactively applies pending apt updates on a node."""
+    if DEMO_MODE:
+        return jsonify({"error": "Applying updates is disabled in demo mode"}), 403
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    host = _node_address_from_connection(proxmox, node)
+    if not host:
+        return (
+            jsonify(
+                {"error": f"Could not resolve {node}'s own address via cluster status."}
+            ),
+            502,
+        )
+
+    job_params = {"node": node, "cluster_id": current_cluster_id}
+    job_id, created = job_queue.create_unique_job(
+        job_type="node_apt_upgrade",
+        description=f"Apply updates on {node}",
+        params=job_params,
+    )
+    if not created:
+        return jsonify({"success": True, "job_id": job_id, "existing": True})
+    thread = threading.Thread(
+        target=run_node_upgrade_job, args=(job_id, node, host, proxmox), daemon=True
+    )
+    thread.start()
+    return jsonify({"success": True, "job_id": job_id})
+
+
+@app.route("/api/node/<node>/reboot", methods=["POST"])
+def api_node_reboot(node):
+    """Reboot a node's host (not a guest) via the Proxmox API."""
+    if DEMO_MODE:
+        return jsonify({"error": "Node reboot is disabled in demo mode"}), 403
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        proxmox.nodes(node).status.post(command="reboot")
+        return jsonify({"success": True, "message": f"Reboot command sent to {node}."})
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
 def _any_proxmox():
     """Return any working Proxmox connection, or None."""
     if not proxmox_nodes:
@@ -7895,17 +8250,7 @@ def _node_address(node: str) -> str | None:
     proxmox = get_proxmox_connection(node, auto_renew=True)
     if not proxmox:
         return None
-    try:
-        for entry in proxmox.cluster.status.get():
-            if (
-                entry.get("type") == "node"
-                and entry.get("name") == node
-                and entry.get("ip")
-            ):
-                return entry["ip"]
-    except Exception:
-        return None
-    return None
+    return _node_address_from_connection(proxmox, node)
 
 
 def _reset_lxc_root_password(node: str, vmid: str, password: str) -> str:

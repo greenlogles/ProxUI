@@ -413,6 +413,13 @@ a:hover { color: var(--accent); text-decoration: underline; }
 .text-muted-2 { color: var(--text-muted) !important; }
 .text-faint { color: var(--text-faint) !important; }
 .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+/* Background-job step text: wrap up to 3 lines instead of one-line ellipsis
+   truncation, since apt output (long URLs, package lists) is unreadable when
+   cut to a single line on narrow screens. */
+.job-step-text {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden; word-break: break-word;
+}
 
 /* ===================== SHELL ===================== */
 .app-shell{ display:grid; grid-template-columns:var(--sidebar-w) 1fr; grid-template-rows:100vh; }

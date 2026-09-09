@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+
+{% block title %}Maintenance - Proxmox Manager{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <div class="sec-title">Maintenance</div>
+    <div class="sec-sub">Node updates for {{ current_cluster.name }}</div>
+</div>
+
+<div x-data="maintenanceApp({{ nodes|tojson|forceescape }}, {{ current_cluster.id|tojson|forceescape }})">
+    <div class="d-flex align-items-center gap-2 mb-2">
+        <div class="sec-title" style="font-size:14px"><i class="bi bi-arrow-repeat me-1" style="color:var(--accent)"></i>Node Updates</div>
+        <span class="sec-sub">&middot; <span x-text="totalPending"></span> packages pending across <span x-text="nodesPending"></span> nodes</span>
+        <button class="btn-x sm ms-auto" @click="refreshAll()" :disabled="anyRefreshing">
+            <i class="bi bi-arrow-clockwise" :class="anyRefreshing && 'spin'"></i> Refresh all
+        </button>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <template x-for="n in nodes" :key="n.node">
+            <div class="col-12 col-lg-6">
+                <div class="card-x h-100">
+                    <div class="cx-head flex-wrap gap-2">
+                        <span class="nc-dot" :class="n.online ? 'online' : 'offline'" style="width:9px;height:9px"></span>
+                        <span class="cx-title" x-text="n.node"></span>
+                        <span class="pill ms-2"
+                              :class="!n.online ? 'err' : (n.updates.length === 0 ? 'ok' : 'maint')"
+                              x-text="!n.online ? 'Offline' : (n.updates.length === 0 ? 'Up to date' : n.updates.length + ' pending')"></span>
+                        <span class="pill err" x-show="n.rebootRequired"><span class="d"></span>Reboot required</span>
+                        <button class="icon-btn ms-auto" style="width:30px;height:30px;font-size:14px" @click="refresh(n)" :disabled="n.refreshing" title="Refresh">
+                            <i class="bi bi-arrow-clockwise" :class="n.refreshing && 'spin'"></i>
+                        </button>
+                    </div>
+                    <div class="cx-body">
+                        <template x-if="!n.online">
+                            <div class="text-danger" style="font-size:12.5px"><i class="bi bi-exclamation-triangle me-1"></i><span x-text="n.error || 'Could not reach this node.'"></span></div>
+                        </template>
+
+                        <template x-if="n.online && n.error">
+                            <div class="text-danger mb-2" style="font-size:12.5px"><i class="bi bi-exclamation-triangle me-1"></i><span x-text="n.error"></span></div>
+                        </template>
+
+                        <template x-if="n.online">
+                            <div>
+                                <div class="d-flex gap-4 mb-2" x-show="n.updates.length > 0">
+                                    <div>
+                                        <div class="text-faint" style="font-size:10.5px;text-transform:uppercase;font-weight:700">Packages</div>
+                                        <div style="font-size:18px;font-weight:750" x-text="n.updates.length"></div>
+                                    </div>
+                                </div>
+                                <template x-if="n.updates.length > 0">
+                                    <div style="max-height:160px;overflow:auto">
+                                        <template x-for="(p, pi) in n.updates" :key="n.node + '-' + p.Package + '-' + pi">
+                                            <div class="pkg-line">
+                                                <i class="bi bi-box-seam" style="color:var(--text-faint)"></i>
+                                                <span class="mono" x-text="p.Package"></span>
+                                                <span class="ms-auto mono text-faint" style="font-size:11px">
+                                                    <span x-text="p.OldVersion"></span> <i class="bi bi-arrow-right"></i> <span style="color:var(--ok)" x-text="p.Version"></span>
+                                                </span>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+                                <div class="text-faint" style="font-size:12.5px" x-show="n.updates.length === 0">
+                                    <i class="bi bi-check-circle me-1" style="color:var(--ok)"></i>All packages current.
+                                </div>
+
+                                <template x-if="n.rebootRequired">
+                                    <div class="text-faint" style="font-size:11px;margin-top:8px">
+                                        Reboot needed for: <span class="mono" x-text="(n.rebootPackages || []).join(', ') || 'kernel/library update'"></span>
+                                    </div>
+                                </template>
+
+                                <div class="divider my-3"></div>
+                                <div class="d-flex flex-wrap gap-2">
+                                    <button class="btn-x sm primary" @click="applyUpdates(n)" :disabled="n.applying || n.updates.length === 0">
+                                        <i class="bi" :class="n.applying ? 'bi-hourglass-split' : 'bi-download'"></i>
+                                        <span x-text="n.applying ? 'Applying...' : 'Apply updates'"></span>
+                                    </button>
+                                    <button class="btn-x sm danger" @click="reboot(n)" :disabled="n.rebooting" x-show="n.rebootRequired">
+                                        <i class="bi" :class="n.rebooting ? 'bi-hourglass-split' : 'bi-arrow-clockwise'"></i>
+                                        <span x-text="n.rebooting ? 'Rebooting...' : 'Reboot node'"></span>
+                                    </button>
+                                    <button class="btn-x sm ms-auto" @click="n.logOpen = !n.logOpen" x-show="n.job">
+                                        <i class="bi bi-terminal"></i> <span x-text="n.logOpen ? 'Hide log' : 'View log'"></span>
+                                    </button>
+                                </div>
+
+                                <template x-if="n.logOpen && n.job">
+                                    <div class="mt-3">
+                                        <div class="d-flex align-items-center gap-2 mb-1">
+                                            <span class="pill" :class="n.job.status === 'failed' ? 'err' : (n.job.status === 'completed' ? 'ok' : 'maint')" x-text="n.job.status"></span>
+                                            <span class="text-faint" style="font-size:11px" x-text="n.job.current_step"></span>
+                                        </div>
+                                        <div class="mono" style="max-height:220px;overflow:auto;background:var(--bg-elev);border:1px solid var(--border-soft);border-radius:var(--radius-sm);padding:8px;font-size:11px;white-space:pre-wrap" x-ref="log">
+                                            <template x-for="(s, i) in (n.job.steps || [])" :key="i"><div x-text="s"></div></template>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </template>
+        <template x-if="nodes.length === 0">
+            <div class="col-12"><div class="empty-hint"><i class="bi bi-inbox" style="font-size:26px"></i><div class="mt-2">No nodes in this cluster.</div></div></div>
+        </template>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { maintenanceApp } from "{{ url_for('static', filename='js/maintenance.js') }}";
+  function register() { window.Alpine.data('maintenanceApp', maintenanceApp); }
+  if (window.Alpine) register();
+  else document.addEventListener('alpine:init', register);
+</script>
+{% endblock %}
