@@ -678,6 +678,11 @@ select.inp{ appearance:none; background-image:url("data:image/svg+xml;utf8,<svg 
 .pkg-line{ display:flex; align-items:center; gap:10px; font-size:12.5px; padding:6px 0; }
 .pkg-line .mono{ color:var(--text-muted); }
 
+/* backups: guest rows expand into their individual backup rows */
+.tbl tbody tr.sub-row{ background:var(--panel-2); }
+.tbl tbody tr.sub-row td{ padding-top:7px; padding-bottom:7px; }
+.tbl tbody tr.no-backup-row td:first-child{ box-shadow:inset 2px 0 0 var(--warn); }
+
 /* ===================== RESPONSIVE ===================== */
 @media (max-width:1199.98px){
   .app-shell{ grid-template-columns:var(--rail-w) 1fr; }

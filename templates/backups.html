@@ -1,0 +1,366 @@
+{% extends "base.html" %}
+
+{% block title %}Backups - Proxmox Manager{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <div class="sec-title">Backups</div>
+    <div class="sec-sub">Scheduled jobs and stored backups for {{ current_cluster.name }}</div>
+</div>
+
+{% if error %}
+<div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-1"></i>{{ error }}</div>
+{% endif %}
+
+<div x-data="backupsApp({{ {'jobs': jobs, 'storages': storages, 'guests': guests, 'totals': totals}|tojson|forceescape }})">
+
+    <!-- ==================== SUMMARY ==================== -->
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-xl-3">
+            <div class="stat">
+                <div class="ico" style="background:var(--accent-soft);color:var(--accent)"><i class="bi bi-archive"></i></div>
+                <div>
+                    <div class="val" x-text="totals.count"></div>
+                    <div class="lbl">Stored backups</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-xl-3">
+            <div class="stat">
+                <div class="ico violet"><i class="bi bi-hdd-stack"></i></div>
+                <div>
+                    <div class="val" x-text="fmtBytes(totals.size)"></div>
+                    {#
+                      Proxmox reports each backup's logical size. Deduplicating
+                      targets (PBS) store far less than that, so this is not a
+                      disk-usage figure — the storage cards below have the real one.
+                    #}
+                    <div class="lbl" title="Sum of logical backup sizes — deduplicating targets store less">Logical size</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-xl-3">
+            <div class="stat">
+                <div class="ico" :class="totals.covered < totals.guests ? 'warn' : 'ok'">
+                    <i class="bi" :class="totals.covered < totals.guests ? 'bi-shield-exclamation' : 'bi-check-circle'"></i>
+                </div>
+                <div>
+                    <div class="val">
+                        <span x-text="totals.covered"></span><span class="text-faint" style="font-size:16px"> / <span x-text="totals.guests"></span></span>
+                    </div>
+                    <div class="lbl">Guests covered</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-xl-3">
+            <div class="stat">
+                <div class="ico ok"><i class="bi bi-clock-history"></i></div>
+                <div>
+                    <div class="val" style="font-size:17px" x-text="totals.latest ? fmtAgo(totals.latest) : 'Never'"></div>
+                    <div class="lbl">Last backup</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== STORAGE TARGETS ==================== -->
+    <div class="d-flex align-items-center gap-2 mb-2">
+        <div class="sec-title" style="font-size:14px"><i class="bi bi-hdd-stack me-1" style="color:var(--accent)"></i>Backup storage</div>
+        <button class="btn-x sm ms-auto" @click="reload()" :disabled="loading">
+            <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i> Refresh
+        </button>
+    </div>
+    <div class="row g-3 mb-4">
+        <template x-for="s in storages" :key="s.node + '/' + s.storage">
+            <div class="col-12 col-md-6 col-xl-4">
+                <div class="card-x h-100">
+                    <div class="cx-body">
+                        <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+                            <span class="cx-title" x-text="s.storage"></span>
+                            <span class="type-chip" x-text="(s.type || '').toUpperCase()"></span>
+                            <span class="pill ok" x-show="s.shared"><span class="d"></span>Shared</span>
+                            <span class="pill err ms-auto" x-show="s.error"><span class="d"></span>Error</span>
+                        </div>
+                        <template x-if="s.error">
+                            <div class="text-danger" style="font-size:12px" x-text="s.error"></div>
+                        </template>
+                        <template x-if="!s.error">
+                            <div>
+                                <div class="usage-cell" x-show="s.total">
+                                    <div class="ubar">
+                                        <i :class="usedPct(s) > 90 ? 'crit' : (usedPct(s) > 75 ? 'hot' : 'okc')"
+                                           :style="'width:' + usedPct(s) + '%'"></i>
+                                    </div>
+                                    <span class="pct" x-text="usedPct(s).toFixed(0) + '%'"></span>
+                                </div>
+                                <div class="text-faint" style="font-size:11px;margin-top:5px">
+                                    <span x-show="s.total"><span x-text="fmtBytes(s.used)"></span> of <span x-text="fmtBytes(s.total)"></span> used &middot; </span>
+                                    <span x-text="countFor(s.storage)"></span> backups
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </template>
+        <template x-if="storages.length === 0">
+            <div class="col-12">
+                <div class="empty-hint"><i class="bi bi-hdd-stack" style="font-size:26px"></i>
+                    <div class="mt-2">No active backup-capable storage in this cluster.</div>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <!-- ==================== SCHEDULED JOBS ==================== -->
+    <div class="d-flex align-items-center gap-2 mb-2">
+        <div class="sec-title" style="font-size:14px"><i class="bi bi-calendar-event me-1" style="color:var(--accent)"></i>Scheduled jobs</div>
+        <span class="sec-sub">&middot; <span x-text="jobs.length"></span> job(s)</span>
+    </div>
+    <div class="card-x mb-4">
+        <div class="cx-body flush tbl-scroll">
+            <table class="tbl">
+                <thead>
+                    <tr>
+                        <th>Status</th>
+                        <th>Schedule</th>
+                        <th>Next run</th>
+                        <th>Storage</th>
+                        <th>Selection</th>
+                        <th>Mode</th>
+                        <th>Retention</th>
+                        <th class="num">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="j in jobs" :key="j.id">
+                        <tr>
+                            <td>
+                                <span class="pill" :class="j.enabled ? 'run' : 'stop'">
+                                    <span class="d"></span><span x-text="j.enabled ? 'Enabled' : 'Disabled'"></span>
+                                </span>
+                            </td>
+                            <td class="mono" x-text="j.schedule || j.starttime || '—'"></td>
+                            <td class="text-muted-2" x-text="j['next-run'] ? fmtDate(j['next-run']) : '—'"></td>
+                            <td class="mono" x-text="j.storage || '—'"></td>
+                            <td><div style="max-width:250px" x-text="selectionLabel(j)"></div></td>
+                            <td><span class="type-chip" x-text="j.mode || 'snapshot'"></span></td>
+                            <td class="text-faint" style="font-size:11.5px" x-text="retentionLabel(j)"></td>
+                            <td>
+                                <div class="act-row">
+                                    <button class="act-btn go" @click="runJob(j)"
+                                            :disabled="busyJob === j.id || !j.storage"
+                                            :title="'Run ' + j.id + ' now'">
+                                        <i class="bi" :class="busyJob === j.id ? 'bi-hourglass-split' : 'bi-play-fill'"></i>
+                                    </button>
+                                    <button class="act-btn" @click="toggleJob(j)" :disabled="busyJob === j.id"
+                                            :title="j.enabled ? 'Disable job' : 'Enable job'">
+                                        <i class="bi" :class="j.enabled ? 'bi-pause-circle' : 'bi-play-circle'"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+            <template x-if="jobs.length === 0">
+                <div class="empty-hint"><i class="bi bi-calendar-event" style="font-size:26px"></i>
+                    <div class="mt-2">No scheduled backup jobs.</div>
+                    <div class="text-faint" style="font-size:12px">Create one in Proxmox under Datacenter &rarr; Backup.</div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- ==================== PER-GUEST BACKUPS ==================== -->
+    <div class="d-flex align-items-center gap-2 mb-2">
+        <div class="sec-title" style="font-size:14px"><i class="bi bi-box-seam me-1" style="color:var(--accent)"></i>Backups by guest</div>
+        <span class="sec-sub">&middot; showing <span x-text="visibleGuests.length"></span> of <span x-text="guests.length"></span></span>
+    </div>
+    <div class="card-x mb-4">
+        <div class="cx-head">
+            <div class="filter-bar w-100">
+                <div class="search-inp">
+                    <i class="bi bi-search"></i>
+                    <input type="text" class="inp" placeholder="Search name or VMID…"
+                           x-model="search" @keydown.escape="search = ''">
+                </div>
+                <select class="inp" x-model="storageFilter">
+                    <option value="">All storage</option>
+                    <template x-for="s in storages" :key="s.storage">
+                        <option :value="s.storage" x-text="s.storage"></option>
+                    </template>
+                </select>
+                <select class="inp" x-model="coverage">
+                    <option value="">All guests</option>
+                    <option value="none">Not backed up</option>
+                    <option value="some">Has backups</option>
+                    <option value="orphan">Orphaned backups</option>
+                </select>
+            </div>
+        </div>
+        <div class="cx-body flush tbl-scroll">
+            <table class="tbl">
+                <thead>
+                    <tr>
+                        <th style="width:34px"></th>
+                        <th>Guest</th>
+                        <th>Type</th>
+                        <th>Node</th>
+                        <th class="num">Backups</th>
+                        <th class="num">Size</th>
+                        <th>Latest</th>
+                        <th class="num">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {#
+                      Rows are flattened in JS (guest row, then its backup rows when
+                      expanded) so every x-for iteration has a single <tr> root —
+                      nesting a second <tbody> inside one is invalid HTML.
+                    #}
+                    <template x-for="row in visibleRows" :key="row.key">
+                        <tr :class="rowClass(row)">
+                            <td>
+                                <button class="act-btn" x-show="row.kind === 'guest'"
+                                        @click="toggle(row.guest)" :disabled="row.guest.count === 0"
+                                        :title="expanded.includes(row.guest.vmid) ? 'Collapse' : 'Expand'">
+                                    <i class="bi" :class="expanded.includes(row.guest.vmid) ? 'bi-chevron-down' : 'bi-chevron-right'"></i>
+                                </button>
+                            </td>
+                            <td>
+                                <template x-if="row.kind === 'guest'">
+                                    <div>
+                                        <span class="nm" x-text="row.guest.name"></span>
+                                        <div class="text-faint mono" style="font-size:11px">VMID: <span x-text="row.guest.vmid"></span></div>
+                                    </div>
+                                </template>
+                                <template x-if="row.kind === 'backup'">
+                                    <div>
+                                        <span class="mono" style="font-size:12px" x-text="shortVolid(row.backup.volid)"></span>
+                                        <div class="text-faint" style="font-size:11px" x-show="row.backup.notes" x-text="row.backup.notes"></div>
+                                    </div>
+                                </template>
+                            </td>
+                            <td>
+                                <template x-if="row.kind === 'guest'">
+                                    <div class="d-flex align-items-center gap-1 flex-wrap">
+                                        <span class="type-chip" :class="row.guest.type === 'qemu' ? 'vm' : 'lxc'"
+                                              x-text="row.guest.type === 'qemu' ? 'VM' : 'LXC'"></span>
+                                        <span class="pill err" x-show="row.guest.orphan" title="Guest no longer exists in the cluster"><span class="d"></span>Orphan</span>
+                                        <span class="type-chip" x-show="row.guest.template">TMPL</span>
+                                    </div>
+                                </template>
+                                <template x-if="row.kind === 'backup'">
+                                    <span class="mono text-faint" style="font-size:11.5px" x-text="row.backup.storage"></span>
+                                </template>
+                            </td>
+                            <td class="text-muted-2">
+                                <span x-show="row.kind === 'guest'" x-text="row.guest.node || '—'"></span>
+                                <span class="pill ok" x-show="row.kind === 'backup' && row.backup.protected"><span class="d"></span>Protected</span>
+                            </td>
+                            <td class="num">
+                                <template x-if="row.kind === 'guest'">
+                                    <div>
+                                        <span x-show="row.guest.count > 0" x-text="row.guest.count"></span>
+                                        <span class="pill maint" x-show="row.guest.count === 0 && !row.guest.template"><span class="d"></span>None</span>
+                                        <span class="text-faint" x-show="row.guest.count === 0 && row.guest.template">—</span>
+                                    </div>
+                                </template>
+                            </td>
+                            <td class="num mono" x-text="row.kind === 'guest' ? (row.guest.size ? fmtBytes(row.guest.size) : '—') : fmtBytes(row.backup.size)"></td>
+                            <td class="text-muted-2" style="font-size:12px"
+                                x-text="row.kind === 'guest' ? (row.guest.latest ? fmtAgo(row.guest.latest) : '—') : fmtDate(row.backup.ctime)"></td>
+                            <td>
+                                <div class="act-row">
+                                    <button class="act-btn pri" x-show="row.kind === 'guest' && !row.guest.orphan"
+                                            @click="backupNow(row.guest)"
+                                            :disabled="busyGuest === row.guest.vmid || storages.length === 0"
+                                            title="Back up now">
+                                        <i class="bi" :class="busyGuest === row.guest.vmid ? 'bi-hourglass-split' : 'bi-lightning-charge'"></i>
+                                    </button>
+                                    {#
+                                      x-show still evaluates its sibling bindings, so
+                                      every row.backup access is optional — guest rows
+                                      reach these expressions with no backup attached.
+                                    #}
+                                    <button class="act-btn stopc" x-show="row.kind === 'backup'"
+                                            @click="removeBackup(row.guest, row.backup)"
+                                            :disabled="row.backup?.protected || busyVolid === row.backup?.volid"
+                                            :title="row.backup?.protected ? 'Protected — unprotect it in Proxmox first' : 'Delete backup'">
+                                        <i class="bi" :class="busyVolid === row.backup?.volid ? 'bi-hourglass-split' : 'bi-trash'"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+            <template x-if="visibleGuests.length === 0">
+                <div class="empty-hint"><i class="bi bi-inbox" style="font-size:26px"></i>
+                    <div class="mt-2">No guests match these filters.</div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- ==================== BACKUP NOW DIALOG ==================== -->
+    <div class="modal fade" tabindex="-1" x-ref="backupModal">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-lightning-charge"></i>
+                        Back up <span x-text="dialog && dialog.name"></span>
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="field">
+                        <label>Target storage</label>
+                        <select class="inp" x-model="form.storage">
+                            <template x-for="s in storages" :key="s.storage">
+                                <option :value="s.storage" x-text="s.storage + ' (' + (s.type || '').toUpperCase() + ')'"></option>
+                            </template>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label>Mode</label>
+                        <select class="inp" x-model="form.mode">
+                            <option value="snapshot">Snapshot (no downtime)</option>
+                            <option value="suspend">Suspend</option>
+                            <option value="stop">Stop</option>
+                        </select>
+                        <div class="hint">Snapshot keeps the guest running; stop gives the most consistent backup.</div>
+                    </div>
+                    <div class="field">
+                        <label>Compression</label>
+                        <select class="inp" x-model="form.compress">
+                            <option value="zstd">ZSTD (fast, recommended)</option>
+                            <option value="lzo">LZO</option>
+                            <option value="gzip">GZIP</option>
+                            <option value="0">None</option>
+                        </select>
+                        <div class="hint">Proxmox Backup Server targets ignore this and use their own format.</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-x primary" @click="submitBackup()" :disabled="!form.storage">
+                        <i class="bi bi-lightning-charge"></i> Start backup
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { backupsApp } from "{{ url_for('static', filename='js/backups.js') }}";
+  function register() { window.Alpine.data('backupsApp', backupsApp); }
+  if (window.Alpine) register();
+  else document.addEventListener('alpine:init', register);
+</script>
+{% endblock %}
