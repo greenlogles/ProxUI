@@ -307,6 +307,220 @@ class TestBackupEndpoints(BackupsTestCase):
         self.assertEqual(response.status_code, 400)
 
 
+class TestApplyRealSizes(unittest.TestCase):
+    def test_pbs_sizes_are_scaled_by_the_datastore_ratio(self):
+        storages = [{"storage": "pbs", "type": "pbs", "used": 100}]
+        backups = [
+            {"storage": "pbs", "size": 600},
+            {"storage": "pbs", "size": 400},
+        ]
+
+        app._apply_real_sizes(storages, backups)
+
+        self.assertEqual(storages[0]["logical"], 1000)
+        self.assertEqual(storages[0]["ratio"], 0.1)
+        # The datastore's own used figure is the only exact number.
+        self.assertEqual(storages[0]["backup_used"], 100)
+        self.assertEqual([b["real"] for b in backups], [60, 40])
+        self.assertTrue(all(b["estimated"] for b in backups))
+
+    def test_file_storage_sizes_are_used_as_reported(self):
+        storages = [{"storage": "nfs", "type": "nfs", "used": 999}]
+        backups = [{"storage": "nfs", "size": 600}]
+
+        app._apply_real_sizes(storages, backups)
+
+        self.assertIsNone(storages[0]["ratio"])
+        # A dir/NFS target holds nothing but these archives, so they add up.
+        self.assertEqual(storages[0]["backup_used"], 600)
+        self.assertEqual(backups[0]["real"], 600)
+        self.assertFalse(backups[0]["estimated"])
+
+
+class TestJobPayload(unittest.TestCase):
+    def test_explicit_guest_list_is_normalised(self):
+        params = app._job_payload(
+            {"schedule": "sun 01:00", "storage": "pbs", "vmid": ["103", "101"]}
+        )
+
+        self.assertEqual(params["vmid"], "101,103")
+        self.assertEqual(params["enabled"], 1)
+        self.assertEqual(params["mode"], "snapshot")
+        self.assertNotIn("all", params)
+
+    def test_all_selection_carries_exclusions_only(self):
+        params = app._job_payload(
+            {
+                "schedule": "sun 01:00",
+                "storage": "pbs",
+                "selection": "all",
+                "exclude": "102, 101",
+                "vmid": ["999"],
+            }
+        )
+
+        self.assertEqual(params["all"], 1)
+        self.assertEqual(params["exclude"], "101,102")
+        self.assertNotIn("vmid", params)
+
+    def test_pool_selection_requires_a_pool(self):
+        with self.assertRaises(ValueError):
+            app._job_payload(
+                {"schedule": "sun 01:00", "storage": "pbs", "selection": "pool"}
+            )
+
+    def test_keep_last_becomes_a_prune_property_string(self):
+        params = app._job_payload(
+            {"schedule": "sun 01:00", "storage": "pbs", "vmid": "101", "keep-last": "7"}
+        )
+
+        self.assertEqual(params["prune-backups"], "keep-last=7")
+
+    def test_schedule_and_storage_are_required(self):
+        with self.assertRaises(ValueError):
+            app._job_payload({"storage": "pbs", "vmid": "101"})
+        with self.assertRaises(ValueError):
+            app._job_payload({"schedule": "sun 01:00", "vmid": "101"})
+
+    def test_empty_guest_list_is_rejected(self):
+        with self.assertRaises(ValueError):
+            app._job_payload({"schedule": "sun 01:00", "storage": "pbs", "vmid": ""})
+
+
+class TestJobCrudEndpoints(BackupsTestCase):
+    def test_create_posts_the_translated_payload(self):
+        response = self.client.post(
+            "/api/backups/job",
+            json={
+                "schedule": "sun 01:00",
+                "storage": "pbs",
+                "vmid": ["101", "102"],
+                "keep-last": "5",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        kwargs = self.proxmox.cluster.backup.post.call_args.kwargs
+        self.assertEqual(kwargs["vmid"], "101,102")
+        self.assertEqual(kwargs["prune-backups"], "keep-last=5")
+
+    def test_create_reports_a_validation_error_as_400(self):
+        response = self.client.post("/api/backups/job", json={"storage": "pbs"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("schedule is required", response.get_json()["error"])
+
+    def test_update_deletes_properties_the_form_no_longer_sets(self):
+        self.proxmox.cluster.backup.get.return_value = [
+            {
+                "id": "job-1",
+                "vmid": "101",
+                "compress": "zstd",
+                "notes-template": "x",
+                "storage": "pbs",
+            }
+        ]
+
+        response = self.client.put(
+            "/api/backups/job/job-1",
+            json={
+                "schedule": "sun 02:00",
+                "storage": "pbs",
+                "selection": "all",
+                "compress": "zstd",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        kwargs = self.proxmox.cluster.backup.return_value.put.call_args.kwargs
+        self.assertEqual(kwargs["all"], 1)
+        # vmid and notes-template were on the job but are not in the new payload.
+        self.assertEqual(
+            sorted(kwargs["delete"].split(",")), ["notes-template", "vmid"]
+        )
+
+    def test_update_404s_for_an_unknown_job(self):
+        self.proxmox.cluster.backup.get.return_value = []
+
+        response = self.client.put(
+            "/api/backups/job/nope",
+            json={"schedule": "sun 01:00", "storage": "pbs", "vmid": "101"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_delete_removes_the_job(self):
+        response = self.client.delete("/api/backups/job/job-1")
+
+        self.assertEqual(response.status_code, 200)
+        self.proxmox.cluster.backup.assert_called_with("job-1")
+        self.proxmox.cluster.backup.return_value.delete.assert_called_once()
+
+
+class TestBackupConfigEndpoint(BackupsTestCase):
+    def test_returns_the_config_stored_in_the_archive(self):
+        extract = self.proxmox.nodes.return_value.vzdump.extractconfig.get
+        extract.return_value = "cores: 2\nname: web\n"
+
+        response = self.client.get(
+            "/api/backups/content/config",
+            query_string={"volid": "pbs:backup/vm/101/a", "node": "pve-a"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("cores: 2", response.get_json()["config"])
+        extract.assert_called_with(volume="pbs:backup/vm/101/a")
+
+    def test_requires_volid_and_node(self):
+        response = self.client.get(
+            "/api/backups/content/config", query_string={"volid": "pbs:x"}
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+
+class TestGuestBackupSummary(BackupsTestCase):
+    def test_rolls_backups_up_per_storage(self):
+        self.proxmox.nodes.return_value.storage.get.return_value = [
+            {"storage": "pbs", "content": "backup", "active": 1, "shared": 1},
+        ]
+        content = self.proxmox.nodes.return_value.storage.return_value.content
+        content.get.return_value = [
+            _backup("pbs:backup/vm/101/a", 101, 100, size=10),
+            _backup("pbs:backup/vm/101/b", 101, 300, size=20),
+        ]
+
+        response = self.client.get("/api/backups/guest/101")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(body["count"], 2)
+        self.assertEqual(body["latest"], 300)
+        self.assertEqual(
+            body["by_storage"],
+            [{"storage": "pbs", "count": 2, "size": 30, "latest": 300}],
+        )
+        # Only this guest's backups are fetched, not the whole storage.
+        self.assertEqual(
+            content.get.call_args.kwargs, {"content": "backup", "vmid": 101}
+        )
+
+    def test_reports_no_backups_without_failing(self):
+        self.proxmox.nodes.return_value.storage.get.return_value = [
+            {"storage": "pbs", "content": "backup", "active": 1, "shared": 1},
+        ]
+        self.proxmox.nodes.return_value.storage.return_value.content.get.return_value = (
+            []
+        )
+
+        body = self.client.get("/api/backups/guest/101").get_json()
+
+        self.assertEqual(body["count"], 0)
+        self.assertEqual(body["latest"], 0)
+        self.assertEqual(body["by_storage"], [])
+        self.assertEqual([s["storage"] for s in body["storages"]], ["pbs"])
+
+
 class TestDemoModeGating(BackupsTestCase):
     def setUp(self):
         super().setUp()
@@ -325,6 +539,15 @@ class TestDemoModeGating(BackupsTestCase):
             self.client.delete(
                 "/api/backups/content", json={"volid": "pbs:x", "node": "pve-a"}
             ),
+            self.client.post(
+                "/api/backups/job",
+                json={"schedule": "sun 01:00", "storage": "pbs", "vmid": "101"},
+            ),
+            self.client.put(
+                "/api/backups/job/job-1",
+                json={"schedule": "sun 01:00", "storage": "pbs", "vmid": "101"},
+            ),
+            self.client.delete("/api/backups/job/job-1"),
         ]
 
         for response in calls:

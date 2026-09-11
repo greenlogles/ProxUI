@@ -3124,6 +3124,23 @@ def _backup_storages(proxmox):
     return storages
 
 
+def _backup_item(item, storage, node):
+    """Normalise one storage content entry into the shape the UI consumes."""
+    return {
+        "volid": item.get("volid", ""),
+        "storage": storage,
+        "node": node,
+        "vmid": int(item["vmid"]) if item.get("vmid") else None,
+        "size": item.get("size", 0),
+        "ctime": item.get("ctime", 0),
+        "format": item.get("format", ""),
+        "subtype": item.get("subtype", ""),
+        "notes": item.get("notes", ""),
+        "protected": bool(item.get("protected")),
+        "verification": (item.get("verification") or {}).get("state", ""),
+    }
+
+
 def _collect_backups(storages):
     """Fetch backup volumes from each storage, annotating them with their origin.
 
@@ -3146,22 +3163,41 @@ def _collect_backups(storages):
             s["error"] = str(e)
             continue
         for item in items:
-            backups.append(
-                {
-                    "volid": item.get("volid", ""),
-                    "storage": s["storage"],
-                    "node": s["node"],
-                    "vmid": int(item["vmid"]) if item.get("vmid") else None,
-                    "size": item.get("size", 0),
-                    "ctime": item.get("ctime", 0),
-                    "format": item.get("format", ""),
-                    "subtype": item.get("subtype", ""),
-                    "notes": item.get("notes", ""),
-                    "protected": bool(item.get("protected")),
-                    "verification": (item.get("verification") or {}).get("state", ""),
-                }
-            )
+            backups.append(_backup_item(item, s["storage"], s["node"]))
     backups.sort(key=lambda b: b.get("ctime") or 0, reverse=True)
+    return backups
+
+
+def _apply_real_sizes(storages, backups):
+    """Attach an on-disk size to every backup, alongside the reported one.
+
+    A file-based storage reports an archive's real compressed size, so it is
+    used as-is. Proxmox Backup Server reports each snapshot's *logical* size
+    instead, and summing deduplicated snapshots overstates disk use by an order
+    of magnitude — so those are scaled by the datastore's own used-to-logical
+    ratio. That makes a PBS guest's figure an estimate of its share of the
+    datastore, not a measurement; only the storage total is exact.
+    """
+    logical = defaultdict(int)
+    for b in backups:
+        logical[b["storage"]] += b["size"] or 0
+
+    ratios = {}
+    for s in storages:
+        s["logical"] = logical.get(s["storage"], 0)
+        s["dedup"] = s.get("type") == "pbs"
+        s["ratio"] = None
+        if s["dedup"] and s["logical"] and s.get("used"):
+            s["ratio"] = s["used"] / s["logical"]
+            ratios[s["storage"]] = s["ratio"]
+        # What the backups on this storage actually occupy: the datastore's own
+        # figure when it deduplicates, otherwise the archives add up exactly.
+        s["backup_used"] = s["used"] if s["dedup"] else s["logical"]
+
+    for b in backups:
+        ratio = ratios.get(b["storage"])
+        b["real"] = int((b["size"] or 0) * ratio) if ratio else (b["size"] or 0)
+        b["estimated"] = ratio is not None
     return backups
 
 
@@ -3190,6 +3226,8 @@ def _group_backups_by_guest(backups, guests):
                 "orphan": False,
                 "count": len(items),
                 "size": sum(i["size"] or 0 for i in items),
+                "real": sum(i.get("real", i["size"]) or 0 for i in items),
+                "estimated": any(i.get("estimated") for i in items),
                 "latest": max((i["ctime"] or 0 for i in items), default=0),
                 "backups": items,
             }
@@ -3207,6 +3245,8 @@ def _group_backups_by_guest(backups, guests):
                 "orphan": True,
                 "count": len(items),
                 "size": sum(i["size"] or 0 for i in items),
+                "real": sum(i.get("real", i["size"]) or 0 for i in items),
+                "estimated": any(i.get("estimated") for i in items),
                 "latest": max((i["ctime"] or 0 for i in items), default=0),
                 "backups": items,
             }
@@ -3227,6 +3267,7 @@ def backups():
             storages=[],
             guests=[],
             totals={},
+            pools=[],
             error="No Proxmox connection available.",
         )
 
@@ -3245,14 +3286,21 @@ def backups():
         resources = []
         error = error or str(e)
 
+    try:
+        pools = sorted(p["poolid"] for p in proxmox.pools.get() if p.get("poolid"))
+    except Exception:
+        pools = []
+
     storages = _backup_storages(proxmox)
-    backup_items = _collect_backups(storages)
+    backup_items = _apply_real_sizes(storages, _collect_backups(storages))
     guests = _group_backups_by_guest(backup_items, resources)
 
     real_guests = [g for g in guests if not g["orphan"] and not g["template"]]
     totals = {
         "count": len(backup_items),
         "size": sum(b["size"] or 0 for b in backup_items),
+        "real": sum(s["backup_used"] or 0 for s in storages),
+        "estimated": any(s["dedup"] for s in storages),
         "covered": len([g for g in real_guests if g["count"] > 0]),
         "guests": len(real_guests),
         "latest": max((b["ctime"] or 0 for b in backup_items), default=0),
@@ -3265,6 +3313,7 @@ def backups():
         storages=storages,
         guests=guests,
         totals=totals,
+        pools=pools,
         error=error,
     )
 
@@ -8010,7 +8059,7 @@ def api_backups():
         return _proxmox_error_response(e)
 
     storages = _backup_storages(proxmox)
-    backup_items = _collect_backups(storages)
+    backup_items = _apply_real_sizes(storages, _collect_backups(storages))
     return jsonify(
         {
             "jobs": jobs,
@@ -8216,6 +8265,217 @@ def api_backup_delete():
         return jsonify({"success": True, "message": f"Deleted {volid}."})
     except Exception as e:
         return _proxmox_error_response(e)
+
+
+@app.route("/api/backups/content/config")
+def api_backup_content_config():
+    """Return the guest configuration captured inside one backup."""
+    volid = request.args.get("volid")
+    node = request.args.get("node")
+    if not volid or not node:
+        return jsonify({"error": "volid and node are required"}), 400
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": f"No connection to {node}"}), 404
+    try:
+        config = proxmox.nodes(node).vzdump.extractconfig.get(volume=volid)
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify({"volid": volid, "config": config or ""})
+
+
+@app.route("/api/backups/guest/<int:vmid>")
+def api_backup_guest(vmid):
+    """Backups stored for a single guest, for the VM/container detail page."""
+    proxmox = _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+
+    storages = _backup_storages(proxmox)
+    items = []
+    for s in storages:
+        node_proxmox = get_proxmox_connection(s["node"], auto_renew=True)
+        if not node_proxmox:
+            s["error"] = f"No connection to {s['node']}"
+            continue
+        try:
+            found = (
+                node_proxmox.nodes(s["node"])
+                .storage(s["storage"])
+                .content.get(content="backup", vmid=vmid)
+            )
+        except Exception as e:
+            s["error"] = str(e)
+            continue
+        items.extend(_backup_item(i, s["storage"], s["node"]) for i in found)
+    items.sort(key=lambda b: b.get("ctime") or 0, reverse=True)
+
+    # Per-storage rollup: a guest is often backed up to more than one target and
+    # "when was it last backed up" has a different answer on each.
+    by_storage = {}
+    for b in items:
+        row = by_storage.setdefault(
+            b["storage"], {"storage": b["storage"], "count": 0, "size": 0, "latest": 0}
+        )
+        row["count"] += 1
+        row["size"] += b["size"] or 0
+        row["latest"] = max(row["latest"], b["ctime"] or 0)
+
+    return jsonify(
+        {
+            "vmid": vmid,
+            "backups": items,
+            "by_storage": sorted(by_storage.values(), key=lambda r: r["storage"]),
+            "count": len(items),
+            "latest": max((b["ctime"] or 0 for b in items), default=0),
+            "storages": [
+                {"storage": s["storage"], "node": s["node"], "type": s["type"]}
+                for s in storages
+                if not s.get("error")
+            ],
+        }
+    )
+
+
+def _csv_vmids(value):
+    """Normalise a VMID selection (list or comma string) to a sorted csv string."""
+    if isinstance(value, (list, tuple, set)):
+        parts = [str(v) for v in value]
+    else:
+        parts = str(value or "").replace(" ", "").split(",")
+    vmids = sorted({int(x) for x in parts if x.strip()})
+    return ",".join(str(v) for v in vmids)
+
+
+def _job_payload(data):
+    """Translate the job form into vzdump job parameters.
+
+    The guest selection is mutually exclusive in Proxmox: a job selects either
+    an explicit VMID list, a pool, or everything — and only the last form
+    accepts an exclusion list.
+    """
+    schedule = (data.get("schedule") or "").strip()
+    storage = (data.get("storage") or "").strip()
+    if not schedule:
+        raise ValueError("schedule is required")
+    if not storage:
+        raise ValueError("storage is required")
+
+    params = {
+        "schedule": schedule,
+        "storage": storage,
+        "mode": data.get("mode") or "snapshot",
+        "enabled": 1 if data.get("enabled", True) else 0,
+    }
+
+    selection = data.get("selection") or "vmid"
+    if selection == "all":
+        params["all"] = 1
+        exclude = _csv_vmids(data.get("exclude"))
+        if exclude:
+            params["exclude"] = exclude
+    elif selection == "pool":
+        if not data.get("pool"):
+            raise ValueError("pool is required")
+        params["pool"] = data["pool"]
+    else:
+        vmids = _csv_vmids(data.get("vmid"))
+        if not vmids:
+            raise ValueError("select at least one guest")
+        params["vmid"] = vmids
+
+    for key in ("compress", "notes-template", "mailnotification", "mailto"):
+        if data.get(key):
+            params[key] = data[key]
+
+    keep = str(data.get("keep-last") or "").strip()
+    if keep:
+        try:
+            params["prune-backups"] = f"keep-last={int(keep)}"
+        except ValueError:
+            raise ValueError("keep-last must be a number")
+    return params
+
+
+# Properties a job may carry that the form can clear again; on an update they
+# have to be deleted explicitly, since a PUT without them leaves them in place.
+_JOB_CLEARABLE = (
+    "vmid",
+    "pool",
+    "all",
+    "exclude",
+    "compress",
+    "notes-template",
+    "mailto",
+    "prune-backups",
+)
+
+
+@app.route("/api/backups/job", methods=["POST"])
+def api_backup_job_create():
+    """Create a scheduled backup job."""
+    if DEMO_MODE:
+        return jsonify({"error": "Creating backup jobs is disabled in demo mode"}), 403
+    proxmox = _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        params = _job_payload(request.get_json(silent=True) or {})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    try:
+        proxmox.cluster.backup.post(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify({"success": True, "message": "Backup job created."})
+
+
+@app.route("/api/backups/job/<job_id>", methods=["PUT"])
+def api_backup_job_update(job_id):
+    """Replace a scheduled backup job's settings."""
+    if DEMO_MODE:
+        return jsonify({"error": "Changing backup jobs is disabled in demo mode"}), 403
+    proxmox = _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        params = _job_payload(request.get_json(silent=True) or {})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    try:
+        job = next(
+            (j for j in proxmox.cluster.backup.get() if j.get("id") == job_id), None
+        )
+    except Exception as e:
+        return _proxmox_error_response(e)
+    if not job:
+        return jsonify({"error": f"Backup job {job_id} not found"}), 404
+
+    stale = [k for k in _JOB_CLEARABLE if k in job and k not in params]
+    if stale:
+        params["delete"] = ",".join(stale)
+    try:
+        proxmox.cluster.backup(job_id).put(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify({"success": True, "message": f"Backup job {job_id} updated."})
+
+
+@app.route("/api/backups/job/<job_id>", methods=["DELETE"])
+def api_backup_job_delete(job_id):
+    """Delete a scheduled backup job. Stored backups are left untouched."""
+    if DEMO_MODE:
+        return jsonify({"error": "Deleting backup jobs is disabled in demo mode"}), 403
+    proxmox = _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        proxmox.cluster.backup(job_id).delete()
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify({"success": True, "message": f"Backup job {job_id} deleted."})
 
 
 def _any_proxmox():

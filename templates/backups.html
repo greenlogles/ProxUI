@@ -12,7 +12,7 @@
 <div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-1"></i>{{ error }}</div>
 {% endif %}
 
-<div x-data="backupsApp({{ {'jobs': jobs, 'storages': storages, 'guests': guests, 'totals': totals}|tojson|forceescape }})">
+<div x-data="backupsApp({{ {'jobs': jobs, 'storages': storages, 'guests': guests, 'totals': totals, 'pools': pools}|tojson|forceescape }})">
 
     <!-- ==================== SUMMARY ==================== -->
     <div class="row g-3 mb-4">
@@ -29,13 +29,15 @@
             <div class="stat">
                 <div class="ico violet"><i class="bi bi-hdd-stack"></i></div>
                 <div>
-                    <div class="val" x-text="fmtBytes(totals.size)"></div>
+                    <div class="val" x-text="fmtBytes(totals.real)"></div>
                     {#
-                      Proxmox reports each backup's logical size. Deduplicating
-                      targets (PBS) store far less than that, so this is not a
-                      disk-usage figure — the storage cards below have the real one.
+                      Proxmox reports each backup's logical size. A deduplicating
+                      target (PBS) stores far less, so its own used figure is what
+                      counts here; logical is kept alongside for reference.
                     #}
-                    <div class="lbl" title="Sum of logical backup sizes — deduplicating targets store less">Logical size</div>
+                    <div class="lbl" :title="'Logical size of all backups: ' + fmtBytes(totals.size)">
+                        On disk &middot; <span x-text="fmtBytes(totals.size)"></span> logical
+                    </div>
                 </div>
             </div>
         </div>
@@ -97,6 +99,13 @@
                                     <span x-show="s.total"><span x-text="fmtBytes(s.used)"></span> of <span x-text="fmtBytes(s.total)"></span> used &middot; </span>
                                     <span x-text="countFor(s.storage)"></span> backups
                                 </div>
+                                <div class="text-faint" style="font-size:11px;margin-top:2px">
+                                    Backups occupy <span class="mono" x-text="fmtBytes(s.backup_used)"></span>
+                                    <span x-show="s.ratio">
+                                        &middot; <span class="mono" x-text="fmtBytes(s.logical)"></span> logical,
+                                        <span x-text="savingPct(s)"></span>% saved by dedup + compression
+                                    </span>
+                                </div>
                             </div>
                         </template>
                     </div>
@@ -116,6 +125,9 @@
     <div class="d-flex align-items-center gap-2 mb-2">
         <div class="sec-title" style="font-size:14px"><i class="bi bi-calendar-event me-1" style="color:var(--accent)"></i>Scheduled jobs</div>
         <span class="sec-sub">&middot; <span x-text="jobs.length"></span> job(s)</span>
+        <button class="btn-x sm primary ms-auto" @click="newJob()" :disabled="storages.length === 0">
+            <i class="bi bi-plus-lg"></i> New job
+        </button>
     </div>
     <div class="card-x mb-4">
         <div class="cx-body flush tbl-scroll">
@@ -157,6 +169,14 @@
                                             :title="j.enabled ? 'Disable job' : 'Enable job'">
                                         <i class="bi" :class="j.enabled ? 'bi-pause-circle' : 'bi-play-circle'"></i>
                                     </button>
+                                    <button class="act-btn" @click="editJob(j)" :disabled="busyJob === j.id"
+                                            title="Edit job">
+                                        <i class="bi bi-pencil"></i>
+                                    </button>
+                                    <button class="act-btn stopc" @click="deleteJob(j)" :disabled="busyJob === j.id"
+                                            title="Delete job">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
                                 </div>
                             </td>
                         </tr>
@@ -166,7 +186,7 @@
             <template x-if="jobs.length === 0">
                 <div class="empty-hint"><i class="bi bi-calendar-event" style="font-size:26px"></i>
                     <div class="mt-2">No scheduled backup jobs.</div>
-                    <div class="text-faint" style="font-size:12px">Create one in Proxmox under Datacenter &rarr; Backup.</div>
+                    <div class="text-faint" style="font-size:12px">Use &ldquo;New job&rdquo; above to schedule one.</div>
                 </div>
             </template>
         </div>
@@ -268,7 +288,11 @@
                                     </div>
                                 </template>
                             </td>
-                            <td class="num mono" x-text="row.kind === 'guest' ? (row.guest.size ? fmtBytes(row.guest.size) : '—') : fmtBytes(row.backup.size)"></td>
+                            <td class="num mono" :title="sizeTitle(row)">
+                                <span x-text="sizeText(row)"></span>
+                                <span class="text-faint" x-show="row.kind === 'guest' ? row.guest.estimated : row.backup?.estimated"
+                                      title="Deduplicated share, estimated from the datastore's overall ratio">~</span>
+                            </td>
                             <td class="text-muted-2" style="font-size:12px"
                                 x-text="row.kind === 'guest' ? (row.guest.latest ? fmtAgo(row.guest.latest) : '—') : fmtDate(row.backup.ctime)"></td>
                             <td>
@@ -284,6 +308,12 @@
                                       every row.backup access is optional — guest rows
                                       reach these expressions with no backup attached.
                                     #}
+                                    <button class="act-btn" x-show="row.kind === 'backup'"
+                                            @click="showConfig(row.backup)"
+                                            :disabled="configLoading"
+                                            title="View the guest config stored in this backup">
+                                        <i class="bi bi-file-earmark-code"></i>
+                                    </button>
                                     <button class="act-btn stopc" x-show="row.kind === 'backup'"
                                             @click="removeBackup(row.guest, row.backup)"
                                             :disabled="row.backup?.protected || busyVolid === row.backup?.volid"
@@ -349,6 +379,158 @@
                     <button type="button" class="btn-x primary" @click="submitBackup()" :disabled="!form.storage">
                         <i class="bi bi-lightning-charge"></i> Start backup
                     </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== JOB EDITOR ==================== -->
+    <div class="modal fade" tabindex="-1" x-ref="jobModal">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-calendar-event"></i>
+                        <span x-text="jobForm.id ? 'Edit backup job' : 'New backup job'"></span>
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-12 col-md-6">
+                            <div class="field">
+                                <label>Schedule</label>
+                                <input type="text" class="inp" x-model="jobForm.schedule" placeholder="sun 01:00">
+                                <div class="hint">Systemd calendar event, e.g. <span class="mono">sun 01:00</span>,
+                                    <span class="mono">mon..fri 02:30</span> or <span class="mono">*-*-* 04:00</span>.</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="field">
+                                <label>Target storage</label>
+                                <select class="inp" x-model="jobForm.storage">
+                                    <template x-for="s in storages" :key="s.storage">
+                                        <option :value="s.storage" x-text="s.storage + ' (' + (s.type || '').toUpperCase() + ')'"></option>
+                                    </template>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <div class="field">
+                                <label>Guest selection</label>
+                                <select class="inp" x-model="jobForm.selection">
+                                    <option value="vmid">Selected guests</option>
+                                    <option value="pool">All guests in a pool</option>
+                                    <option value="all">All guests</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-12" x-show="jobForm.selection === 'vmid'">
+                            <div class="field">
+                                <label>Guests (<span x-text="jobForm.vmid.length"></span> selected)</label>
+                                <select class="inp" multiple size="8" x-model="jobForm.vmid">
+                                    <template x-for="g in selectableGuests" :key="g.vmid">
+                                        <option :value="String(g.vmid)" x-text="g.vmid + ' — ' + g.name"></option>
+                                    </template>
+                                </select>
+                                <div class="hint">Ctrl/Cmd-click to select more than one.</div>
+                            </div>
+                        </div>
+                        <div class="col-12" x-show="jobForm.selection === 'pool'">
+                            <div class="field">
+                                <label>Pool</label>
+                                <select class="inp" x-model="jobForm.pool">
+                                    <option value="">Choose a pool…</option>
+                                    <template x-for="p in pools" :key="p">
+                                        <option :value="p" x-text="p"></option>
+                                    </template>
+                                </select>
+                                <div class="hint" x-show="pools.length === 0">This cluster has no pools.</div>
+                            </div>
+                        </div>
+                        <div class="col-12" x-show="jobForm.selection === 'all'">
+                            <div class="field">
+                                <label>Exclude (<span x-text="jobForm.exclude.length"></span> selected)</label>
+                                <select class="inp" multiple size="6" x-model="jobForm.exclude">
+                                    <template x-for="g in selectableGuests" :key="'x-' + g.vmid">
+                                        <option :value="String(g.vmid)" x-text="g.vmid + ' — ' + g.name"></option>
+                                    </template>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="field">
+                                <label>Mode</label>
+                                <select class="inp" x-model="jobForm.mode">
+                                    <option value="snapshot">Snapshot</option>
+                                    <option value="suspend">Suspend</option>
+                                    <option value="stop">Stop</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="field">
+                                <label>Compression</label>
+                                <select class="inp" x-model="jobForm.compress">
+                                    <option value="zstd">ZSTD</option>
+                                    <option value="lzo">LZO</option>
+                                    <option value="gzip">GZIP</option>
+                                    <option value="0">None</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="field">
+                                <label>Keep last</label>
+                                <input type="number" min="1" class="inp" x-model="jobForm['keep-last']" placeholder="unchanged">
+                                <div class="hint">Leave empty to keep the storage's own retention.</div>
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <div class="field">
+                                <label>Notes template</label>
+                                <input type="text" class="inp" x-model="jobForm['notes-template']"
+                                       placeholder="{{ '{{guestname}}' }}">
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <label class="d-flex align-items-center gap-2" style="cursor:pointer">
+                                <input type="checkbox" x-model="jobForm.enabled">
+                                <span>Job enabled</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="alert alert-danger mt-3 mb-0" style="font-size:12px" x-show="jobError" x-text="jobError"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-x primary" @click="submitJob()" :disabled="jobSaving">
+                        <i class="bi" :class="jobSaving ? 'bi-hourglass-split' : 'bi-check-lg'"></i>
+                        <span x-text="jobForm.id ? 'Save job' : 'Create job'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== BACKED-UP GUEST CONFIG ==================== -->
+    <div class="modal fade" tabindex="-1" x-ref="configModal">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-file-earmark-code"></i> Configuration in backup</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="text-faint mono mb-2" style="font-size:11.5px" x-text="configVolid"></div>
+                    <div x-show="configLoading" class="text-muted-2" style="font-size:12px">
+                        <i class="bi bi-hourglass-split"></i> Reading the archive…
+                    </div>
+                    <div class="alert alert-danger" style="font-size:12px" x-show="configError" x-text="configError"></div>
+                    <pre class="cfg-dump" x-show="!configLoading && !configError" x-text="configText"></pre>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-x" data-bs-dismiss="modal">Close</button>
                 </div>
             </div>
         </div>

@@ -2,6 +2,14 @@ import * as ProxUtils from "./utils.js";
 
 const MODE_LABELS = { snapshot: "Snapshot", suspend: "Suspend", stop: "Stop" };
 
+function emptyJob() {
+  return {
+    id: "", enabled: true, schedule: "", storage: "", selection: "vmid",
+    vmid: [], pool: "", exclude: [], mode: "snapshot", compress: "zstd",
+    "keep-last": "", "notes-template": "",
+  };
+}
+
 // Backups page: scheduled vzdump jobs, backup storage usage, and stored backups
 // grouped per guest (including guests with no backup at all, and backups whose
 // guest no longer exists).
@@ -10,7 +18,9 @@ export function backupsApp(initial) {
     jobs: initial.jobs || [],
     storages: initial.storages || [],
     guests: initial.guests || [],
-    totals: initial.totals || { count: 0, size: 0, covered: 0, guests: 0, latest: 0 },
+    pools: initial.pools || [],
+    totals: initial.totals ||
+      { count: 0, size: 0, real: 0, covered: 0, guests: 0, latest: 0 },
 
     search: "",
     storageFilter: "",
@@ -21,8 +31,17 @@ export function backupsApp(initial) {
     busyGuest: null,
     busyVolid: null,
     dialog: null,
-    _backupModal: null,
+    _modals: {},
     form: { storage: "", mode: "snapshot", compress: "zstd" },
+
+    jobForm: emptyJob(),
+    jobError: "",
+    jobSaving: false,
+
+    configVolid: "",
+    configText: "",
+    configError: "",
+    configLoading: false,
 
     fmtBytes: ProxUtils.formatBytes,
     fmtDate: ProxUtils.formatDateTime,
@@ -43,6 +62,27 @@ export function backupsApp(initial) {
     usedPct(s) {
       if (!s.total) return 0;
       return Math.min(100, (s.used / s.total) * 100);
+    },
+
+    /** How much of the logical backup data the storage does not actually store. */
+    savingPct(s) {
+      return s.ratio ? Math.round((1 - s.ratio) * 100) : 0;
+    },
+
+    sizeText(row) {
+      if (row.kind === "backup") return ProxUtils.formatBytes(row.backup.real ?? row.backup.size);
+      return row.guest.count ? ProxUtils.formatBytes(row.guest.real ?? row.guest.size) : "—";
+    },
+
+    sizeTitle(row) {
+      const logical = row.kind === "backup" ? row.backup.size : row.guest.size;
+      if (!logical) return "";
+      return `Logical size: ${ProxUtils.formatBytes(logical)}`;
+    },
+
+    /** Real guests only — a job cannot select an orphan, and templates are skipped. */
+    get selectableGuests() {
+      return this.guests.filter(g => !g.orphan);
     },
 
     countFor(storage) {
@@ -147,6 +187,8 @@ export function backupsApp(initial) {
       this.totals = {
         count: all.length,
         size: all.reduce((a, b) => a + (b.size || 0), 0),
+        real: this.storages.reduce((a, s) => a + (s.backup_used || 0), 0),
+        estimated: this.storages.some(s => s.dedup),
         covered: real.filter(g => g.count > 0).length,
         guests: real.length,
         latest: all.reduce((a, b) => Math.max(a, b.ctime || 0), 0),
@@ -195,20 +237,102 @@ export function backupsApp(initial) {
         compress: "zstd",
       };
       this.dialog = g;
-      this._modal().show();
+      this._modal("backupModal").show();
     },
 
-    _modal() {
-      if (!this._backupModal) {
-        this._backupModal = new bootstrap.Modal(this.$refs.backupModal);
+    _modal(ref) {
+      if (!this._modals[ref]) {
+        this._modals[ref] = new bootstrap.Modal(this.$refs[ref]);
       }
-      return this._backupModal;
+      return this._modals[ref];
+    },
+
+    newJob() {
+      this.jobForm = emptyJob();
+      this.jobForm.storage = this.storages.length ? this.storages[0].storage : "";
+      this.jobError = "";
+      this._modal("jobModal").show();
+    },
+
+    editJob(j) {
+      const prune = j["prune-backups"];
+      this.jobForm = {
+        id: j.id,
+        enabled: !!j.enabled,
+        schedule: j.schedule || "",
+        storage: j.storage || "",
+        selection: j.pool ? "pool" : (j.all ? "all" : "vmid"),
+        vmid: String(j.vmid || "").split(",").filter(Boolean),
+        pool: j.pool || "",
+        exclude: String(j.exclude || "").split(",").filter(Boolean),
+        mode: j.mode || "snapshot",
+        compress: j.compress || "zstd",
+        "keep-last": (prune && prune["keep-last"]) || "",
+        "notes-template": j["notes-template"] || "",
+      };
+      this.jobError = "";
+      this._modal("jobModal").show();
+    },
+
+    async submitJob() {
+      this.jobSaving = true;
+      this.jobError = "";
+      const editing = !!this.jobForm.id;
+      try {
+        await ProxUtils.apiJson(
+          editing ? `/api/backups/job/${this.jobForm.id}` : "/api/backups/job",
+          {
+            method: editing ? "PUT" : "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(this.jobForm),
+          });
+        this._modal("jobModal").hide();
+        ProxUtils.notify(editing ? "Backup job updated." : "Backup job created.", "success");
+        await this.reload();
+      } catch (e) {
+        this.jobError = e.message;
+      } finally {
+        this.jobSaving = false;
+      }
+    },
+
+    async deleteJob(j) {
+      if (!confirm(`Delete backup job ${j.id}?\n\nSchedule: ${j.schedule || "—"}` +
+                   `\nGuests: ${this.selectionLabel(j)}` +
+                   `\n\nStored backups are kept; only the schedule is removed.`)) return;
+      this.busyJob = j.id;
+      try {
+        await ProxUtils.apiJson(`/api/backups/job/${j.id}`, { method: "DELETE" });
+        this.jobs = this.jobs.filter(x => x.id !== j.id);
+        ProxUtils.notify("Backup job deleted.", "success");
+      } catch (e) {
+        ProxUtils.notify("Failed to delete job: " + e.message, "error");
+      } finally {
+        this.busyJob = null;
+      }
+    },
+
+    async showConfig(b) {
+      this.configVolid = b.volid;
+      this.configText = "";
+      this.configError = "";
+      this.configLoading = true;
+      this._modal("configModal").show();
+      try {
+        const q = new URLSearchParams({ volid: b.volid, node: b.node });
+        const r = await ProxUtils.apiJson(`/api/backups/content/config?${q}`);
+        this.configText = r.config || "(empty)";
+      } catch (e) {
+        this.configError = e.message;
+      } finally {
+        this.configLoading = false;
+      }
     },
 
     async submitBackup() {
       const g = this.dialog;
       if (!g) return;
-      this._modal().hide();
+      this._modal("backupModal").hide();
       this.dialog = null;
       this.busyGuest = g.vmid;
       try {
