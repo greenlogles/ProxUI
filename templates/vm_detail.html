@@ -5,6 +5,10 @@
 {% block content %}
 <div class="mb-3"><a href="{{ url_for('vms') }}" class="back-link"><i class="bi bi-arrow-left"></i> VMs &amp; Containers</a></div>
 
+<!-- vmBackups wraps vmStatus so the backup action and the backup tile share
+     one component; its members are prefixed so nothing shadows vmStatus. -->
+<div x-data="vmBackups('{{ node }}', '{{ vmid }}')" x-cloak>
+
 <!-- vmStatus wraps the header actions + status bar so both react to the live
      status polled every 5s (data-* attrs seed the initial values). -->
 <div x-data="vmStatus"
@@ -74,6 +78,13 @@
             <i class="bi bi-arrows-move"></i> Migrate
         </button>
 
+        <!-- Backup -->
+        <button type="button" class="btn-x" @click="openDialog()"
+                :disabled="backupBusy || backupLoading || backupStorages.length === 0"
+                :title="backupStorages.length === 0 ? 'No active backup storage' : 'Back up now'">
+            <i class="bi" :class="backupBusy ? 'bi-hourglass-split' : 'bi-lightning-charge'"></i> Backup
+        </button>
+
         <!-- Edit & Delete -->
         <a href="{{ url_for('vm_edit', node=node, vmid=vmid) }}" class="btn-x" style="text-decoration:none">
             <i class="bi bi-pencil"></i> Edit
@@ -126,6 +137,13 @@
         <div class="v" style="font-size:15px" x-text="memText"></div>
         <div class="ubar mt-2"><i :class="memPct > 80 ? 'crit' : memPct > 60 ? 'hot' : 'okc'" :style="'width:' + memPct + '%'"></i></div>
     </div>
+    <div class="hero-stat">
+        <div class="k">Backup</div>
+        <div class="v" style="font-size:15px"
+             :style="!backupLoading && !backupError && backupCount === 0 ? 'color:var(--warn)' : ''"
+             x-text="backupLoading ? '…' : (backupCount ? fmtAgo(backupLatest) : 'Never')"></div>
+        <div class="text-faint" style="font-size:11px;margin-top:3px" x-text="backupSummary"></div>
+    </div>
     {% if guest_disk_info %}
         {% for disk in guest_disk_info %}
             {% if disk.mountpoint == '/' %}
@@ -139,6 +157,52 @@
     {% endif %}
 </div>
 </div><!-- /vmStatus wrapper -->
+
+    <div class="modal fade" tabindex="-1" x-ref="backupModal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-lightning-charge"></i> Back up {{ vmid }}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label>Target storage</label>
+                    <select class="inp" x-model="backupForm.storage">
+                        <template x-for="s in backupStorages" :key="s.storage">
+                            <option :value="s.storage" x-text="s.storage + ' (' + (s.type || '').toUpperCase() + ')'"></option>
+                        </template>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>Mode</label>
+                    <select class="inp" x-model="backupForm.mode">
+                        <option value="snapshot">Snapshot (no downtime)</option>
+                        <option value="suspend">Suspend</option>
+                        <option value="stop">Stop</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>Compression</label>
+                    <select class="inp" x-model="backupForm.compress">
+                        <option value="zstd">ZSTD (fast, recommended)</option>
+                        <option value="lzo">LZO</option>
+                        <option value="gzip">GZIP</option>
+                        <option value="0">None</option>
+                    </select>
+                    <div class="hint">Proxmox Backup Server targets ignore this and use their own format.</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn-x primary" @click="submit()" :disabled="!backupForm.storage">
+                    <i class="bi bi-lightning-charge"></i> Start backup
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+</div><!-- /vmBackups wrapper -->
 
 <!-- Performance Metrics Charts -->
 <div class="card-x mb-3" x-data="vmMetrics('{{ node }}', '{{ vmid }}')">
@@ -620,6 +684,71 @@ function vmTasks(node, vmid) {
   };
 }
 
+function vmBackups(node, vmid) {
+  return {
+    backupByStorage: [], backupStorages: [], backupCount: 0, backupLatest: 0,
+    backupLoading: true, backupError: '', backupBusy: false, _backupModal: null,
+    backupForm: { storage: '', mode: 'snapshot', compress: 'zstd' },
+    fmtBytes: ProxUtils.formatBytes,
+    fmtDate: ProxUtils.formatDateTime,
+    fmtAgo(ts) {
+      if (!ts) return 'never';
+      const mins = Math.floor((Date.now() / 1000 - ts) / 60);
+      if (mins < 60) return `${Math.max(mins, 0)}m ago`;
+      const hours = Math.floor(mins / 60);
+      if (hours < 24) return `${hours}h ago`;
+      return `${Math.floor(hours / 24)}d ago`;
+    },
+    /** Second line of the hero tile: where the backups are, or why there are none. */
+    get backupSummary() {
+      if (this.backupLoading) return 'checking storage…';
+      if (this.backupError) return this.backupError;
+      if (!this.backupCount) return 'no backups stored';
+      return `${this.backupCount} on ${this.backupByStorage.map(r => r.storage).join(', ')}`;
+    },
+    async loadBackups() {
+      this.backupLoading = true; this.backupError = '';
+      try {
+        const r = await ProxUtils.apiJson(`/api/backups/guest/${vmid}`);
+        this.backupByStorage = r.by_storage || [];
+        this.backupStorages = r.storages || [];
+        this.backupCount = r.count || 0;
+        this.backupLatest = r.latest || 0;
+      } catch (e) {
+        this.backupError = 'storage unreadable';
+      } finally {
+        this.backupLoading = false;
+      }
+    },
+    openDialog() {
+      this.backupForm = {
+        storage: this.backupStorages.length ? this.backupStorages[0].storage : '',
+        mode: 'snapshot',
+        compress: 'zstd',
+      };
+      this._backupModal = this._backupModal || new bootstrap.Modal(this.$refs.backupModal);
+      this._backupModal.show();
+    },
+    async submit() {
+      this._backupModal.hide();
+      this.backupBusy = true;
+      try {
+        const r = await ProxUtils.apiJson(`/api/backups/guest/${vmid}/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.backupForm),
+        });
+        ProxUtils.notify(r.message + ' Progress is shown under Recent Tasks.', 'success');
+      } catch (e) {
+        ProxUtils.notify('Backup failed to start: ' + e.message, 'error');
+      } finally {
+        this.backupBusy = false;
+      }
+    },
+    init() { this.loadBackups(); },
+  };
+}
+
 function vmMetrics(node, vmid) {
   // Theme-aware Chart.js styling matching the ProxUI design system: thin
   // smoothed lines, gradient fill, hidden x-axis grid, faint ticks/gridlines
@@ -898,6 +1027,7 @@ function vmStatus() {
 
 function register() {
   window.Alpine.data('vmTasks', vmTasks);
+  window.Alpine.data('vmBackups', vmBackups);
   window.Alpine.data('vmMetrics', vmMetrics);
   window.Alpine.data('vmDelete', vmDelete);
   window.Alpine.data('vmStatus', vmStatus);
