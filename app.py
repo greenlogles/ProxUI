@@ -291,6 +291,12 @@ vnc_sessions = {}  # session_id -> {ticket, port, node, vmid, created_at, proxmo
 vnc_sessions_lock = threading.Lock()
 VNC_SESSION_TIMEOUT = 300  # 5 minutes
 
+# Terminal (termproxy) sessions. The browser only ever sees the session id —
+# the PVE tickets stay here and are used by the websocket proxy.
+shell_sessions = {}
+shell_sessions_lock = threading.Lock()
+SHELL_SESSION_TIMEOUT = 60  # single-use, redeemed immediately by the websocket
+
 lxc_config_backups = (
     {}
 )  # "node:vmid" -> {"config": {...}, "timestamp": "...", "features": "..."}
@@ -5873,6 +5879,317 @@ def vm_console(node, vmid):
     except Exception as e:
         flash(f"Error loading console: {str(e)}")
         return redirect(url_for("vm_detail", node=node, vmid=vmid))
+
+
+# =============================================================================
+# Terminal (termproxy) Endpoints
+#
+# Same shape as the VNC proxy above: a POST mints a short-lived session and the
+# browser opens a websocket against ProxUI, which relays to the PVE node. The
+# browser never gets the PVE ticket — the relay performs the termproxy
+# handshake itself, so tickets stay server-side.
+# =============================================================================
+
+SHELL_TOKEN_AUTH_MESSAGE = (
+    "This node's connection uses an API token. Proxmox only issues console "
+    "(termproxy) tickets to username/password logins, so the terminal is not "
+    "available. Reconnect this cluster with a username and password to use it."
+)
+
+
+def cleanup_expired_shell_sessions():
+    """Remove shell sessions that were never redeemed."""
+    now = time.time()
+    with shell_sessions_lock:
+        expired = [
+            sid
+            for sid, data in shell_sessions.items()
+            if now - data["created_at"] > SHELL_SESSION_TIMEOUT
+        ]
+        for sid in expired:
+            del shell_sessions[sid]
+
+
+def _shell_uses_token_auth(node):
+    """True if this node's connection can't open a console (API token auth)."""
+    meta = connection_metadata.get(node) or {}
+    return bool(meta.get("token_name")) and not meta.get("password")
+
+
+def _create_shell_session(node, term_path, ws_path, params=None, timeout=20):
+    """Mint a termproxy ticket and stash it as a single-use shell session.
+
+    Returns the session id. Never log or return the ticket itself.
+    """
+    host, login_ticket, csrf, verify = _pve_login_ticket(node)
+    r = requests.post(
+        f"https://{host}:8006/api2/json{term_path}",
+        headers={
+            "CSRFPreventionToken": csrf,
+            "Cookie": f"PVEAuthCookie={login_ticket}",
+        },
+        data=params or {},
+        verify=verify,
+        timeout=timeout,
+    )
+    if r.status_code == 403:
+        raise SnippetWriteError(
+            "Proxmox denied the console session — the API user needs the "
+            "'Sys.Console' privilege on the node (or 'VM.Console' on the guest)."
+        )
+    r.raise_for_status()
+    d = r.json()["data"]
+
+    cleanup_expired_shell_sessions()
+    session_id = str(uuid.uuid4())
+    with shell_sessions_lock:
+        shell_sessions[session_id] = {
+            "host": host,
+            "verify_ssl": verify,
+            "auth_ticket": login_ticket,
+            "ticket": d["ticket"],
+            "port": d["port"],
+            "user": d["user"],
+            "ws_path": ws_path,
+            "created_at": time.time(),
+        }
+    return session_id
+
+
+def _shell_session_response(node, term_path, ws_path, params=None):
+    """Shared body for the shell-ticket endpoints."""
+    if _shell_uses_token_auth(node):
+        return jsonify({"error": SHELL_TOKEN_AUTH_MESSAGE, "token_auth": True}), 400
+    try:
+        session_id = _create_shell_session(node, term_path, ws_path, params)
+    except SnippetWriteError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Failed to open terminal session: {e}"}), 500
+    return jsonify(
+        {
+            "success": True,
+            "session_id": session_id,
+            "websocket_url": f"/shell-ws/{session_id}",
+        }
+    )
+
+
+@app.route("/api/node/<node>/shell-ticket", methods=["POST"])
+def api_node_shell_ticket(node):
+    """Open a root shell session on a node via termproxy."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    return _shell_session_response(
+        node,
+        f"/nodes/{node}/termproxy",
+        f"/nodes/{node}/vncwebsocket",
+    )
+
+
+@app.route("/api/vm/<node>/<vmid>/shell-ticket", methods=["POST"])
+def api_vm_shell_ticket(node, vmid):
+    """Open a guest terminal: LXC console, or a QEMU serial terminal."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    vm_type = "qemu"
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+    except Exception:
+        vm_type = "lxc"
+
+    params = None
+    if vm_type == "qemu":
+        try:
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+        except Exception as e:
+            return jsonify({"error": f"Failed to read VM config: {e}"}), 500
+        serial = next(
+            (p for p in ("serial0", "serial1", "serial2", "serial3") if config.get(p)),
+            None,
+        )
+        if not serial:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "This VM has no serial port, so it has no serial "
+                            "terminal. Add a serial port (e.g. serial0: socket) "
+                            "to the VM and configure a getty inside the guest, "
+                            "or use the graphical console instead."
+                        ),
+                        "no_serial": True,
+                    }
+                ),
+                400,
+            )
+        params = {"serial": serial}
+
+    return _shell_session_response(
+        node,
+        f"/nodes/{node}/{vm_type}/{vmid}/termproxy",
+        f"/nodes/{node}/{vm_type}/{vmid}/vncwebsocket",
+        params,
+    )
+
+
+@sock.route("/shell-ws/<session_id>")
+def shell_websocket_proxy(ws, session_id):
+    """Relay xterm.js traffic between the browser and a PVE termproxy socket."""
+    from urllib.parse import quote
+
+    with shell_sessions_lock:
+        session = shell_sessions.pop(session_id, None)
+    if not session:
+        ws.close(1008, "Invalid or expired session")
+        return
+
+    if time.time() - session["created_at"] > SHELL_SESSION_TIMEOUT:
+        ws.close(1008, "Invalid or expired session")
+        return
+
+    url = (
+        f"wss://{session['host']}:8006/api2/json{session['ws_path']}"
+        f"?port={session['port']}&vncticket={quote(session['ticket'], safe='')}"
+    )
+    sslopt = (
+        {}
+        if session["verify_ssl"]
+        else {"sslopt": {"cert_reqs": ssl.CERT_NONE, "check_hostname": False}}
+    )
+
+    proxmox_ws = None
+    try:
+        proxmox_ws = websocket.create_connection(
+            url,
+            timeout=30,
+            header=[f"Cookie: PVEAuthCookie={session['auth_ticket']}"],
+            **sslopt,
+        )
+        # termproxy's own handshake, done here so the ticket never reaches the
+        # browser. The node replies "OK" once the PTY is attached.
+        proxmox_ws.send(f"{session['user']}:{session['ticket']}\n")
+        first = proxmox_ws.recv()
+        if isinstance(first, (bytes, bytearray)):
+            first = first.decode("utf-8", errors="replace")
+        if not str(first).startswith("OK"):
+            ws.close(1011, "Terminal handshake rejected")
+            return
+
+        stop_event = threading.Event()
+
+        def relay_to_browser():
+            try:
+                proxmox_ws.settimeout(1.0)
+                while not stop_event.is_set():
+                    try:
+                        data = proxmox_ws.recv()
+                    except websocket.WebSocketTimeoutException:
+                        continue
+                    except Exception:
+                        break
+                    if not data:
+                        break
+                    if isinstance(data, (bytes, bytearray)):
+                        data = data.decode("utf-8", errors="replace")
+                    ws.send(data)
+            finally:
+                stop_event.set()
+
+        def relay_to_proxmox():
+            from simple_websocket import ConnectionClosed
+
+            try:
+                while not stop_event.is_set():
+                    try:
+                        data = ws.receive(timeout=30)
+                    except ConnectionClosed:
+                        break
+                    except TimeoutError:
+                        continue
+                    except Exception:
+                        break
+                    if data is None:
+                        continue
+                    if isinstance(data, (bytes, bytearray)):
+                        data = data.decode("utf-8", errors="replace")
+                    proxmox_ws.send(data)
+            finally:
+                stop_event.set()
+
+        browser_thread = threading.Thread(target=relay_to_browser, daemon=True)
+        proxmox_thread = threading.Thread(target=relay_to_proxmox, daemon=True)
+        browser_thread.start()
+        proxmox_thread.start()
+
+        while not stop_event.is_set():
+            time.sleep(0.1)
+
+    except Exception:
+        pass  # Connection error, silently close
+    finally:
+        if proxmox_ws:
+            try:
+                proxmox_ws.close()
+            except Exception:
+                pass
+
+
+@app.route("/node/<node>/shell")
+def node_shell(node):
+    """Terminal page for a node's root shell."""
+    if not get_proxmox_connection(node, auto_renew=True):
+        flash("Proxmox connection not available")
+        return redirect(url_for("index"))
+
+    return render_template(
+        "shell.html",
+        node=node,
+        vmid=None,
+        target_name=node,
+        subtitle="Node shell",
+        ticket_url=url_for("api_node_shell_ticket", node=node),
+        back_url=url_for("node_detail", node=node),
+        token_auth=_shell_uses_token_auth(node),
+        token_auth_message=SHELL_TOKEN_AUTH_MESSAGE,
+    )
+
+
+@app.route("/vm/<node>/<vmid>/shell")
+def vm_shell(node, vmid):
+    """Terminal page for an LXC console or a QEMU serial console."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        flash("Proxmox connection not available")
+        return redirect(url_for("index"))
+
+    vm_type = "qemu"
+    try:
+        config = proxmox.nodes(node).qemu(vmid).config.get()
+    except Exception:
+        vm_type = "lxc"
+        try:
+            config = proxmox.nodes(node).lxc(vmid).config.get()
+        except Exception as e:
+            flash(f"Error loading terminal: {e}")
+            return redirect(url_for("vm_detail", node=node, vmid=vmid))
+
+    name = config.get("name") or config.get("hostname") or f"VM {vmid}"
+    return render_template(
+        "shell.html",
+        node=node,
+        vmid=vmid,
+        target_name=name,
+        subtitle="Serial console" if vm_type == "qemu" else "Container console",
+        ticket_url=url_for("api_vm_shell_ticket", node=node, vmid=vmid),
+        back_url=url_for("vm_detail", node=node, vmid=vmid),
+        token_auth=_shell_uses_token_auth(node),
+        token_auth_message=SHELL_TOKEN_AUTH_MESSAGE,
+    )
 
 
 @app.route("/api/cloud-images")

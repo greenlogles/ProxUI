@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>Shell - {{ target_name }} | Proxmox Manager</title>
+    <script>
+        window.PROXUI_CSRF_TOKEN = "{{ csrf_token() }}";
+    </script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+    <!-- Like the VNC console, the terminal is a fullscreen popout rather than
+         part of the app shell, so data-theme="dark" above is hardcoded. -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- Alpine is loaded at the END of <body>, AFTER the module below, so the
+         module registers shellToolbar (on `alpine:init`) before Alpine starts
+         and walks the DOM. Loading it here would leave x-data unresolved. -->
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+        }
+
+        #shell-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            height: 100dvh;
+        }
+
+        #console-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        #console-status .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+
+        #console-status .status-indicator.connected {
+            background-color: var(--ok);
+            box-shadow: 0 0 0 3px var(--ok-soft);
+        }
+
+        #console-status .status-indicator.connecting {
+            background-color: var(--warn);
+            animation: pulse 1s infinite;
+        }
+
+        #console-status .status-indicator.disconnected {
+            background-color: var(--danger);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .toolbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        .vm-info {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .vm-name {
+            color: var(--text);
+            font-weight: 500;
+        }
+
+        #term-wrap {
+            position: relative;
+            flex: 1 1 auto;
+            min-height: 0;
+            display: flex;
+        }
+
+        #terminal {
+            flex: 1 1 auto;
+            min-width: 0;
+            min-height: 0;
+            background-color: #000;
+            padding: 4px 6px;
+        }
+
+        #shell-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            background-color: rgba(0, 0, 0, 0.9);
+            text-align: center;
+            padding: 24px;
+        }
+
+        #shell-overlay .msg {
+            max-width: 560px;
+            color: var(--text);
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+
+        /* Pre-init hidden state for the overlay's children: x-show writes an
+           inline style, which a stylesheet `display:none` would always beat. */
+        [x-cloak] {
+            display: none !important;
+        }
+
+        @media (max-width: 768px) {
+            .vm-info .text-muted {
+                display: none;
+            }
+            #status-text {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="shell-container" x-data="shellToolbar()">
+        <div id="console-toolbar" class="vnc-bar">
+            <div id="console-status" class="vnc-left">
+                <a href="{{ back_url }}" class="btn btn-sm btn-outline-secondary" title="Back">
+                    <i class="bi bi-arrow-left"></i>
+                </a>
+                <span class="status-indicator" id="status-indicator" :class="state"></span>
+                <span class="vm-info">
+                    <span class="vm-name">{{ target_name }}</span>
+                    {% if vmid %}<span class="text-muted">({{ vmid }})</span>{% endif %}
+                </span>
+                <span class="text-muted small">{{ subtitle }}</span>
+            </div>
+            <div class="toolbar-actions vnc-tools">
+                <span class="text-muted small" id="status-text" x-text="statusText"></span>
+                <button class="btn btn-sm btn-outline-secondary" @click="pasteToTerm()" title="Paste">
+                    <i class="bi bi-clipboard-plus"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" @click="toggleFullscreen()" title="Fullscreen">
+                    <i class="bi bi-arrows-fullscreen"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-warning" @click="doReconnect()" title="Reconnect">
+                    <i class="bi bi-arrow-clockwise"></i>
+                </button>
+            </div>
+        </div>
+
+        <div id="term-wrap">
+            <div id="terminal"></div>
+            <div id="shell-overlay" x-cloak x-show="overlayVisible">
+                <div class="spinner-border text-primary" role="status" x-cloak x-show="state === 'connecting'">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <div class="msg" x-text="overlayText"></div>
+                <button class="btn btn-primary" x-cloak x-show="canRetry" @click="doReconnect()">
+                    <i class="bi bi-arrow-clockwise"></i> Retry
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // xterm.js is injected on demand (inside connect) rather than imported
+        // at the top level, so this module's synchronous registration of the
+        // shellToolbar component is not blocked on a CDN fetch and runs before
+        // Alpine (loaded just below) starts.
+        function loadScript(src) {
+            return new Promise((resolve, reject) => {
+                const el = document.createElement('script');
+                el.src = src;
+                el.onload = resolve;
+                el.onerror = () => reject(new Error('Failed to load ' + src));
+                document.head.appendChild(el);
+            });
+        }
+
+        let xtermLoaded = null;
+        function loadXterm() {
+            if (!xtermLoaded) {
+                xtermLoaded = (async () => {
+                    await loadScript('https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js');
+                    await loadScript('https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js');
+                })();
+            }
+            return xtermLoaded;
+        }
+
+        const ticketUrl = {{ ticket_url|tojson }};
+        const tokenAuth = {{ 'true' if token_auth else 'false' }};
+        const tokenAuthMessage = {{ token_auth_message|tojson }};
+        const encoder = new TextEncoder();
+
+        let term = null;
+        let fitAddon = null;
+        let ws = null;
+        let pingTimer = null;
+        let closedByUs = false;
+
+        // termproxy framing: "0:<byte length>:<data>" for input,
+        // "1:<cols>:<rows>:" to resize the PTY, "2" as a keepalive ping.
+        function sendInput(data) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send('0:' + encoder.encode(data).length + ':' + data);
+            }
+        }
+
+        function sendResize() {
+            if (term && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send('1:' + term.cols + ':' + term.rows + ':');
+            }
+        }
+
+        // connect() starts before Alpine initialises, so the last state is kept
+        // here for the toolbar to pick up in init() if it missed the event.
+        let lastState = null;
+        function setState(state, text, overlay, retry) {
+            lastState = { state, text, overlay, retry };
+            window.dispatchEvent(new CustomEvent('shell:state', { detail: lastState }));
+        }
+
+        async function getSession() {
+            const response = await fetch(ticketUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': window.PROXUI_CSRF_TOKEN
+                }
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to open a terminal session');
+            }
+            return data;
+        }
+
+        function ensureTerminal() {
+            if (term) return;
+            term = new window.Terminal({
+                cursorBlink: true,
+                fontSize: 14,
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+                theme: { background: '#000000', foreground: '#d0d0d0' },
+                scrollback: 5000
+            });
+            fitAddon = new window.FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+            term.open(document.getElementById('terminal'));
+            term.onData(sendInput);
+            fitAddon.fit();
+
+            let resizeTimer = null;
+            window.addEventListener('resize', () => {
+                clearTimeout(resizeTimer);
+                resizeTimer = setTimeout(() => {
+                    fitAddon.fit();
+                    sendResize();
+                }, 120);
+            });
+        }
+
+        function disconnect() {
+            closedByUs = true;
+            clearInterval(pingTimer);
+            pingTimer = null;
+            if (ws) {
+                try { ws.close(); } catch (e) { /* already closing */ }
+                ws = null;
+            }
+        }
+
+        async function connect() {
+            if (tokenAuth) {
+                setState('disconnected', 'Unavailable', tokenAuthMessage, false);
+                return;
+            }
+
+            disconnect();
+            closedByUs = false;
+            setState('connecting', 'Connecting...', 'Opening terminal session...', false);
+
+            let session;
+            try {
+                await loadXterm();
+                session = await getSession();
+            } catch (error) {
+                setState('disconnected', 'Failed', error.message, true);
+                return;
+            }
+
+            ensureTerminal();
+
+            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const socket = new WebSocket(`${proto}//${window.location.host}${session.websocket_url}`);
+            ws = socket;
+
+            socket.onopen = () => {
+                setState('connected', 'Connected', null, false);
+                fitAddon.fit();
+                sendResize();
+                term.focus();
+                // PVE's termproxy drops idle connections; "2" is its keepalive.
+                pingTimer = setInterval(() => {
+                    if (socket.readyState === WebSocket.OPEN) socket.send('2');
+                }, 30000);
+            };
+
+            socket.onmessage = (event) => {
+                if (typeof event.data === 'string') {
+                    term.write(event.data);
+                } else {
+                    event.data.text().then((text) => term.write(text));
+                }
+            };
+
+            socket.onclose = () => {
+                clearInterval(pingTimer);
+                pingTimer = null;
+                if (ws === socket && !closedByUs) {
+                    setState('disconnected', 'Disconnected',
+                        'The terminal session ended. Reconnect to start a new one.', true);
+                }
+            };
+        }
+
+        connect();
+
+        function register() {
+            window.Alpine.data('shellToolbar', () => ({
+                state: 'connecting',
+                statusText: 'Connecting...',
+                overlayText: 'Opening terminal session...',
+                overlayVisible: true,
+                canRetry: false,
+
+                apply(d) {
+                    this.state = d.state;
+                    this.statusText = d.text;
+                    this.overlayVisible = !!d.overlay;
+                    if (d.overlay) this.overlayText = d.overlay;
+                    this.canRetry = !!d.retry;
+                },
+
+                init() {
+                    window.addEventListener('shell:state', (e) => this.apply(e.detail));
+                    if (lastState) this.apply(lastState);
+                },
+
+                toggleFullscreen() {
+                    if (!document.fullscreenElement) {
+                        document.documentElement.requestFullscreen();
+                    } else {
+                        document.exitFullscreen();
+                    }
+                },
+
+                async pasteToTerm() {
+                    let text = '';
+                    try {
+                        text = await navigator.clipboard.readText();
+                    } catch {
+                        text = prompt('Text to paste into the terminal:') || '';
+                    }
+                    if (text) sendInput(text);
+                },
+
+                doReconnect() {
+                    connect();
+                },
+            }));
+        }
+        if (window.Alpine) register(); else document.addEventListener('alpine:init', register);
+    </script>
+
+    <!-- Loaded AFTER the module above: deferred scripts run in document order,
+         so `shellToolbar` is registered by the time Alpine resolves x-data. -->
+    <script defer src="{{ url_for('static', filename='js/alpine.min.js') }}"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

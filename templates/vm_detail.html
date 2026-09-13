@@ -71,6 +71,17 @@
             <i class="bi bi-terminal"></i> Console
         </a>
 
+        <!-- Terminal: LXC console, or the QEMU serial console when configured -->
+        <a href="{{ url_for('vm_shell', node=node, vmid=vmid) }}"
+           class="btn-x {{ 'disabled' if (status.status != 'running' or status.lock) else '' }}"
+           :class="{ 'disabled': !isRunning || busy }"
+           :aria-disabled="!isRunning || busy"
+           :tabindex="(isRunning && !busy) ? null : '-1'"
+           :title="isRunning ? '' : '{{ 'VM' if vm_type == 'qemu' else 'Container' }} must be running'"
+           style="text-decoration:none">
+            <i class="bi bi-terminal-split"></i> Shell
+        </a>
+
         <!-- Migration -->
         <button type="button" class="btn-x {{ 'disabled' if migration_info else '' }}"
                 data-bs-toggle="modal" data-bs-target="#migrateModal"
