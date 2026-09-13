@@ -5223,6 +5223,171 @@ def api_vm_config(node, vmid):
         return jsonify({"error": str(e)}), 500
 
 
+# Snapshots API
+# PVE validates snapname against the pve-configid format (max 40 chars); reject
+# bad names here so the user gets a readable message instead of a 400 from PVE.
+SNAPSHOT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,39}$")
+
+
+def _guest_type(proxmox, node, vmid):
+    """Return 'qemu' or 'lxc' for a guest, probing QEMU first."""
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+        return "qemu"
+    except Exception:
+        return "lxc"
+
+
+def _guest_endpoint(proxmox, node, vmid, vm_type):
+    if vm_type == "qemu":
+        return proxmox.nodes(node).qemu(vmid)
+    return proxmox.nodes(node).lxc(vmid)
+
+
+def _validate_snapshot_name(name):
+    """Return an error string for an unusable snapshot name, else None."""
+    if not name:
+        return "Snapshot name is required"
+    if name == "current":
+        return "'current' is reserved by Proxmox"
+    if not SNAPSHOT_NAME_RE.match(name):
+        return (
+            "Invalid snapshot name: use 2-40 characters, start with a letter and "
+            "use only letters, digits, underscore or hyphen"
+        )
+    return None
+
+
+@app.route("/api/vm/<node>/<vmid>/snapshots", methods=["GET", "POST"])
+def api_vm_snapshots(node, vmid):
+    """List snapshots for a guest, or create a new one."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    vm_type = _guest_type(proxmox, node, vmid)
+    guest = _guest_endpoint(proxmox, node, vmid, vm_type)
+
+    if request.method == "GET":
+        try:
+            snapshots = guest.snapshot.get() or []
+        except Exception as e:
+            return _proxmox_error_response(e)
+
+        current = None
+        stored = []
+        for snap in snapshots:
+            entry = {
+                "name": snap.get("name"),
+                "description": (snap.get("description") or "").strip(),
+                "parent": snap.get("parent"),
+                "snaptime": snap.get("snaptime"),
+                "vmstate": int(snap.get("vmstate") or 0),
+            }
+            if entry["name"] == "current":
+                current = entry
+            else:
+                stored.append(entry)
+
+        stored.sort(key=lambda s: s.get("snaptime") or 0)
+        return jsonify(
+            {
+                "vm_type": vm_type,
+                "snapshots": stored,
+                "current": current,
+                "count": len(stored),
+            }
+        )
+
+    data = request.get_json(silent=True) or {}
+    snapname = (data.get("name") or "").strip()
+    error = _validate_snapshot_name(snapname)
+    if error:
+        return jsonify({"error": error}), 400
+
+    params = {"snapname": snapname}
+    description = (data.get("description") or "").strip()
+    if description:
+        params["description"] = description
+    # vmstate (save RAM) only exists on the QEMU endpoint.
+    if vm_type == "qemu" and data.get("vmstate"):
+        params["vmstate"] = 1
+
+    try:
+        upid = guest.snapshot.post(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+    return jsonify(
+        {
+            "success": True,
+            "message": f"Snapshot '{snapname}' started.",
+            "upid": upid,
+        }
+    )
+
+
+@app.route("/api/vm/<node>/<vmid>/snapshots/<snapname>", methods=["DELETE"])
+def api_vm_snapshot_delete(node, vmid, snapname):
+    """Delete a snapshot."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    error = _validate_snapshot_name(snapname)
+    if error:
+        return jsonify({"error": error}), 400
+
+    vm_type = _guest_type(proxmox, node, vmid)
+    guest = _guest_endpoint(proxmox, node, vmid, vm_type)
+
+    try:
+        upid = guest.snapshot(snapname).delete()
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+    return jsonify(
+        {
+            "success": True,
+            "message": f"Deleting snapshot '{snapname}'.",
+            "upid": upid,
+        }
+    )
+
+
+@app.route("/api/vm/<node>/<vmid>/snapshots/<snapname>/rollback", methods=["POST"])
+def api_vm_snapshot_rollback(node, vmid, snapname):
+    """Roll the guest back to a snapshot."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    error = _validate_snapshot_name(snapname)
+    if error:
+        return jsonify({"error": error}), 400
+
+    vm_type = _guest_type(proxmox, node, vmid)
+    guest = _guest_endpoint(proxmox, node, vmid, vm_type)
+
+    data = request.get_json(silent=True) or {}
+    params = {}
+    if data.get("start"):
+        params["start"] = 1
+
+    try:
+        upid = guest.snapshot(snapname).rollback.post(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+    return jsonify(
+        {
+            "success": True,
+            "message": f"Rolling back to snapshot '{snapname}'.",
+            "upid": upid,
+        }
+    )
+
+
 @app.route("/api/vm/<node>/<vmid>/resize-disk", methods=["PUT"])
 def api_vm_resize_disk(node, vmid):
     """Resize VM/Container disk"""
