@@ -2965,26 +2965,369 @@ def group_shared_storages(all_storages):
 
 @app.route("/networks")
 def networks():
-    """List all networks"""
-    all_networks = []
-    processed_networks = set()
+    """Show every node's network interfaces, grouped per node and editable."""
+    return render_template("networks.html", nodes=_collect_node_networks())
 
+
+@app.route("/api/networks")
+def api_networks():
+    """Re-read the per-node interface lists without a page reload."""
+    return jsonify({"nodes": _collect_node_networks()})
+
+
+# Interface edits are written to /etc/network/interfaces.new and only take
+# effect once applied. The API's interface listing carries no marker for that
+# (the GET envelope holds nothing but "data"), so ProxUI records which nodes it
+# has written to itself. That misses pending changes made outside ProxUI and is
+# lost on restart — the Apply/Revert buttons stay usable either way.
+network_pending = {}
+
+
+_NET_CREATE_TYPES = ("bridge", "bond", "vlan")
+
+# Form fields passed straight through to the API, with the value coercion each
+# one needs. Addresses travel as cidr/cidr6; the API splits them into
+# address/netmask itself.
+_NET_STR_FIELDS = (
+    "cidr",
+    "gateway",
+    "cidr6",
+    "gateway6",
+    "bridge_ports",
+    "bridge_vids",
+    "slaves",
+    "bond_mode",
+    "bond_xmit_hash_policy",
+    "bond-primary",
+    "vlan-raw-device",
+    "comments",
+)
+_NET_INT_FIELDS = ("mtu", "vlan-id")
+_NET_BOOL_FIELDS = ("autostart", "bridge_vlan_aware")
+
+# Stored keys worth clearing when the form leaves the matching field empty.
+_NET_CLEARABLE = (
+    "address",
+    "netmask",
+    "gateway",
+    "address6",
+    "netmask6",
+    "gateway6",
+    "bridge_ports",
+    "bridge_vids",
+    "slaves",
+    "bond-primary",
+    "bond_xmit_hash_policy",
+    "mtu",
+    "comments",
+)
+
+
+def _node_network_get(proxmox, node):
+    """Interface list plus Proxmox's own diff of the pending configuration.
+
+    PVE hangs the unified diff of /etc/network/interfaces against
+    interfaces.new off the GET envelope as "changes", next to "data", and
+    proxmoxer hands back only "data" (core.py: serializer.loads). Going through
+    the session directly is the only way to see it, so this reaches into
+    proxmoxer's private _store and falls back to the supported call if that
+    shape ever changes -- a diff we cannot read must not cost us the listing.
+    """
+    try:
+        store = proxmox._store
+        resp = store["session"].request(
+            "GET", "{}/nodes/{}/network".format(store["base_url"], node)
+        )
+        if resp.status_code == 200:
+            envelope = resp.json()
+            return envelope.get("data") or [], (envelope.get("changes") or "")
+    except Exception:
+        pass
+    return proxmox.nodes(node).network.get(), ""
+
+
+def _collect_node_networks():
+    """Interface list, pending-change state and management NIC for every node."""
+    nodes = []
+    cluster_ips = _node_cluster_ips()
+    for node_info in sorted(cluster_nodes, key=lambda n: n["name"]):
+        name = node_info["name"]
+        entry = {
+            "node": name,
+            "online": False,
+            "error": None,
+            "interfaces": [],
+            "pending": name in network_pending,
+            "pending_since": network_pending.get(name),
+            "changes": "",
+            "management": None,
+        }
+        proxmox = get_proxmox_connection(name, auto_renew=True)
+        if proxmox:
+            try:
+                interfaces, changes = _node_network_get(proxmox, name)
+                entry["online"] = True
+                entry["interfaces"] = sorted(
+                    interfaces,
+                    key=lambda i: (i.get("priority", 99), i.get("iface", "")),
+                )
+                entry["changes"] = changes
+                # PVE knows the real state, including edits made outside ProxUI
+                # and those surviving a restart; our own tracker is the fallback
+                # for the node whose diff we could not read.
+                if changes:
+                    entry["pending"] = True
+                entry["management"] = _management_iface(
+                    name, entry["interfaces"], cluster_ips.get(name)
+                )
+            except Exception as e:
+                entry["error"] = str(e)
+        nodes.append(entry)
+    return nodes
+
+
+def _node_cluster_ips():
+    """Each node's own cluster address, keyed by node name.
+
+    Every node in a cluster is usually reached through one entry point, so the
+    host from config.toml only ever identifies that one node's interface. PVE
+    knows the address each node joined the cluster on, which is what has to stay
+    up for the node to keep talking to its peers -- and to us.
+    """
     for node_info in cluster_nodes:
+        proxmox = get_proxmox_connection(node_info["name"], auto_renew=True)
+        if not proxmox:
+            continue
         try:
-            node_name = node_info["name"]
-            proxmox = node_info["connection"]
+            return {
+                e["name"]: e["ip"]
+                for e in proxmox.cluster.status.get()
+                if e.get("type") == "node" and e.get("name") and e.get("ip")
+            }
+        except Exception:
+            continue
+    return {}
 
-            networks = proxmox.nodes(node_name).network.get()
-            for network in networks:
-                network_key = f"{node_name}-{network['iface']}"
-                if network_key not in processed_networks:
-                    processed_networks.add(network_key)
-                    network["node"] = node_name
-                    all_networks.append(network)
-        except Exception as e:
-            print(f"Error getting networks from node {node_info['name']}: {e}")
 
-    return render_template("networks.html", networks=all_networks)
+def _management_iface(node, interfaces, cluster_ip=None):
+    """Name of the interface carrying the address this node is reached on.
+
+    Prefers the node's own cluster address, falling back to the host ProxUI
+    connects through. A hostname in config.toml is not resolved, so this returns
+    None rather than guessing, and the UI simply shows no management warning.
+    """
+    for host in (cluster_ip, (connection_metadata.get(node) or {}).get("host", "")):
+        if not host:
+            continue
+        for iface in interfaces:
+            if host in (iface.get("address"), iface.get("address6")):
+                return iface.get("iface")
+    return None
+
+
+def _network_params(data, creating):
+    """Validate an interface form into API parameters. Raises ValueError."""
+    params = {}
+    if creating:
+        iface = (data.get("iface") or "").strip()
+        if not iface:
+            raise ValueError("Interface name is required")
+        if len(iface) > 15 or not re.match(r"^[a-zA-Z][a-zA-Z0-9_.]*$", iface):
+            raise ValueError(
+                "Interface name must start with a letter, use only letters, "
+                "digits, '.' or '_', and be at most 15 characters"
+            )
+        params["iface"] = iface
+
+    iface_type = (data.get("type") or "").strip()
+    if creating and iface_type not in _NET_CREATE_TYPES:
+        raise ValueError(f"Type must be one of: {', '.join(_NET_CREATE_TYPES)}")
+    if not iface_type:
+        raise ValueError("Interface type is required")
+    params["type"] = iface_type
+
+    for key in _NET_STR_FIELDS:
+        value = str(data.get(key) or "").strip()
+        if value:
+            params[key] = value
+    for key in _NET_INT_FIELDS:
+        value = str(data.get(key) or "").strip()
+        if value:
+            try:
+                params[key] = int(value)
+            except ValueError:
+                raise ValueError(f"{key} must be a number")
+    for key in _NET_BOOL_FIELDS:
+        if data.get(key):
+            params[key] = 1
+
+    if iface_type == "bond" and not params.get("slaves"):
+        raise ValueError("A bond needs at least one slave interface")
+    if iface_type == "vlan" and not params.get("vlan-raw-device"):
+        raise ValueError("A VLAN interface needs a raw device")
+    return params
+
+
+def _network_stale_keys(current, params):
+    """Stored keys to clear because the form left the matching field empty."""
+    covered = set(params)
+    if "cidr" in params:
+        covered |= {"address", "netmask"}
+    if "cidr6" in params:
+        covered |= {"address6", "netmask6"}
+    if not params.get("autostart"):
+        covered.discard("autostart")
+    return [k for k in _NET_CLEARABLE if k in current and k not in covered]
+
+
+def _network_connection(node):
+    """Connection for a node, or (None, error response) when unreachable."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return None, (jsonify({"error": f"No connection to node {node}"}), 404)
+    return proxmox, None
+
+
+@app.route("/api/network/<node>", methods=["POST"])
+def api_network_create(node):
+    """Create a bridge, bond or VLAN interface (pending until applied)."""
+    if DEMO_MODE:
+        return jsonify({"error": "Creating interfaces is disabled in demo mode"}), 403
+    proxmox, err = _network_connection(node)
+    if err:
+        return err
+    try:
+        params = _network_params(request.get_json(silent=True) or {}, creating=True)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    try:
+        proxmox.nodes(node).network.post(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+    network_pending[node] = datetime.now().isoformat()
+    return jsonify(
+        {
+            "success": True,
+            "message": f"{params['iface']} created on {node}. "
+            "Apply the pending changes to activate it.",
+        }
+    )
+
+
+@app.route("/api/network/<node>/<iface>", methods=["PUT"])
+def api_network_update(node, iface):
+    """Update an interface's configuration (pending until applied)."""
+    if DEMO_MODE:
+        return jsonify({"error": "Editing interfaces is disabled in demo mode"}), 403
+    proxmox, err = _network_connection(node)
+    if err:
+        return err
+    try:
+        params = _network_params(request.get_json(silent=True) or {}, creating=False)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    try:
+        current = proxmox.nodes(node).network(iface).get()
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+    stale = _network_stale_keys(current, params)
+    if stale:
+        params["delete"] = ",".join(stale)
+    try:
+        proxmox.nodes(node).network(iface).put(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+    network_pending[node] = datetime.now().isoformat()
+    return jsonify(
+        {
+            "success": True,
+            "message": f"{iface} updated on {node}. "
+            "Apply the pending changes to activate them.",
+        }
+    )
+
+
+@app.route("/api/network/<node>/<iface>", methods=["DELETE"])
+def api_network_delete(node, iface):
+    """Delete an interface (pending until applied).
+
+    The interface carrying the address ProxUI reaches this node on is refused —
+    applying that change would cut the connection to the node.
+    """
+    if DEMO_MODE:
+        return jsonify({"error": "Deleting interfaces is disabled in demo mode"}), 403
+    proxmox, err = _network_connection(node)
+    if err:
+        return err
+    try:
+        interfaces = proxmox.nodes(node).network.get()
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+    if _management_iface(node, interfaces, _node_cluster_ips().get(node)) == iface:
+        return (
+            jsonify(
+                {
+                    "error": f"{iface} carries the address ProxUI connects to "
+                    f"{node} on. Deleting it would cut off the node."
+                }
+            ),
+            400,
+        )
+    try:
+        proxmox.nodes(node).network(iface).delete()
+    except Exception as e:
+        return _proxmox_error_response(e)
+    network_pending[node] = datetime.now().isoformat()
+    return jsonify(
+        {
+            "success": True,
+            "message": f"{iface} marked for deletion on {node}. "
+            "Apply the pending changes to remove it.",
+        }
+    )
+
+
+@app.route("/api/network/<node>/apply", methods=["POST"])
+def api_network_apply(node):
+    """Apply this node's pending interface changes (reloads networking)."""
+    if DEMO_MODE:
+        return jsonify({"error": "Applying changes is disabled in demo mode"}), 403
+    proxmox, err = _network_connection(node)
+    if err:
+        return err
+    try:
+        upid = proxmox.nodes(node).network.put()
+    except Exception as e:
+        return _proxmox_error_response(e)
+    network_pending.pop(node, None)
+    return jsonify(
+        {
+            "success": True,
+            "upid": upid,
+            "message": f"Network configuration reloaded on {node}.",
+        }
+    )
+
+
+@app.route("/api/network/<node>/revert", methods=["POST"])
+def api_network_revert(node):
+    """Discard this node's pending interface changes."""
+    if DEMO_MODE:
+        return jsonify({"error": "Reverting changes is disabled in demo mode"}), 403
+    proxmox, err = _network_connection(node)
+    if err:
+        return err
+    try:
+        proxmox.nodes(node).network.delete()
+    except Exception as e:
+        return _proxmox_error_response(e)
+    network_pending.pop(node, None)
+    return jsonify(
+        {"success": True, "message": f"Pending changes discarded on {node}."}
+    )
 
 
 @app.route("/isos-templates")

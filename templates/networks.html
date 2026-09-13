@@ -5,37 +5,414 @@
 {% block content %}
 <div class="mb-3">
     <div class="sec-title">Networks</div>
-    <div class="sec-sub">Bridges and interfaces across the cluster</div>
+    <div class="sec-sub">Bridges, bonds and VLANs across the cluster</div>
 </div>
 
-<div class="card-x">
-    <div class="cx-head"><i class="bi bi-diagram-3" style="color:var(--accent)"></i><span class="cx-title">Network Interfaces</span></div>
-    <div class="cx-body flush tbl-scroll">
-        <table class="tbl">
-            <thead><tr><th>Interface</th><th>Node</th><th>Type</th><th>Active</th><th>IP Address</th><th>Bridge Ports</th><th>Comment</th></tr></thead>
-            <tbody>
-                {% for network in networks %}
-                <tr>
-                    <td><span class="nm mono">{{ network.iface }}</span></td>
-                    <td class="text-muted-2">{{ network.node }}</td>
-                    <td><span class="type-chip">{{ network.type }}</span></td>
-                    <td>
-                        {% if network.active %}
-                        <span class="pill ok"><span class="d"></span>Active</span>
-                        {% else %}
-                        <span class="pill stop"><span class="d"></span>Down</span>
-                        {% endif %}
-                    </td>
-                    <td class="mono text-muted-2" style="font-size:12px">{{ network.address|default('—') }}</td>
-                    <td class="mono text-faint" style="font-size:12px">{{ network.bridge_ports|default('—') }}</td>
-                    <td class="text-faint" style="font-size:12px">{{ network.comments|default('—') }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% if not networks %}
-        <div class="empty-hint"><i class="bi bi-inbox" style="font-size:26px"></i><div class="mt-2">No network interfaces found.</div></div>
-        {% endif %}
+<div x-data="networksApp({{ nodes|tojson|forceescape }})">
+
+    <!-- ==================== TOOLBAR ==================== -->
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <input type="text" class="inp" style="max-width:240px" placeholder="Search interfaces…" x-model="search">
+        <select class="inp" style="max-width:160px" x-model="typeFilter">
+            <option value="">All types</option>
+            <template x-for="t in types" :key="t"><option :value="t" x-text="t"></option></template>
+        </select>
+        <span class="sec-sub ms-1"><span x-text="totalInterfaces"></span> interfaces</span>
+        <span class="pill maint" x-show="pendingNodes.length">
+            <span class="d"></span><span x-text="pendingNodes.length"></span> node(s) with pending changes
+        </span>
+        <button class="btn-x sm ms-auto" @click="reload()" :disabled="loading">
+            <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i> Refresh
+        </button>
+    </div>
+
+    <!-- ==================== PER-NODE INTERFACES ==================== -->
+    <template x-for="n in nodes" :key="n.node">
+        <div class="card-x mb-3">
+            <div class="cx-head flex-wrap gap-2">
+                <span class="nc-dot" :class="n.online ? 'online' : 'offline'" style="width:9px;height:9px"></span>
+                <span class="cx-title" x-text="n.node"></span>
+                <span class="pill maint" x-show="n.pending"><span class="d"></span>Pending changes</span>
+                <div class="ms-auto d-flex gap-2">
+                    <button class="btn-x sm" @click="review(n)" :disabled="busy === n.node || !n.online" x-show="n.pending">
+                        <i class="bi bi-file-diff"></i> Review &amp; apply
+                    </button>
+                    <button class="btn-x sm danger" @click="revert(n)" :disabled="busy === n.node || !n.online" x-show="n.pending">
+                        <i class="bi bi-arrow-counterclockwise"></i> Revert
+                    </button>
+                    <button class="btn-x sm primary" @click="newInterface(n)" :disabled="!n.online">
+                        <i class="bi bi-plus-lg"></i> Add interface
+                    </button>
+                </div>
+            </div>
+
+            <template x-if="n.pending">
+                <div class="cx-body tight">
+                    <div class="alert alert-warning mb-0" style="font-size:12px">
+                        <i class="bi bi-exclamation-triangle me-1"></i>
+                        This node has interface changes written but not applied. They live in
+                        <span class="mono">/etc/network/interfaces.new</span> and take effect only once applied.
+                        <a href="#" @click.prevent="review(n)" class="alert-link">Review the diff</a> before you apply it.
+                    </div>
+                </div>
+            </template>
+
+            <template x-if="!n.online">
+                <div class="cx-body">
+                    <div class="text-danger" style="font-size:12.5px">
+                        <i class="bi bi-exclamation-triangle me-1"></i>
+                        <span x-text="n.error || 'Could not reach this node.'"></span>
+                    </div>
+                </div>
+            </template>
+
+            <template x-if="n.online">
+                <div class="cx-body flush tbl-scroll">
+                    <table class="tbl">
+                        <thead><tr>
+                            <th>Interface</th><th>Type</th><th>Active</th><th>Autostart</th>
+                            <th>CIDR</th><th>Gateway</th><th>Ports / Slaves</th><th>Comment</th><th></th>
+                        </tr></thead>
+                        <tbody>
+                            <template x-for="i in visible(n)" :key="i.iface">
+                                <tr>
+                                    <td>
+                                        <span class="nm mono" x-text="i.iface"></span>
+                                        <span class="pill info ms-1" x-show="i.iface === n.management" title="Carries the address ProxUI connects to this node on">
+                                            <span class="d"></span>Management
+                                        </span>
+                                    </td>
+                                    <td><span class="type-chip" x-text="i.type"></span></td>
+                                    <td>
+                                        <span class="pill" :class="i.active ? 'ok' : 'stop'">
+                                            <span class="d"></span><span x-text="i.active ? 'Active' : 'Down'"></span>
+                                        </span>
+                                    </td>
+                                    <td class="text-muted-2" style="font-size:12px" x-text="i.autostart ? 'Yes' : 'No'"></td>
+                                    <td class="mono text-muted-2" style="font-size:12px" x-text="address(i)"></td>
+                                    <td class="mono text-muted-2" style="font-size:12px" x-text="i.gateway || '—'"></td>
+                                    <td class="mono text-faint" style="font-size:12px" x-text="ports(i)"></td>
+                                    <td class="text-faint" style="font-size:12px" x-text="(i.comments || '—').trim()"></td>
+                                    <td>
+                                        <div class="act-row">
+                                            <button class="act-btn pri" @click="editInterface(n, i)" title="Edit">
+                                                <i class="bi bi-pencil"></i>
+                                            </button>
+                                            <span class="act-why" :title="deleteHint(n, i)">
+                                                <button class="act-btn stopc" @click="remove(n, i)"
+                                                        :disabled="!canDelete(n, i) || busy === n.node + '/' + i.iface">
+                                                    <i class="bi bi-trash"></i>
+                                                </button>
+                                            </span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                    <template x-if="visible(n).length === 0">
+                        <div class="empty-hint"><i class="bi bi-inbox" style="font-size:26px"></i>
+                            <div class="mt-2">No interfaces match the filter.</div></div>
+                    </template>
+                </div>
+            </template>
+        </div>
+    </template>
+
+    <template x-if="nodes.length === 0">
+        <div class="empty-hint"><i class="bi bi-inbox" style="font-size:26px"></i>
+            <div class="mt-2">No nodes in this cluster.</div></div>
+    </template>
+
+    <!-- ==================== PENDING CHANGE REVIEW ==================== -->
+    <div class="modal fade" tabindex="-1" x-ref="diffModal">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-file-diff"></i>
+                        <span x-text="'Pending network changes on ' + (diffNode ? diffNode.node : '')"></span>
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="d-flex align-items-center gap-2 mb-2" x-show="diffLines.length">
+                        <span class="mono text-muted-2" style="font-size:12px">/etc/network/interfaces</span>
+                        <span class="pill ok"><span class="d"></span><span x-text="'+' + diffStat.added"></span></span>
+                        <span class="pill stop"><span class="d"></span><span x-text="'−' + diffStat.removed"></span></span>
+                    </div>
+
+                    <div class="diff-box" x-show="diffLines.length">
+                        <template x-for="(l, idx) in diffLines" :key="idx">
+                            <div class="diff-line" :class="'d-' + l.kind" x-text="l.text"></div>
+                        </template>
+                    </div>
+
+                    <div class="alert alert-secondary mb-0" style="font-size:12px" x-show="!diffLines.length">
+                        <i class="bi bi-info-circle me-1"></i>
+                        This node has changes pending, but Proxmox returned no diff for them.
+                        Check <span class="mono">/etc/network/interfaces.new</span> on the node
+                        before applying.
+                    </div>
+
+                    <div class="alert alert-warning mb-0 mt-3" style="font-size:12px">
+                        <i class="bi bi-exclamation-triangle me-1"></i>
+                        Applying reloads networking on the node. A bad address, bridge port or
+                        gateway can cut off access to the node itself — make sure you have
+                        console access before continuing.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-x sm" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn-x sm danger" @click="revert(diffNode)"
+                            :disabled="!diffNode || busy === diffNode.node">
+                        <i class="bi bi-arrow-counterclockwise"></i> Discard changes
+                    </button>
+                    <button type="button" class="btn-x sm primary" @click="apply(diffNode)"
+                            :disabled="!diffNode || busy === diffNode.node">
+                        <i class="bi bi-check2-circle"></i> Apply on node
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== INTERFACE EDITOR ==================== -->
+    <div class="modal fade" tabindex="-1" x-ref="ifaceModal">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-diagram-3"></i>
+                        <span x-text="creating ? 'New interface on ' + formNode : 'Edit ' + formIface + ' on ' + formNode"></span>
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-12 col-md-6" x-show="creating">
+                            <div class="field">
+                                <label>Type</label>
+                                <select class="inp" x-model="form.type" @change="onTypeChange()">
+                                    <option value="bridge">Linux Bridge</option>
+                                    <option value="bond">Linux Bond</option>
+                                    <option value="vlan">Linux VLAN</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6" x-show="creating">
+                            <div class="field">
+                                <label>Name</label>
+                                <input type="text" class="inp mono" x-model="form.iface" @input="nameTouched = true"
+                                       :placeholder="form.type === 'bridge' ? 'vmbr1' : (form.type === 'bond' ? 'bond0' : 'eno1.100')">
+                                <div class="hint" x-show="form.type === 'bridge'">Bridges are conventionally named <span class="mono">vmbrN</span>.</div>
+                                <div class="hint" x-show="form.type === 'vlan' && !nameTouched">Filled in from the raw device and tag. Type here for a custom name.</div>
+                                <div class="hint" style="color:var(--warn)" x-show="nameExists()">
+                                    <i class="bi bi-exclamation-triangle"></i> This node already has an interface with that name.
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Bridge -->
+                        <template x-if="form.type === 'bridge'">
+                            <div class="col-12">
+                                <div class="row g-3">
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Bridge ports</label>
+                                            <input type="text" class="inp mono" x-model="form.bridge_ports" placeholder="eno1">
+                                            <div class="nic-pick">
+                                                <template x-for="c in candidates('bridge_ports')" :key="c">
+                                                    <button type="button" :class="isMember('bridge_ports', c) && 'on'"
+                                                            @click="toggleMember('bridge_ports', c)"
+                                                            :title="claimedBy(c) ? c + ' is already used by ' + claimedBy(c) : 'Add ' + c">
+                                                        <span x-text="c"></span>
+                                                        <span class="tag" x-show="claimedBy(c)" x-text="'on ' + claimedBy(c)"></span>
+                                                    </button>
+                                                </template>
+                                                <span class="none" x-show="candidates('bridge_ports').length === 0">
+                                                    No candidate interfaces detected on this node.
+                                                </span>
+                                            </div>
+                                            <div class="hint">Click a detected interface to add or remove it, or type names directly. Leave empty for an internal-only bridge.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>VLAN aware</label>
+                                            <label class="d-flex align-items-center gap-2" style="font-size:12.5px">
+                                                <input type="checkbox" x-model="form.bridge_vlan_aware"> Enable 802.1Q VLAN filtering
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="form.bridge_vlan_aware">
+                                        <div class="field">
+                                            <label>Allowed VLAN IDs</label>
+                                            <input type="text" class="inp mono" x-model="form.bridge_vids" placeholder="2 4 100-200">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- Bond -->
+                        <template x-if="form.type === 'bond'">
+                            <div class="col-12">
+                                <div class="row g-3">
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Slaves</label>
+                                            <input type="text" class="inp mono" x-model="form.slaves" placeholder="eno1 eno2">
+                                            <div class="nic-pick">
+                                                <template x-for="c in candidates('slaves')" :key="c">
+                                                    <button type="button" :class="isMember('slaves', c) && 'on'"
+                                                            @click="toggleMember('slaves', c)"
+                                                            :title="claimedBy(c) ? c + ' is already used by ' + claimedBy(c) : 'Add ' + c">
+                                                        <span x-text="c"></span>
+                                                        <span class="tag" x-show="claimedBy(c)" x-text="'on ' + claimedBy(c)"></span>
+                                                    </button>
+                                                </template>
+                                                <span class="none" x-show="candidates('slaves').length === 0">
+                                                    No candidate interfaces detected on this node.
+                                                </span>
+                                            </div>
+                                            <div class="hint">Click a detected interface to add or remove it, or type names directly.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Mode</label>
+                                            <select class="inp" x-model="form.bond_mode">
+                                                <template x-for="m in bondModes" :key="m"><option :value="m" x-text="m"></option></template>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="form.bond_mode === 'active-backup'">
+                                        <div class="field">
+                                            <label>Primary</label>
+                                            <input type="text" class="inp mono" list="nic-primary" x-model="form['bond-primary']" placeholder="eno1">
+                                            <datalist id="nic-primary">
+                                                <template x-for="c in primaryCandidates()" :key="c"><option :value="c"></option></template>
+                                            </datalist>
+                                            <div class="hint">One of this bond's own slaves.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="['balance-xor', '802.3ad'].includes(form.bond_mode)">
+                                        <div class="field">
+                                            <label>Hash policy</label>
+                                            <select class="inp" x-model="form.bond_xmit_hash_policy">
+                                                <option value="">Default</option>
+                                                <option value="layer2">layer2</option>
+                                                <option value="layer2+3">layer2+3</option>
+                                                <option value="layer3+4">layer3+4</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- VLAN -->
+                        <template x-if="form.type === 'vlan'">
+                            <div class="col-12">
+                                <div class="row g-3">
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Raw device</label>
+                                            <input type="text" class="inp mono" list="nic-raw-device" x-model="form['vlan-raw-device']"
+                                                   @input="syncVlanName()" placeholder="eno1">
+                                            <datalist id="nic-raw-device">
+                                                <template x-for="c in candidates('vlan-raw-device')" :key="c"><option :value="c"></option></template>
+                                            </datalist>
+                                            <div class="hint">Pick a detected interface or type a name.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>VLAN tag</label>
+                                            <input type="number" class="inp" x-model="form['vlan-id']"
+                                                   @input="syncVlanName()" placeholder="100">
+                                            <div class="hint">Only needed for a custom interface name (ifupdown2).</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <div class="col-12"><div class="divider"></div></div>
+
+                        <div class="col-12 col-md-6">
+                            <div class="field">
+                                <label>IPv4 / CIDR</label>
+                                <input type="text" class="inp mono" x-model="form.cidr" placeholder="192.168.1.10/24">
+                                <div class="hint">Leave empty for an unaddressed interface.</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="field">
+                                <label>IPv4 gateway</label>
+                                <input type="text" class="inp mono" x-model="form.gateway" placeholder="192.168.1.1">
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="field">
+                                <label>IPv6 / CIDR</label>
+                                <input type="text" class="inp mono" x-model="form.cidr6" placeholder="2001:db8::10/64">
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="field">
+                                <label>IPv6 gateway</label>
+                                <input type="text" class="inp mono" x-model="form.gateway6">
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-3">
+                            <div class="field">
+                                <label>MTU</label>
+                                <input type="number" class="inp" x-model="form.mtu" placeholder="1500">
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-3">
+                            <div class="field">
+                                <label>Autostart</label>
+                                <label class="d-flex align-items-center gap-2" style="font-size:12.5px">
+                                    <input type="checkbox" x-model="form.autostart"> Start on boot
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="field">
+                                <label>Comment</label>
+                                <input type="text" class="inp" x-model="form.comments">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="alert alert-warning mt-3 mb-0" style="font-size:12px">
+                        <i class="bi bi-info-circle me-1"></i>
+                        Changes are written to the pending configuration. Use <strong>Apply</strong> on the node
+                        to activate them.
+                    </div>
+                    <div class="alert alert-danger mt-3 mb-0" style="font-size:12px" x-show="formError" x-text="formError"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-x primary" @click="submit()" :disabled="saving">
+                        <i class="bi" :class="saving ? 'bi-hourglass-split' : 'bi-check-lg'"></i>
+                        <span x-text="creating ? 'Create interface' : 'Save changes'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { networksApp } from "{{ url_for('static', filename='js/networks.js') }}";
+  function register() { window.Alpine.data('networksApp', networksApp); }
+  if (window.Alpine) register();
+  else document.addEventListener('alpine:init', register);
+</script>
 {% endblock %}
