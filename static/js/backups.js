@@ -10,6 +10,14 @@ function emptyJob() {
   };
 }
 
+function emptyRestore() {
+  return {
+    volid: "", node: "", type: "", sourceVmid: "",
+    targetNode: "", vmid: "", storage: "",
+    force: false, start: false, unique: false, confirm: "",
+  };
+}
+
 // Backups page: scheduled vzdump jobs, backup storage usage, and stored backups
 // grouped per guest (including guests with no backup at all, and backups whose
 // guest no longer exists).
@@ -42,6 +50,15 @@ export function backupsApp(initial) {
     configText: "",
     configError: "",
     configLoading: false,
+
+    restore: emptyRestore(),
+    restoreNodes: [],
+    restoreStorages: [],
+    restoreCheck: null,
+    restoreNextId: "",
+    restoreError: "",
+    restoreBusy: false,
+    restoreTask: null,
 
     fmtBytes: ProxUtils.formatBytes,
     fmtDate: ProxUtils.formatDateTime,
@@ -326,6 +343,134 @@ export function backupsApp(initial) {
         this.configError = e.message;
       } finally {
         this.configLoading = false;
+      }
+    },
+
+    async openRestore(b) {
+      this.restoreError = "";
+      this.restoreCheck = null;
+      this.restoreNextId = "";
+      this.restoreStorages = [];
+      this.restore = {
+        ...emptyRestore(),
+        volid: b.volid,
+        node: b.node,
+        type: b.type || "",
+        sourceVmid: String(b.vmid || ""),
+        targetNode: b.node,
+        vmid: String(b.vmid || ""),
+      };
+      this._modal("restoreModal").show();
+      await Promise.all([
+        this.loadRestoreNodes(),
+        this.loadRestoreStorages(),
+        this.loadRestoreNextId(),
+      ]);
+      await this.checkRestoreVmid();
+    },
+
+    async loadRestoreNodes() {
+      try {
+        this.restoreNodes = await ProxUtils.apiJson("/api/nodes");
+      } catch {
+        this.restoreNodes = this.restore.node ? [{ name: this.restore.node }] : [];
+      }
+    },
+
+    async loadRestoreStorages() {
+      const node = this.restore.targetNode;
+      if (!node) return;
+      try {
+        const q = new URLSearchParams({ vm_type: this.restore.type || "qemu" });
+        this.restoreStorages = await ProxUtils.apiJson(`/api/node/${node}/storages?${q}`);
+      } catch {
+        this.restoreStorages = [];
+      }
+      if (!this.restoreStorages.some(s => s.storage === this.restore.storage)) {
+        this.restore.storage = "";
+      }
+    },
+
+    async loadRestoreNextId() {
+      try {
+        const r = await ProxUtils.apiJson("/api/cluster/nextid");
+        this.restoreNextId = String(r.vmid || "");
+      } catch {
+        this.restoreNextId = "";
+      }
+    },
+
+    /** Whether the chosen target VMID is free — drives the overwrite warning. */
+    async checkRestoreVmid() {
+      const vmid = String(this.restore.vmid || "").trim();
+      this.restoreCheck = null;
+      if (!/^\d+$/.test(vmid)) return;
+      try {
+        this.restoreCheck = await ProxUtils.apiJson(`/api/cluster/vmid/${vmid}/check`);
+      } catch {
+        this.restoreCheck = null;
+      }
+      if (this.restoreCheck && this.restoreCheck.available) {
+        this.restore.force = false;
+        this.restore.confirm = "";
+      }
+    },
+
+    useNextIdForRestore() {
+      if (!this.restoreNextId) return;
+      this.restore.vmid = this.restoreNextId;
+      this.checkRestoreVmid();
+    },
+
+    get restoreTargetInUse() {
+      return !!(this.restoreCheck && this.restoreCheck.available === false);
+    },
+
+    get restoreConfirmed() {
+      return this.restore.confirm.trim() === String(this.restore.vmid || "").trim();
+    },
+
+    get canRestore() {
+      if (this.restoreBusy) return false;
+      if (!this.restore.volid || !this.restore.targetNode) return false;
+      if (!/^\d+$/.test(String(this.restore.vmid || "").trim())) return false;
+      if (this.restoreTargetInUse && !(this.restore.force && this.restoreConfirmed)) {
+        return false;
+      }
+      return true;
+    },
+
+    async submitRestore() {
+      if (!this.canRestore) return;
+      const r = this.restore;
+      this.restoreError = "";
+      this.restoreBusy = true;
+      const body = {
+        volid: r.volid,
+        node: r.targetNode,
+        vmid: r.vmid,
+        storage: r.storage,
+        start: r.start,
+        unique: r.unique,
+      };
+      // force is only ever sent when the overwrite was explicitly confirmed.
+      if (this.restoreTargetInUse && r.force && this.restoreConfirmed) {
+        body.force = true;
+        body.confirm_vmid = r.confirm.trim();
+      }
+      try {
+        const res = await ProxUtils.apiJson("/api/backups/restore", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        this._modal("restoreModal").hide();
+        this.restoreTask = { upid: res.upid, node: res.node, vmid: res.vmid };
+        ProxUtils.notify(res.message + " Progress is shown on the Tasks page.", "success");
+      } catch (e) {
+        this.restoreError = e.message;
+      } finally {
+        this.restoreBusy = false;
       }
     },
 
