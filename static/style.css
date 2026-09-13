@@ -591,6 +591,10 @@ a:hover { color: var(--accent); text-decoration: underline; }
   color:var(--text-muted); font-size:14px; display:grid; place-items:center; cursor:pointer; transition:background .12s,color .12s; }
 .act-btn:hover{ background:var(--panel-hover); color:var(--text); }
 .act-btn.go:hover{ color:var(--ok); } .act-btn.stopc:hover{ color:var(--danger); } .act-btn.pri:hover{ color:var(--accent); }
+.act-btn:disabled{ opacity:.3; cursor:not-allowed; }
+.act-btn:disabled:hover{ background:transparent; color:var(--text-muted); }
+/* a disabled button swallows hover, so its reason lives on a wrapper */
+.act-why{ display:inline-flex; }
 
 /* form controls (opt-in .inp helpers from the design system) */
 .field{ margin-bottom:14px; }
@@ -602,6 +606,28 @@ a:hover { color: var(--accent); text-decoration: underline; }
 .inp::placeholder{ color:var(--text-faint); }
 select.inp{ appearance:none; background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16'><path fill='%2393a0b5' d='M4 6l4 4 4-4'/></svg>");
   background-repeat:no-repeat; background-position:right 11px center; padding-right:32px; }
+/* detected-interface picker (networks page): click to toggle a name into the
+   field, which stays free-text for names the node doesn't report yet */
+.nic-pick{ display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
+.nic-pick button{ display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border);
+  background:var(--panel-2); color:var(--text-muted); font-family:var(--font-mono); font-size:11.5px;
+  padding:3px 9px; border-radius:7px; cursor:pointer; transition:background .12s,color .12s,border-color .12s; }
+.nic-pick button:hover{ color:var(--text); border-color:var(--accent-border); }
+.nic-pick button.on{ background:var(--accent-soft); border-color:var(--accent-border); color:var(--accent); }
+.nic-pick button .tag{ font-family:var(--font-sans); font-size:10px; font-weight:600; color:var(--text-faint); }
+.nic-pick button.on .tag{ color:var(--accent); }
+.nic-pick .none{ font-size:11px; color:var(--text-faint); }
+
+/* unified diff of a node's pending network config */
+.diff-box{ border:1px solid var(--border); border-radius:10px; background:var(--panel-2);
+  overflow:auto; max-height:50vh; padding:6px 0; }
+.diff-line{ font-family:var(--font-mono); font-size:12px; line-height:1.55; white-space:pre;
+  padding:0 10px; color:var(--text-muted); }
+.diff-line.d-add{ background:var(--ok-soft); color:var(--ok); }
+.diff-line.d-del{ background:var(--danger-soft); color:var(--danger); }
+.diff-line.d-hunk{ background:var(--accent-soft); color:var(--accent); }
+.diff-line.d-file{ color:var(--text-faint); }
+
 .search-inp{ position:relative; }
 .search-inp .bi{ position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-faint); font-size:15px; }
 .search-inp input{ padding-left:34px; }
