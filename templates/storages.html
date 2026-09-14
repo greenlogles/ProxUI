@@ -40,7 +40,7 @@
                             <template x-if="storage.nodes && storage.nodes.length === 1"><span x-text="storage.nodes[0]"></span></template>
                             <template x-if="!storage.nodes"><span x-text="storage.node"></span></template>
                         </td>
-                        <td><span class="type-chip" x-text="storage.type"></span></td>
+                        <td><span class="type-chip" x-text="pluginType(storage)"></span></td>
                         <td>
                             <i class="bi bi-check-circle-fill" style="color:var(--ok)" x-show="storage.shared"></i>
                             <i class="bi bi-dash" style="color:var(--text-faint)" x-show="!storage.shared"></i>

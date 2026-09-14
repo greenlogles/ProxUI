@@ -60,11 +60,18 @@ export function storagesApp(initialStorages, nodeNames) {
       const q = this.search.trim().toLowerCase();
       if (!q) return this.storages;
       return this.storages.filter(s =>
-        [s.storage, s.type, s.server, s.path].some(v => v && String(v).toLowerCase().includes(q)));
+        [s.storage, this.pluginType(s), s.server, s.path].some(v => v && String(v).toLowerCase().includes(q)));
+    },
+
+    // /cluster/resources reports the resource kind ("storage") in `type` and
+    // the plugin in `plugintype`; the node-by-node fallback has only `type`,
+    // already holding the plugin name.
+    pluginType(s) {
+      return s.plugintype || s.type || "";
     },
 
     editable(s) {
-      return CREATABLE_TYPES.includes(s.type);
+      return CREATABLE_TYPES.includes(this.pluginType(s));
     },
 
     _modal(ref) {
