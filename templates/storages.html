@@ -25,7 +25,7 @@
             <table class="tbl">
                 <thead><tr><th>Storage</th><th>Nodes</th><th>Type</th><th>Shared</th><th>Status</th><th style="width:210px">Usage</th><th style="width:90px"></th></tr></thead>
                 <tbody>
-                    <template x-for="storage in visible" :key="storage.storage">
+                    <template x-for="storage in visible" :key="rowKey(storage)">
                     <tr>
                         <td>
                             <span class="nm" x-text="storage.storage"></span>

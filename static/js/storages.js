@@ -70,6 +70,15 @@ export function storagesApp(initialStorages, nodeNames) {
       return s.plugintype || s.type || "";
     },
 
+    // A non-shared storage of the same name exists once per node (local,
+    // cloudinit, ...), so the name alone is not unique and a duplicate x-for
+    // key makes Alpine bail out of the whole list.
+    rowKey(s) {
+      if (s.id) return s.id;
+      const where = s.node || (s.nodes || []).join("-");
+      return where ? `${where}/${s.storage}` : s.storage;
+    },
+
     editable(s) {
       return CREATABLE_TYPES.includes(this.pluginType(s));
     },
