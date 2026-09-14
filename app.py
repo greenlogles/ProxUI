@@ -3469,8 +3469,13 @@ def _backup_storages(proxmox):
 
 def _backup_item(item, storage, node):
     """Normalise one storage content entry into the shape the UI consumes."""
+    try:
+        guest_type = _parse_backup_volid(item.get("volid", ""))[1]
+    except ValueError:
+        guest_type = ""
     return {
         "volid": item.get("volid", ""),
+        "type": guest_type,
         "storage": storage,
         "node": node,
         "vmid": int(item["vmid"]) if item.get("vmid") else None,
@@ -4802,6 +4807,7 @@ def api_vm_tasks(node, vmid):
                         "qmclone",
                         "qmcreate",
                         "qmdestroy",
+                        "qmrestore",
                         "vzstart",
                         "vzstop",
                         "vzshutdown",
@@ -4809,6 +4815,7 @@ def api_vm_tasks(node, vmid):
                         "vzclone",
                         "vzcreate",
                         "vzdestroy",
+                        "vzrestore",
                     ]
                     and vmid in str(task.get("id", ""))
                 )
@@ -4911,6 +4918,7 @@ def api_cluster_tasks():
                 "qmdestroy",
                 "qmtemplate",
                 "qmdisk",
+                "qmrestore",
                 "vzstart",
                 "vzstop",
                 "vzshutdown",
@@ -4919,6 +4927,7 @@ def api_cluster_tasks():
                 "vzcreate",
                 "vzdestroy",
                 "vzdump",
+                "vzrestore",
             ]:
                 try:
                     upid_parts = upid.split(":")
@@ -8790,6 +8799,128 @@ def api_backup_content_config():
     except Exception as e:
         return _proxmox_error_response(e)
     return jsonify({"volid": volid, "config": config or ""})
+
+
+_VZDUMP_ARCHIVE_RE = re.compile(r"vzdump-(qemu|lxc|openvz)-(\d+)-")
+_PBS_SNAPSHOT_RE = re.compile(r"^backup/(vm|ct)/(\d+)/")
+
+
+def _parse_backup_volid(volid):
+    """Split a backup volume id into (storage, guest type, source VMID).
+
+    Two shapes reach here. A file archive carries the guest type in the vzdump
+    filename (``local:backup/vzdump-qemu-100-...vma.zst``); a Proxmox Backup
+    Server snapshot has no such filename and encodes it in the path instead
+    (``lan-pbs:backup/ct/201/2026-07-12T06:00:09Z``).
+    """
+    if not isinstance(volid, str) or ":" not in volid:
+        raise ValueError(f"'{volid}' is not a backup volume id")
+    storage, path = volid.split(":", 1)
+    if not storage or not path:
+        raise ValueError(f"'{volid}' is not a backup volume id")
+
+    match = _VZDUMP_ARCHIVE_RE.search(path)
+    if match:
+        kind, vmid = match.group(1), match.group(2)
+        return storage, "qemu" if kind == "qemu" else "lxc", int(vmid)
+
+    match = _PBS_SNAPSHOT_RE.match(path)
+    if match:
+        return storage, "qemu" if match.group(1) == "vm" else "lxc", int(match.group(2))
+
+    raise ValueError(f"Cannot determine the guest type of '{volid}'")
+
+
+def _restore_params(
+    guest_type, volid, vmid, storage=None, force=False, start=False, unique=False
+):
+    """Build the create-from-archive parameters for one guest type.
+
+    A restore is a create call, and the two guest types disagree on how the
+    archive is named: POST /nodes/{node}/qemu takes it as ``archive``, while
+    POST /nodes/{node}/lxc has no ``archive`` parameter at all and reuses the
+    required ``ostemplate`` together with ``restore=1``.
+    """
+    params = {"vmid": int(vmid)}
+    if guest_type == "qemu":
+        params["archive"] = volid
+    else:
+        params["ostemplate"] = volid
+        params["restore"] = 1
+    if storage:
+        params["storage"] = storage
+    if force:
+        params["force"] = 1
+    if unique:
+        params["unique"] = 1
+    if start:
+        params["start"] = 1
+    return params
+
+
+@app.route("/api/backups/restore", methods=["POST"])
+def api_backup_restore():
+    """Restore a stored backup into a guest, optionally overwriting an existing one."""
+    if DEMO_MODE:
+        return jsonify({"error": "Restoring backups is disabled in demo mode"}), 403
+    data = request.get_json(silent=True) or {}
+    volid = (data.get("volid") or "").strip()
+    node = (data.get("node") or "").strip()
+    if not volid or not node:
+        return jsonify({"error": "volid and node are required"}), 400
+
+    try:
+        _, guest_type, source_vmid = _parse_backup_volid(volid)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    try:
+        vmid = int(data["vmid"]) if str(data.get("vmid", "")).strip() else source_vmid
+    except (TypeError, ValueError):
+        return jsonify({"error": "vmid must be a number"}), 400
+    if vmid < 100:
+        return jsonify({"error": "VMID must be >= 100"}), 400
+
+    # Overwriting is destructive, so it is never inferred: the caller has to ask
+    # for it *and* name the VMID it expects to lose.
+    force = data.get("force") is True
+    if force and str(data.get("confirm_vmid", "")).strip() != str(vmid):
+        return (
+            jsonify({"error": f"Overwriting VMID {vmid} must be confirmed explicitly"}),
+            400,
+        )
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    params = _restore_params(
+        guest_type,
+        volid,
+        vmid,
+        storage=(data.get("storage") or "").strip() or None,
+        force=force,
+        start=data.get("start") is True,
+        unique=data.get("unique") is True,
+    )
+    endpoint = (
+        proxmox.nodes(node).qemu if guest_type == "qemu" else proxmox.nodes(node).lxc
+    )
+    try:
+        upid = endpoint.post(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+    return jsonify(
+        {
+            "success": True,
+            "upid": upid,
+            "node": node,
+            "vmid": vmid,
+            "type": guest_type,
+            "message": f"Restore into {vmid} started on {node}.",
+        }
+    )
 
 
 @app.route("/api/backups/guest/<int:vmid>")

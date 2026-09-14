@@ -65,6 +65,18 @@
         </div>
     </div>
 
+    <!-- ==================== RUNNING RESTORE ==================== -->
+    <div class="alert alert-info d-flex align-items-center gap-2 mb-4" x-cloak x-show="restoreTask">
+        <i class="bi bi-arrow-counterclockwise"></i>
+        <div style="font-size:12px">
+            Restore into <strong x-text="restoreTask?.vmid"></strong> running on
+            <strong x-text="restoreTask?.node"></strong> —
+            <a href="/tasks">follow it on the Tasks page</a>.
+            <div class="mono text-muted-2" style="font-size:11px" x-text="restoreTask?.upid"></div>
+        </div>
+        <button type="button" class="btn-close ms-auto" @click="restoreTask = null"></button>
+    </div>
+
     <!-- ==================== STORAGE TARGETS ==================== -->
     <div class="d-flex align-items-center gap-2 mb-2">
         <div class="sec-title" style="font-size:14px"><i class="bi bi-hdd-stack me-1" style="color:var(--accent)"></i>Backup storage</div>
@@ -314,6 +326,12 @@
                                             title="View the guest config stored in this backup">
                                         <i class="bi bi-file-earmark-code"></i>
                                     </button>
+                                    <button class="act-btn" x-show="row.kind === 'backup'"
+                                            @click="openRestore(row.backup)"
+                                            :disabled="!row.backup?.type"
+                                            :title="row.backup?.type ? 'Restore this backup into a guest' : 'Unrecognised archive — cannot restore'">
+                                        <i class="bi bi-arrow-counterclockwise"></i>
+                                    </button>
                                     <button class="act-btn stopc" x-show="row.kind === 'backup'"
                                             @click="removeBackup(row.guest, row.backup)"
                                             :disabled="row.backup?.protected || busyVolid === row.backup?.volid"
@@ -378,6 +396,118 @@
                     <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
                     <button type="button" class="btn-x primary" @click="submitBackup()" :disabled="!form.storage">
                         <i class="bi bi-lightning-charge"></i> Start backup
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== RESTORE DIALOG ==================== -->
+    <div class="modal fade" tabindex="-1" x-ref="restoreModal">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-arrow-counterclockwise"></i>
+                        Restore <span x-text="restore.type === 'lxc' ? 'container' : 'VM'"></span>
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="field">
+                        <label>Archive</label>
+                        <div class="mono text-muted-2" style="font-size:12px; word-break:break-all"
+                             x-text="restore.volid"></div>
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-12 col-md-6">
+                            <div class="field">
+                                <label>Target node</label>
+                                <select class="inp" x-model="restore.targetNode" @change="loadRestoreStorages()">
+                                    <template x-for="n in restoreNodes" :key="n.name">
+                                        <option :value="n.name" x-text="n.name"></option>
+                                    </template>
+                                </select>
+                                <div class="hint">The archive's storage has to be reachable from this node.</div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="field">
+                                <label>Target VMID</label>
+                                <input type="number" min="100" class="inp" x-model="restore.vmid"
+                                       @change="checkRestoreVmid()">
+                                <div class="hint">
+                                    Original: <span x-text="restore.sourceVmid || '—'"></span>
+                                    <template x-if="restoreNextId && restoreNextId !== restore.vmid">
+                                        <a href="#" @click.prevent="useNextIdForRestore()" class="ms-2">
+                                            use next free (<span x-text="restoreNextId"></span>)
+                                        </a>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="field">
+                                <label>Target storage</label>
+                                <select class="inp" x-model="restore.storage">
+                                    <option value="">Use the storage from the backup</option>
+                                    <template x-for="s in restoreStorages" :key="s.storage">
+                                        <option :value="s.storage"
+                                                x-text="s.storage + ' (' + (s.type || '').toUpperCase() + ')'"></option>
+                                    </template>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6 d-flex flex-column justify-content-center gap-2">
+                            <label class="d-flex align-items-center gap-2" style="cursor:pointer">
+                                <input type="checkbox" x-model="restore.unique">
+                                <span>Assign new MAC addresses</span>
+                            </label>
+                            <label class="d-flex align-items-center gap-2" style="cursor:pointer">
+                                <input type="checkbox" x-model="restore.start">
+                                <span>Start after restore</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="alert alert-success mt-3 mb-0" style="font-size:12px" x-cloak
+                         x-show="restoreCheck && restoreCheck.available">
+                        <i class="bi bi-check-circle me-1"></i>
+                        VMID <span x-text="restore.vmid"></span> is free — a new guest will be created.
+                    </div>
+
+                    <div class="alert alert-danger mt-3 mb-0" x-cloak x-show="restoreTargetInUse">
+                        <div class="fw-bold mb-1">
+                            <i class="bi bi-exclamation-triangle me-1"></i>
+                            This will destroy the existing guest
+                            <span x-text="restore.vmid"></span><span
+                                x-text="restoreCheck?.name ? ' (' + restoreCheck.name + ')' : ''"></span>
+                            on <span x-text="restoreCheck?.node"></span>
+                        </div>
+                        <div style="font-size:12px">
+                            Its disks and configuration are overwritten by the archive and cannot be
+                            recovered. Pick a free VMID instead if you did not mean to do this.
+                        </div>
+                        <label class="d-flex align-items-center gap-2 mt-2" style="cursor:pointer">
+                            <input type="checkbox" x-model="restore.force">
+                            <span>Overwrite VMID <span x-text="restore.vmid"></span></span>
+                        </label>
+                        <div class="field mt-2 mb-0" x-cloak x-show="restore.force">
+                            <label>Type <strong x-text="restore.vmid"></strong> to confirm</label>
+                            <input type="text" class="inp" x-model="restore.confirm"
+                                   :placeholder="restore.vmid">
+                        </div>
+                    </div>
+
+                    <div class="alert alert-danger mt-3 mb-0" style="font-size:12px"
+                         x-cloak x-show="restoreError" x-text="restoreError"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-x primary" @click="submitRestore()"
+                            :disabled="!canRestore">
+                        <i class="bi" :class="restoreBusy ? 'bi-hourglass-split' : 'bi-arrow-counterclockwise'"></i>
+                        <span x-text="restoreTargetInUse ? 'Overwrite and restore' : 'Start restore'"></span>
                     </button>
                 </div>
             </div>
