@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import math
 import os
@@ -2859,7 +2860,10 @@ def storages():
     # Sort storages alphabetically by storage name
     grouped_storages.sort(key=lambda x: x.get("storage", "").lower())
 
-    return render_template("storages.html", storages=grouped_storages)
+    node_names = sorted(n["name"] for n in cluster_nodes)
+    return render_template(
+        "storages.html", storages=grouped_storages, node_names=node_names
+    )
 
 
 def get_storages_fallback():
@@ -2961,6 +2965,273 @@ def group_shared_storages(all_storages):
                 grouped_storages.append(storage)
 
     return grouped_storages
+
+
+# Types ProxUI can add/edit/remove. pbs/zfs/lvm/ceph/etc need cluster-specific
+# setup (keyrings, pools, LUNs) that is out of scope for the homelab NAS case.
+_STORAGE_TYPES = ("nfs", "cifs", "dir")
+_STORAGE_CONTENT_CHOICES = ("images", "rootdir", "vztmpl", "iso", "backup", "snippets")
+_STORAGE_ID_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
+
+
+def _storage_params(data, stype, creating):
+    """Validate a storage form into API parameters. Raises ValueError.
+
+    PUT /storage/{id} has no 'export'/'share'/'path'/'type' parameters — the
+    backing location and type are fixed at creation, only metadata (content,
+    nodes, credentials, disable/shared) can be changed afterwards.
+    """
+    params = {}
+
+    content = data.get("content") or []
+    if isinstance(content, str):
+        content = [c.strip() for c in content.split(",") if c.strip()]
+    content = [c for c in content if c in _STORAGE_CONTENT_CHOICES]
+    if not content:
+        raise ValueError("Select at least one content type")
+    params["content"] = ",".join(content)
+
+    nodes = data.get("nodes")
+    if isinstance(nodes, list):
+        nodes = ",".join(n.strip() for n in nodes if n.strip())
+    else:
+        nodes = (nodes or "").strip()
+    if nodes:
+        params["nodes"] = nodes
+
+    params["disable"] = 1 if data.get("disable") else 0
+    params["shared"] = 1 if data.get("shared") else 0
+
+    if stype == "nfs":
+        if creating:
+            export = (data.get("export") or "").strip()
+            if not export:
+                raise ValueError("NFS export is required")
+            params["export"] = export
+        server = (data.get("server") or "").strip()
+        if creating and not server:
+            raise ValueError("NFS server is required")
+        if server:
+            params["server"] = server
+        options = (data.get("options") or "").strip()
+        if options:
+            params["options"] = options
+    elif stype == "cifs":
+        if creating:
+            share = (data.get("share") or "").strip()
+            if not share:
+                raise ValueError("CIFS share is required")
+            params["share"] = share
+        server = (data.get("server") or "").strip()
+        if creating and not server:
+            raise ValueError("CIFS server is required")
+        if server:
+            params["server"] = server
+        username = (data.get("username") or "").strip()
+        if username:
+            params["username"] = username
+        password = data.get("password") or ""
+        if password:
+            params["password"] = password
+        domain = (data.get("domain") or "").strip()
+        if domain:
+            params["domain"] = domain
+    elif stype == "dir":
+        if creating:
+            path = (data.get("path") or "").strip()
+            if not path:
+                raise ValueError("Path is required")
+            params["path"] = path
+        params["mkdir"] = 1 if data.get("mkdir") else 0
+        params["is_mountpoint"] = 1 if data.get("is_mountpoint") else 0
+
+    return params
+
+
+def _storage_error_response(e, password=None):
+    """Like _proxmox_error_response, but keeps a CIFS password out of the log.
+
+    ResourceException's message is built from the server's response body, not
+    the outgoing request, so the password should never appear here in
+    practice -- this just makes sure a future PVE error that echoes back a bad
+    field can't leak it.
+    """
+    err = str(e)
+    if password:
+        err = err.replace(password, "***")
+        print(f"Storage API error: {err}")
+    else:
+        traceback.print_exc()
+    if "403" in err or "Forbidden" in err:
+        return jsonify({"error": err}), 403
+    if "400" in err or "Bad Request" in err:
+        return jsonify({"error": err}), 400
+    if "404" in err or "Not Found" in err:
+        return jsonify({"error": err}), 404
+    return jsonify({"error": err}), 500
+
+
+@app.route("/api/storages", methods=["GET"])
+def api_storages():
+    """List cluster storage definitions. PVE never returns stored passwords."""
+    proxmox = _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        return jsonify(proxmox.storage.get())
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/storages/<storage_id>", methods=["GET"])
+def api_storage_get(storage_id):
+    """Read one storage's full config, for the edit form."""
+    proxmox = _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        return jsonify(proxmox.storage(storage_id).get())
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/storages", methods=["POST"])
+def api_storage_create():
+    """Create an nfs, cifs or dir storage definition (cluster-wide)."""
+    if DEMO_MODE:
+        return jsonify({"error": "Creating storage is disabled in demo mode"}), 403
+    proxmox = _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    data = request.get_json(silent=True) or {}
+    stype = (data.get("type") or "").strip()
+    if stype not in _STORAGE_TYPES:
+        return jsonify({"error": f"Type must be one of: {', '.join(_STORAGE_TYPES)}"}), 400
+    storage_id = (data.get("storage") or "").strip()
+    if not storage_id or not _STORAGE_ID_RE.match(storage_id):
+        return (
+            jsonify(
+                {
+                    "error": "Storage ID is required and may only contain letters, "
+                    "digits, '_' or '-', starting with a letter"
+                }
+            ),
+            400,
+        )
+    try:
+        params = _storage_params(data, stype, creating=True)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    try:
+        proxmox.storage.post(storage=storage_id, type=stype, **params)
+    except Exception as e:
+        return _storage_error_response(e, data.get("password"))
+    return jsonify(
+        {
+            "success": True,
+            "message": f"Storage '{storage_id}' created.",
+            "storage": storage_id,
+        }
+    )
+
+
+@app.route("/api/storages/<storage_id>", methods=["PUT"])
+def api_storage_update(storage_id):
+    """Update an existing storage's content types, nodes, credentials, etc.
+
+    The storage ID and its type/location (export, share, path) are immutable
+    here -- PVE's own PUT endpoint has no parameters for them.
+    """
+    if DEMO_MODE:
+        return jsonify({"error": "Editing storage is disabled in demo mode"}), 403
+    proxmox = _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    data = request.get_json(silent=True) or {}
+    try:
+        current = proxmox.storage(storage_id).get()
+    except Exception as e:
+        return _proxmox_error_response(e)
+    stype = current.get("type")
+    if stype not in _STORAGE_TYPES:
+        return jsonify({"error": f"Editing '{stype}' storage is not supported here"}), 400
+    try:
+        params = _storage_params(data, stype, creating=False)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    try:
+        proxmox.storage(storage_id).put(**params)
+    except Exception as e:
+        return _storage_error_response(e, data.get("password"))
+    return jsonify({"success": True, "message": f"Storage '{storage_id}' updated."})
+
+
+@app.route("/api/storages/<storage_id>", methods=["DELETE"])
+def api_storage_delete(storage_id):
+    """Remove a storage definition. Does not touch the underlying data."""
+    if DEMO_MODE:
+        return jsonify({"error": "Deleting storage is disabled in demo mode"}), 403
+    data = request.get_json(silent=True) or {}
+    if (data.get("confirm") or "").strip() != storage_id:
+        return jsonify({"error": "Confirmation does not match the storage ID"}), 400
+    proxmox = _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        proxmox.storage(storage_id).delete()
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify(
+        {
+            "success": True,
+            "message": f"Storage '{storage_id}' removed from the cluster. "
+            "The underlying data was not deleted.",
+        }
+    )
+
+
+@app.route("/api/storage-scan/nfs", methods=["POST"])
+def api_storage_scan_nfs():
+    """List NFS exports available on a server, via a node's scan endpoint."""
+    data = request.get_json(silent=True) or {}
+    node = data.get("node")
+    server = (data.get("server") or "").strip()
+    if not node or not server:
+        return jsonify({"error": "node and server are required"}), 400
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        return jsonify(proxmox.nodes(node).scan.nfs.get(server=server))
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/storage-scan/cifs", methods=["POST"])
+def api_storage_scan_cifs():
+    """List CIFS shares available on a server, via a node's scan endpoint."""
+    data = request.get_json(silent=True) or {}
+    node = data.get("node")
+    server = (data.get("server") or "").strip()
+    if not node or not server:
+        return jsonify({"error": "node and server are required"}), 400
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    kwargs = {"server": server}
+    username = (data.get("username") or "").strip()
+    if username:
+        kwargs["username"] = username
+    password = data.get("password") or ""
+    if password:
+        kwargs["password"] = password
+    domain = (data.get("domain") or "").strip()
+    if domain:
+        kwargs["domain"] = domain
+    try:
+        return jsonify(proxmox.nodes(node).scan.cifs.get(**kwargs))
+    except Exception as e:
+        return _storage_error_response(e, password)
 
 
 @app.route("/networks")
