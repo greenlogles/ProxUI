@@ -1613,6 +1613,69 @@ def _next_key_index(config, prefix):
     return i
 
 
+# Max index per PVE hardware bus (inclusive), from the /config API schema
+# descriptions ("n is 0 to 30" etc.) — see qemu/{vmid}/config PUT parameters.
+DISK_BUS_MAX_INDEX = {"scsi": 30, "virtio": 15, "ide": 3, "sata": 5}
+MP_MAX_INDEX = 255
+NET_MAX_INDEX = 31
+
+
+def _build_qemu_disk_value(storage, size_gb, cache=None, discard=None, ssd=None,
+                            iothread=None, backup=None):
+    """Build a scsiN/virtioN/ideN/sataN value that allocates a new volume.
+
+    STORAGE_ID:SIZE_IN_GiB is the PVE syntax for allocating a fresh volume
+    (as opposed to referencing an existing vm-<id>-disk-N).
+    """
+    parts = [f"{storage}:{size_gb}"]
+    if cache:
+        parts.append(f"cache={cache}")
+    if discard:
+        parts.append("discard=on")
+    if ssd:
+        parts.append("ssd=1")
+    if iothread:
+        parts.append("iothread=1")
+    if backup is False:
+        parts.append("backup=0")
+    return ",".join(parts)
+
+
+def _build_lxc_mp_value(storage, size_gb, path, backup=None):
+    """Build an mpN value that allocates a new volume mounted at `path`."""
+    parts = [f"{storage}:{size_gb}", f"mp={path}"]
+    if backup is False:
+        parts.append("backup=0")
+    return ",".join(parts)
+
+
+def _build_qemu_net_value(model, bridge, vlan=None, firewall=None, mac=None, rate=None):
+    """Build a netN value for a QEMU guest (model is the format's default_key)."""
+    head = f"{model}={mac}" if mac else model
+    parts = [head, f"bridge={bridge}"]
+    if vlan:
+        parts.append(f"tag={vlan}")
+    if firewall:
+        parts.append("firewall=1")
+    if rate:
+        parts.append(f"rate={rate}")
+    return ",".join(parts)
+
+
+def _build_lxc_net_value(name, bridge, vlan=None, firewall=None, mac=None, rate=None):
+    """Build a netN value for an LXC container (name= is required, no model=)."""
+    parts = [f"name={name}", f"bridge={bridge}"]
+    if mac:
+        parts.append(f"hwaddr={mac}")
+    if vlan:
+        parts.append(f"tag={vlan}")
+    if firewall:
+        parts.append("firewall=1")
+    if rate:
+        parts.append(f"rate={rate}")
+    return ",".join(parts)
+
+
 def _proxmox_error_response(e):
     """Convert a proxmoxer/requests exception to a JSON Flask response."""
     traceback.print_exc()
@@ -5712,6 +5775,256 @@ def api_vm_resize_disk(node, vmid):
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/disks", methods=["POST"])
+def api_vm_add_disk(node, vmid):
+    """Allocate a new disk (QEMU) or mount point (LXC) on an existing guest."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    vm_type = "qemu"
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+    except Exception:
+        vm_type = "lxc"
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        storage = (data.get("storage") or "").strip()
+        if not storage:
+            return jsonify({"error": "storage is required"}), 400
+
+        try:
+            size_gb = int(data.get("size_gb"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "size_gb must be an integer"}), 400
+        if size_gb <= 0:
+            return jsonify({"error": "size_gb must be greater than 0"}), 400
+
+        if vm_type == "qemu":
+            bus = (data.get("bus") or "").strip().lower()
+            if bus not in DISK_BUS_MAX_INDEX:
+                return (
+                    jsonify({"error": "bus must be one of: scsi, virtio, ide, sata"}),
+                    400,
+                )
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+            idx = _next_key_index(config, bus)
+            if idx > DISK_BUS_MAX_INDEX[bus]:
+                return jsonify({"error": f"No free {bus} slots available"}), 400
+
+            value = _build_qemu_disk_value(
+                storage,
+                size_gb,
+                cache=data.get("cache") or None,
+                discard=bool(data.get("discard")),
+                ssd=bool(data.get("ssd")),
+                iothread=bool(data.get("iothread")),
+                backup=data.get("backup", True),
+            )
+            key = f"{bus}{idx}"
+            proxmox.nodes(node).qemu(vmid).config.put(**{key: value})
+        else:
+            path = (data.get("path") or "").strip()
+            if not path.startswith("/"):
+                return (
+                    jsonify({"error": "path must be an absolute container path"}),
+                    400,
+                )
+            config = proxmox.nodes(node).lxc(vmid).config.get()
+            idx = _next_key_index(config, "mp")
+            if idx > MP_MAX_INDEX:
+                return jsonify({"error": "No free mount point slots available"}), 400
+
+            value = _build_lxc_mp_value(
+                storage, size_gb, path, backup=data.get("backup", True)
+            )
+            key = f"mp{idx}"
+            proxmox.nodes(node).lxc(vmid).config.put(**{key: value})
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Disk {key} ({storage}:{size_gb}) added",
+                "key": key,
+            }
+        )
+
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/disks/<key>", methods=["DELETE"])
+def api_vm_remove_disk(node, vmid, key):
+    """Detach a disk/mount point. The underlying volume is kept as unusedN."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    vm_type = "qemu"
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+    except Exception:
+        vm_type = "lxc"
+
+    if key == "rootfs":
+        return jsonify({"error": "The container root filesystem cannot be removed"}), 400
+
+    disk_pattern = re.compile(r"^(scsi|virtio|ide|sata|mp)\d+$")
+    if not disk_pattern.match(key):
+        return jsonify({"error": f"'{key}' is not a removable disk key"}), 400
+
+    try:
+        if vm_type == "qemu":
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+        else:
+            config = proxmox.nodes(node).lxc(vmid).config.get()
+
+        if key not in config:
+            return jsonify({"error": f"Key '{key}' not found in guest config"}), 404
+
+        if vm_type == "qemu":
+            proxmox.nodes(node).qemu(vmid).config.put(delete=key)
+        else:
+            proxmox.nodes(node).lxc(vmid).config.put(delete=key)
+
+        return jsonify(
+            {
+                "success": True,
+                "message": (
+                    f"Disk {key} detached. The underlying volume was kept as an "
+                    "unused volume (unusedN) and was not erased."
+                ),
+            }
+        )
+
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/netifs", methods=["POST"])
+def api_vm_add_netif(node, vmid):
+    """Add a new network interface (netN) to an existing guest."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    vm_type = "qemu"
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+    except Exception:
+        vm_type = "lxc"
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        bridge = (data.get("bridge") or "").strip()
+        if not bridge:
+            return jsonify({"error": "bridge is required"}), 400
+
+        vlan = data.get("vlan") or None
+        if vlan is not None:
+            try:
+                vlan = int(vlan)
+            except (TypeError, ValueError):
+                return jsonify({"error": "vlan must be an integer"}), 400
+            if not (1 <= vlan <= 4094):
+                return jsonify({"error": "vlan must be between 1 and 4094"}), 400
+
+        rate = data.get("rate") or None
+        if rate is not None:
+            try:
+                rate = float(rate)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rate must be a number"}), 400
+
+        mac = (data.get("mac") or "").strip() or None
+        firewall = bool(data.get("firewall"))
+
+        if vm_type == "qemu":
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+            model = (data.get("model") or "virtio").strip().lower()
+            if model not in ("virtio", "e1000", "rtl8139"):
+                return (
+                    jsonify({"error": "model must be one of: virtio, e1000, rtl8139"}),
+                    400,
+                )
+            idx = _next_key_index(config, "net")
+            if idx > NET_MAX_INDEX:
+                return jsonify({"error": "No free network interface slots available"}), 400
+
+            value = _build_qemu_net_value(
+                model, bridge, vlan=vlan, firewall=firewall, mac=mac, rate=rate
+            )
+            key = f"net{idx}"
+            proxmox.nodes(node).qemu(vmid).config.put(**{key: value})
+        else:
+            config = proxmox.nodes(node).lxc(vmid).config.get()
+            idx = _next_key_index(config, "net")
+            if idx > NET_MAX_INDEX:
+                return jsonify({"error": "No free network interface slots available"}), 400
+
+            name = (data.get("name") or f"eth{idx}").strip()
+
+            value = _build_lxc_net_value(
+                name, bridge, vlan=vlan, firewall=firewall, mac=mac, rate=rate
+            )
+            key = f"net{idx}"
+            proxmox.nodes(node).lxc(vmid).config.put(**{key: value})
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Network interface {key} added",
+                "key": key,
+            }
+        )
+
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/netifs/<key>", methods=["DELETE"])
+def api_vm_remove_netif(node, vmid, key):
+    """Remove a network interface by config key."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    vm_type = "qemu"
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+    except Exception:
+        vm_type = "lxc"
+
+    if not re.match(r"^net\d+$", key):
+        return jsonify({"error": f"'{key}' is not a removable network interface key"}), 400
+
+    try:
+        if vm_type == "qemu":
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+        else:
+            config = proxmox.nodes(node).lxc(vmid).config.get()
+
+        if key not in config:
+            return jsonify({"error": f"Key '{key}' not found in guest config"}), 404
+
+        if vm_type == "qemu":
+            proxmox.nodes(node).qemu(vmid).config.put(delete=key)
+        else:
+            proxmox.nodes(node).lxc(vmid).config.put(delete=key)
+
+        return jsonify({"success": True, "message": f"Network interface {key} removed"})
+
+    except Exception as e:
+        return _proxmox_error_response(e)
 
 
 @app.route("/api/vm/<node>/<vmid>/iso/attach", methods=["POST"])

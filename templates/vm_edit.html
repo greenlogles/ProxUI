@@ -268,7 +268,12 @@
 
                     <!-- Disk Configuration -->
                     <div class="mb-4">
-                        <div class="sub-h" style="margin-top:0"><i class="bi bi-hdd"></i> Disk Configuration</div>
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div class="sub-h mb-0" style="margin-top:0"><i class="bi bi-hdd"></i> Disk Configuration</div>
+                            <button type="button" class="btn-x sm primary" id="addDiskBtn">
+                                <i class="bi bi-plus-circle"></i> Add Disk
+                            </button>
+                        </div>
 
                         <div id="diskInterfaces">
                             <!-- Disk interfaces will be loaded here -->
@@ -1261,6 +1266,7 @@
 const node = '{{ node }}';
 const vmid = '{{ vm.vmid }}';
 const vmType = '{{ vm_type|default("qemu") }}';
+const vmName = '{{ vm.name | e }}';
 
 // Shared VM config fetch. On page load several loaders each need the config;
 // deduping the concurrent burst into a single in-flight request avoids firing
@@ -1286,44 +1292,51 @@ function getVmConfig() {
 // Global functions for network management
 function addNetworkInterface() {
     const bridge = document.getElementById('newBridge').value;
-    const model = document.getElementById('newModel').value;
-    
+
     if (!bridge) {
         showNotification('Please select a network bridge', 'warning');
         return;
     }
-    
-    // Find next available interface number
-    fetch(`/api/vm/${node}/${vmid}/config`)
+
+    const payload = { bridge: bridge };
+
+    const vlanInput = document.getElementById('newVlan');
+    if (vlanInput && vlanInput.value) {
+        payload.vlan = parseInt(vlanInput.value);
+    }
+    const rateInput = document.getElementById('newRate');
+    if (rateInput && rateInput.value) {
+        payload.rate = parseFloat(rateInput.value);
+    }
+    const macInput = document.getElementById('newMac');
+    if (macInput && macInput.value.trim()) {
+        payload.mac = macInput.value.trim();
+    }
+    const firewallInput = document.getElementById('newFirewall');
+    if (firewallInput) {
+        payload.firewall = firewallInput.checked;
+    }
+
+    if (vmType === 'lxc') {
+        const nameInput = document.getElementById('newIfName');
+        if (nameInput && nameInput.value.trim()) {
+            payload.name = nameInput.value.trim();
+        }
+    } else {
+        payload.model = document.getElementById('newModel').value;
+    }
+
+    fetch(`/api/vm/${node}/${vmid}/netifs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
         .then(response => response.json())
-        .then(data => {
-            let nextId = 0;
-            while (data[`net${nextId}`]) {
-                nextId++;
-            }
-            
-            const newConfig = `${model},bridge=${bridge}`;
-            const updateData = {};
-            updateData[`net${nextId}`] = newConfig;
-            
-            return fetch(`/api/vm/${node}/${vmid}/config`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(updateData)
-            });
-        })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.json();
-        })
         .then(result => {
-            console.log('API Response:', result); // Debug log
             if (result.success) {
-                showNotification('Network interface added successfully', 'success');
+                showNotification(result.message || 'Network interface added', 'success');
                 loadNetworkInterfaces(); // Reload interface list
-                
+
                 // Close modal
                 const modal = bootstrap.Modal.getInstance(document.getElementById('addNetworkModal'));
                 if (modal) {
@@ -1340,18 +1353,12 @@ function addNetworkInterface() {
 }
 
 function removeNetworkInterface(interfaceKey) {
-    if (!confirm(`Are you sure you want to remove network interface ${interfaceKey}?`)) {
+    if (!confirm(`Remove network interface ${interfaceKey} from ${vmName}? This cannot be undone.`)) {
         return;
     }
-    
-    // Remove interface by setting it to empty string
-    const updateData = {};
-    updateData[interfaceKey] = '';
-    
-    fetch(`/api/vm/${node}/${vmid}/config`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updateData)
+
+    fetch(`/api/vm/${node}/${vmid}/netifs/${interfaceKey}`, {
+        method: 'DELETE'
     })
     .then(response => response.json())
     .then(result => {
@@ -1708,10 +1715,26 @@ function showAddNetworkModal() {
         return;
     }
     
-    const bridgeOptions = window.availableBridges.map(bridge => 
+    const bridgeOptions = window.availableBridges.map(bridge =>
         `<option value="${bridge.iface}">${bridge.iface}</option>`
     ).join('');
-    
+
+    const typeField = vmType === 'lxc' ? `
+        <div class="mb-3">
+            <label for="newIfName" class="form-label">Interface Name</label>
+            <input type="text" class="form-control" id="newIfName" placeholder="eth0 (auto if blank)">
+        </div>
+    ` : `
+        <div class="mb-3">
+            <label for="newModel" class="form-label">Network Model</label>
+            <select class="form-select" id="newModel">
+                <option value="virtio">VirtIO (Recommended)</option>
+                <option value="e1000">Intel E1000</option>
+                <option value="rtl8139">Realtek RTL8139</option>
+            </select>
+        </div>
+    `;
+
     const modalHtml = `
         <div class="modal fade" id="addNetworkModal" tabindex="-1">
             <div class="modal-dialog">
@@ -1728,13 +1751,26 @@ function showAddNetworkModal() {
                                 ${bridgeOptions}
                             </select>
                         </div>
+                        ${typeField}
+                        <div class="row">
+                            <div class="col-6 mb-3">
+                                <label for="newVlan" class="form-label">VLAN Tag</label>
+                                <input type="number" class="form-control" id="newVlan" min="1" max="4094" placeholder="none">
+                            </div>
+                            <div class="col-6 mb-3">
+                                <label for="newRate" class="form-label">Rate Limit (MB/s)</label>
+                                <input type="number" class="form-control" id="newRate" min="0" step="0.1" placeholder="unlimited">
+                            </div>
+                        </div>
                         <div class="mb-3">
-                            <label for="newModel" class="form-label">Network Model</label>
-                            <select class="form-select" id="newModel">
-                                <option value="virtio">VirtIO (Recommended)</option>
-                                <option value="e1000">Intel E1000</option>
-                                <option value="rtl8139">Realtek RTL8139</option>
-                            </select>
+                            <label for="newMac" class="form-label">MAC Address</label>
+                            <input type="text" class="form-control" id="newMac" placeholder="auto-generated if blank">
+                        </div>
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="newFirewall">
+                                <label class="form-check-label" for="newFirewall">Enable firewall</label>
+                            </div>
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -1924,10 +1960,17 @@ function createDiskInterfaceCard(disk) {
                            step="1">
                     <small class="text-muted">Can only expand</small>
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-2">
                     <button type="button" class="btn btn-sm btn-outline-primary" onclick="resizeDisk('${disk.key}')">
                         <i class="bi bi-arrows-expand"></i> Resize
                     </button>
+                </div>
+                <div class="col-md-1">
+                    ${disk.isRootfs ? '' : `
+                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeDisk('${disk.key}')">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                    `}
                 </div>
             </div>
         </div>
@@ -1976,6 +2019,205 @@ function resizeDisk(diskKey) {
     .catch(error => {
         console.error('Error resizing disk:', error);
         showNotification('Network error while resizing disk: ' + error.message, 'error');
+    });
+}
+
+function removeDisk(diskKey) {
+    if (!confirm(`Remove disk ${diskKey} from ${vmName}? The data on this volume will NOT be erased immediately — it is kept as an unused volume, but detaching it stops the guest from using it. This cannot be undone from this screen.`)) {
+        return;
+    }
+
+    fetch(`/api/vm/${node}/${vmid}/disks/${diskKey}`, {
+        method: 'DELETE'
+    })
+    .then(response => response.json())
+    .then(result => {
+        if (result.success) {
+            showNotification(result.message || `Disk ${diskKey} removed`, 'success');
+            loadDiskInterfaces();
+        } else {
+            showNotification(result.error || 'Failed to remove disk', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error removing disk:', error);
+        showNotification('Network error while removing disk: ' + error.message, 'error');
+    });
+}
+
+function showAddDiskModal() {
+    fetch(`/api/node/${node}/storages?vm_type=${vmType}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                showNotification('Error loading storages: ' + data.error, 'error');
+                return;
+            }
+            if (!data.length) {
+                showNotification('No suitable storage available on this node', 'warning');
+                return;
+            }
+
+            const storageOptions = data.map(s =>
+                `<option value="${s.storage}">${s.storage} (${s.available_gb} GB free)</option>`
+            ).join('');
+
+            const busField = vmType === 'lxc' ? `
+                <div class="mb-3">
+                    <label for="newDiskPath" class="form-label">Container Path</label>
+                    <input type="text" class="form-control" id="newDiskPath" placeholder="/mnt/data">
+                    <div class="form-text">Absolute path where the mount point appears inside the container.</div>
+                </div>
+            ` : `
+                <div class="mb-3">
+                    <label for="newDiskBus" class="form-label">Bus / Controller</label>
+                    <select class="form-select" id="newDiskBus">
+                        <option value="scsi">SCSI (Recommended)</option>
+                        <option value="virtio">VirtIO</option>
+                        <option value="sata">SATA</option>
+                        <option value="ide">IDE</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="newDiskDiscard">
+                        <label class="form-check-label" for="newDiskDiscard">Discard / TRIM</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="newDiskSsd">
+                        <label class="form-check-label" for="newDiskSsd">Emulate SSD</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="newDiskIothread">
+                        <label class="form-check-label" for="newDiskIothread">Use IO thread</label>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label for="newDiskCache" class="form-label">Cache Mode</label>
+                    <select class="form-select" id="newDiskCache">
+                        <option value="">Default (no cache)</option>
+                        <option value="writethrough">Write through</option>
+                        <option value="writeback">Write back</option>
+                        <option value="unsafe">Unsafe</option>
+                        <option value="directsync">Direct sync</option>
+                    </select>
+                </div>
+            `;
+
+            const modalHtml = `
+                <div class="modal fade" id="addDiskModal" tabindex="-1">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title">Add Disk</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="mb-3">
+                                    <label for="newDiskStorage" class="form-label">Storage</label>
+                                    <select class="form-select" id="newDiskStorage">
+                                        <option value="">Select storage...</option>
+                                        ${storageOptions}
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="newDiskSize" class="form-label">Size (GiB)</label>
+                                    <input type="number" class="form-control" id="newDiskSize" min="1" step="1" value="32">
+                                </div>
+                                ${busField}
+                                <div class="mb-3">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="newDiskBackup" checked>
+                                        <label class="form-check-label" for="newDiskBackup">Include in backups</label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <button type="button" class="btn btn-primary" id="addDiskSubmitBtn">Add Disk</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            const existingModal = document.getElementById('addDiskModal');
+            if (existingModal) {
+                existingModal.remove();
+            }
+
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+            const modal = new bootstrap.Modal(document.getElementById('addDiskModal'));
+            modal.show();
+
+            document.getElementById('addDiskSubmitBtn').addEventListener('click', addDisk);
+        })
+        .catch(error => {
+            console.error('Error loading storages:', error);
+            showNotification('Network error while loading storages', 'error');
+        });
+}
+
+function addDisk() {
+    const storage = document.getElementById('newDiskStorage').value;
+    const sizeGb = parseInt(document.getElementById('newDiskSize').value);
+
+    if (!storage) {
+        showNotification('Please select a storage', 'warning');
+        return;
+    }
+    if (!sizeGb || sizeGb <= 0) {
+        showNotification('Please enter a valid size', 'warning');
+        return;
+    }
+
+    const payload = {
+        storage: storage,
+        size_gb: sizeGb,
+        backup: document.getElementById('newDiskBackup').checked
+    };
+
+    if (vmType === 'lxc') {
+        const path = document.getElementById('newDiskPath').value.trim();
+        if (!path.startsWith('/')) {
+            showNotification('Container path must be absolute (start with /)', 'warning');
+            return;
+        }
+        payload.path = path;
+    } else {
+        payload.bus = document.getElementById('newDiskBus').value;
+        payload.discard = document.getElementById('newDiskDiscard').checked;
+        payload.ssd = document.getElementById('newDiskSsd').checked;
+        payload.iothread = document.getElementById('newDiskIothread').checked;
+        const cache = document.getElementById('newDiskCache').value;
+        if (cache) {
+            payload.cache = cache;
+        }
+    }
+
+    fetch(`/api/vm/${node}/${vmid}/disks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(response => response.json())
+    .then(result => {
+        if (result.success) {
+            showNotification(result.message || 'Disk added', 'success');
+            loadDiskInterfaces();
+
+            const modal = bootstrap.Modal.getInstance(document.getElementById('addDiskModal'));
+            if (modal) {
+                modal.hide();
+            }
+        } else {
+            showNotification(result.error || 'Failed to add disk', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error adding disk:', error);
+        showNotification('Network error while adding disk: ' + error.message, 'error');
     });
 }
 
@@ -2692,7 +2934,8 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('saveBtn').addEventListener('click', () => saveConfiguration(false));
     document.getElementById('saveCloseBtn').addEventListener('click', () => saveConfiguration(true));
     document.getElementById('addNetworkBtn').addEventListener('click', showAddNetworkModal);
-    
+    document.getElementById('addDiskBtn').addEventListener('click', showAddDiskModal);
+
     // Only add ISO button listener for QEMU VMs
     if (vmType === 'qemu') {
         document.getElementById('attachIsoBtn').addEventListener('click', showAttachIsoModal);
