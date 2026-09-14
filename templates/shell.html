@@ -173,6 +173,9 @@
                 <button class="btn btn-primary" x-cloak x-show="canRetry" @click="doReconnect()">
                     <i class="bi bi-arrow-clockwise"></i> Retry
                 </button>
+                <a class="btn btn-primary" x-cloak x-show="canOpenConsole" :href="consoleUrl">
+                    <i class="bi bi-display"></i> Open graphical console
+                </a>
             </div>
         </div>
     </div>
@@ -204,6 +207,8 @@
         }
 
         const ticketUrl = {{ ticket_url|tojson }};
+        // The node shell has no graphical counterpart, so this is null there.
+        const consoleUrl = {{ (console_url or none)|tojson }};
         const tokenAuth = {{ 'true' if token_auth else 'false' }};
         const tokenAuthMessage = {{ token_auth_message|tojson }};
         const encoder = new TextEncoder();
@@ -231,8 +236,8 @@
         // connect() starts before Alpine initialises, so the last state is kept
         // here for the toolbar to pick up in init() if it missed the event.
         let lastState = null;
-        function setState(state, text, overlay, retry) {
-            lastState = { state, text, overlay, retry };
+        function setState(state, text, overlay, retry, offerConsole) {
+            lastState = { state, text, overlay, retry, offerConsole };
             window.dispatchEvent(new CustomEvent('shell:state', { detail: lastState }));
         }
 
@@ -246,7 +251,11 @@
             });
             const data = await response.json().catch(() => ({}));
             if (!response.ok || !data.success) {
-                throw new Error(data.error || 'Failed to open a terminal session');
+                const error = new Error(data.error || 'Failed to open a terminal session');
+                // No serial port, or token auth: retrying cannot help, but the
+                // graphical console can still get the user in.
+                error.offerConsole = !!(data.no_serial || data.token_auth);
+                throw error;
             }
             return data;
         }
@@ -288,7 +297,7 @@
 
         async function connect() {
             if (tokenAuth) {
-                setState('disconnected', 'Unavailable', tokenAuthMessage, false);
+                setState('disconnected', 'Unavailable', tokenAuthMessage, false, !!consoleUrl);
                 return;
             }
 
@@ -301,7 +310,8 @@
                 await loadXterm();
                 session = await getSession();
             } catch (error) {
-                setState('disconnected', 'Failed', error.message, true);
+                const offerConsole = !!error.offerConsole && !!consoleUrl;
+                setState('disconnected', 'Failed', error.message, !error.offerConsole, offerConsole);
                 return;
             }
 
@@ -348,6 +358,8 @@
                 statusText: 'Connecting...',
                 overlayText: 'Opening terminal session...',
                 overlayVisible: true,
+                canOpenConsole: false,
+                consoleUrl,
                 canRetry: false,
 
                 apply(d) {
@@ -356,6 +368,7 @@
                     this.overlayVisible = !!d.overlay;
                     if (d.overlay) this.overlayText = d.overlay;
                     this.canRetry = !!d.retry;
+                    this.canOpenConsole = !!d.offerConsole;
                 },
 
                 init() {

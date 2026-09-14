@@ -7029,6 +7029,7 @@ def vm_shell(node, vmid):
         subtitle="Serial console" if vm_type == "qemu" else "Container console",
         ticket_url=url_for("api_vm_shell_ticket", node=node, vmid=vmid),
         back_url=url_for("vm_detail", node=node, vmid=vmid),
+        console_url=url_for("vm_console", node=node, vmid=vmid),
         token_auth=_shell_uses_token_auth(node),
         token_auth_message=SHELL_TOKEN_AUTH_MESSAGE,
     )

@@ -60,27 +60,70 @@
             </button>
         </form>
 
-        <!-- Console (QEMU and LXC) -->
+{% if vm_type == 'lxc' %}
+        {# A container's VNC console is the same shell drawn as a bitmap, so the
+           xterm one is the default and VNC is the escape hatch behind it. #}
+        <div class="btn-group">
+            <a href="{{ url_for('vm_shell', node=node, vmid=vmid) }}"
+               class="btn-x pri {{ 'disabled' if (status.status != 'running' or status.lock) else '' }}"
+               :class="{ 'disabled': !isRunning || busy }"
+               :aria-disabled="!isRunning || busy"
+               :tabindex="(isRunning && !busy) ? null : '-1'"
+               :title="isRunning ? '' : 'Container must be running'"
+               style="text-decoration:none">
+                <i class="bi bi-terminal"></i> Console
+            </a>
+            <button type="button"
+                    class="btn-x pri dropdown-toggle dropdown-toggle-split"
+                    data-bs-toggle="dropdown" aria-expanded="false"
+                    :class="{ 'disabled': !isRunning || busy }"
+                    :aria-disabled="!isRunning || busy"
+                    aria-label="More console options"></button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <li>
+                    <a class="dropdown-item d-flex align-items-center gap-2"
+                       href="{{ url_for('vm_console', node=node, vmid=vmid) }}">
+                        <i class="bi bi-display"></i>
+                        <span>
+                            Graphical console (VNC)
+                            <small class="d-block text-muted-2">Use if the terminal will not connect.</small>
+                        </span>
+                    </a>
+                </li>
+            </ul>
+        </div>
+{% else %}
+        {# For a VM the two are not substitutes: VNC is the framebuffer (BIOS,
+           bootloader, installer), the shell is the serial console and needs a
+           serial port plus a getty in the guest. #}
         <a href="{{ url_for('vm_console', node=node, vmid=vmid) }}"
            class="btn-x pri {{ 'disabled' if (status.status != 'running' or status.lock) else '' }}"
            :class="{ 'disabled': !isRunning || busy }"
            :aria-disabled="!isRunning || busy"
            :tabindex="(isRunning && !busy) ? null : '-1'"
-           :title="isRunning ? '' : '{{ 'VM' if vm_type == 'qemu' else 'Container' }} must be running'"
+           :title="isRunning ? '' : 'VM must be running'"
            style="text-decoration:none">
-            <i class="bi bi-terminal"></i> Console
+            <i class="bi bi-display"></i> Console
         </a>
 
-        <!-- Terminal: LXC console, or the QEMU serial console when configured -->
+        {% set has_serial = config.serial0 or config.serial1 or config.serial2 or config.serial3 %}
+        {% if has_serial %}
         <a href="{{ url_for('vm_shell', node=node, vmid=vmid) }}"
            class="btn-x {{ 'disabled' if (status.status != 'running' or status.lock) else '' }}"
            :class="{ 'disabled': !isRunning || busy }"
            :aria-disabled="!isRunning || busy"
            :tabindex="(isRunning && !busy) ? null : '-1'"
-           :title="isRunning ? '' : '{{ 'VM' if vm_type == 'qemu' else 'Container' }} must be running'"
+           :title="isRunning ? '' : 'VM must be running'"
            style="text-decoration:none">
-            <i class="bi bi-terminal-split"></i> Shell
+            <i class="bi bi-terminal-split"></i> Serial console
         </a>
+        {% else %}
+        <span class="btn-x disabled" aria-disabled="true" tabindex="-1"
+              title="This VM has no serial port. Add one (e.g. serial0: socket) and configure a getty inside the guest to use the serial console.">
+            <i class="bi bi-terminal-split"></i> Serial console
+        </span>
+        {% endif %}
+{% endif %}
 
         <!-- Migration -->
         <button type="button" class="btn-x {{ 'disabled' if migration_info else '' }}"
