@@ -3036,9 +3036,19 @@ def group_shared_storages(all_storages):
     return grouped_storages
 
 
-# Types ProxUI can add/edit/remove. pbs/zfs/lvm/ceph/etc need cluster-specific
-# setup (keyrings, pools, LUNs) that is out of scope for the homelab NAS case.
-_STORAGE_TYPES = ("nfs", "cifs", "dir")
+# Types ProxUI can add/edit/remove. iscsi/iscsidirect/btrfs/esxi and ZFS-over-
+# iSCSI are left out: they need target/LUN or vendor setup with no safe defaults.
+_STORAGE_TYPES = (
+    "nfs",
+    "cifs",
+    "dir",
+    "pbs",
+    "zfspool",
+    "lvm",
+    "lvmthin",
+    "rbd",
+    "cephfs",
+)
 _STORAGE_CONTENT_CHOICES = ("images", "rootdir", "vztmpl", "iso", "backup", "snippets")
 _STORAGE_ID_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 
@@ -3113,21 +3123,95 @@ def _storage_params(data, stype, creating):
             params["path"] = path
         params["mkdir"] = 1 if data.get("mkdir") else 0
         params["is_mountpoint"] = 1 if data.get("is_mountpoint") else 0
+    elif stype == "pbs":
+        if creating:
+            datastore = (data.get("datastore") or "").strip()
+            if not datastore:
+                raise ValueError("PBS datastore is required")
+            params["datastore"] = datastore
+        server = (data.get("server") or "").strip()
+        if creating and not server:
+            raise ValueError("PBS server is required")
+        if server:
+            params["server"] = server
+        for key in ("username", "fingerprint", "namespace"):
+            value = (data.get(key) or "").strip()
+            if value:
+                params[key] = value
+        password = data.get("password") or ""
+        if password:
+            params["password"] = password
+    elif stype == "zfspool":
+        # `pool` is accepted by PUT, but repointing a live storage at another
+        # pool orphans every volume on it, so it is only set at creation.
+        if creating:
+            pool = (data.get("pool") or "").strip()
+            if not pool:
+                raise ValueError("ZFS pool is required")
+            params["pool"] = pool
+        params["sparse"] = 1 if data.get("sparse") else 0
+        blocksize = (data.get("blocksize") or "").strip()
+        if blocksize:
+            params["blocksize"] = blocksize
+        mountpoint = (data.get("mountpoint") or "").strip()
+        if mountpoint:
+            params["mountpoint"] = mountpoint
+    elif stype in ("lvm", "lvmthin"):
+        if creating:
+            vgname = (data.get("vgname") or "").strip()
+            if not vgname:
+                raise ValueError("Volume group name is required")
+            params["vgname"] = vgname
+            if stype == "lvmthin":
+                thinpool = (data.get("thinpool") or "").strip()
+                if not thinpool:
+                    raise ValueError("Thin pool name is required")
+                params["thinpool"] = thinpool
+            else:
+                base = (data.get("base") or "").strip()
+                if base:
+                    params["base"] = base
+    elif stype == "rbd":
+        # An external Ceph cluster needs monhost/keyring; a hyperconverged one
+        # reads both from the node, so neither can be required here.
+        if creating:
+            pool = (data.get("pool") or "").strip()
+            if not pool:
+                raise ValueError("Ceph pool is required")
+            params["pool"] = pool
+        for key in ("monhost", "username", "namespace"):
+            value = (data.get(key) or "").strip()
+            if value:
+                params[key] = value
+        keyring = data.get("keyring") or ""
+        if keyring.strip():
+            params["keyring"] = keyring
+        params["krbd"] = 1 if data.get("krbd") else 0
+    elif stype == "cephfs":
+        for key in ("monhost", "username", "fs-name", "subdir"):
+            value = (data.get(key) or "").strip()
+            if value:
+                params[key] = value
+        keyring = data.get("keyring") or ""
+        if keyring.strip():
+            params["keyring"] = keyring
 
     return params
 
 
-def _storage_error_response(e, password=None):
-    """Like _proxmox_error_response, but keeps a CIFS password out of the log.
+def _storage_error_response(e, *secrets):
+    """Like _proxmox_error_response, but keeps storage credentials out of the log.
 
     ResourceException's message is built from the server's response body, not
-    the outgoing request, so the password should never appear here in
-    practice -- this just makes sure a future PVE error that echoes back a bad
-    field can't leak it.
+    the outgoing request, so a CIFS/PBS password or a Ceph keyring should never
+    appear here in practice -- this just makes sure a future PVE error that
+    echoes back a bad field can't leak one.
     """
     err = str(e)
-    if password:
-        err = err.replace(password, "***")
+    secrets = [str(v) for v in secrets if v]
+    if secrets:
+        for secret in secrets:
+            err = err.replace(secret, "***")
         print(f"Storage API error: {err}")
     else:
         traceback.print_exc()
@@ -3194,7 +3278,7 @@ def api_storage_create():
     try:
         proxmox.storage.post(storage=storage_id, type=stype, **params)
     except Exception as e:
-        return _storage_error_response(e, data.get("password"))
+        return _storage_error_response(e, data.get("password"), data.get("keyring"))
     return jsonify(
         {
             "success": True,
@@ -3231,7 +3315,7 @@ def api_storage_update(storage_id):
     try:
         proxmox.storage(storage_id).put(**params)
     except Exception as e:
-        return _storage_error_response(e, data.get("password"))
+        return _storage_error_response(e, data.get("password"), data.get("keyring"))
     return jsonify({"success": True, "message": f"Storage '{storage_id}' updated."})
 
 

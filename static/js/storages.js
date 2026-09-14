@@ -1,8 +1,16 @@
 import * as ProxUtils from "./utils.js";
 
-// Types ProxUI can add/edit/remove here. pbs/zfs/lvm/ceph/etc need
-// cluster-specific setup out of scope for the homelab NAS case.
-const CREATABLE_TYPES = ["nfs", "cifs", "dir"];
+// Types ProxUI can add/edit/remove here. iscsi/iscsidirect/btrfs/esxi and
+// ZFS-over-iSCSI are left out: they need target/LUN or vendor setup with no
+// safe defaults to offer.
+const CREATABLE_TYPES = ["nfs", "cifs", "dir", "pbs", "zfspool", "lvm", "lvmthin", "rbd", "cephfs"];
+
+const TYPE_LABELS = {
+  nfs: "NFS share", cifs: "SMB/CIFS share", dir: "Directory",
+  pbs: "Proxmox Backup Server", zfspool: "ZFS pool",
+  lvm: "LVM volume group", lvmthin: "LVM-thin pool",
+  rbd: "Ceph RBD", cephfs: "CephFS",
+};
 
 const CONTENT_LABELS = {
   images: "Disk images", rootdir: "Container volumes", vztmpl: "Templates",
@@ -10,17 +18,72 @@ const CONTENT_LABELS = {
 };
 const CONTENT_CHOICES = Object.keys(CONTENT_LABELS);
 
+// What PVE actually allows per type -- offering the rest just invites a
+// "content type not supported" rejection from the API.
+const TYPE_CONTENT = {
+  nfs: ["images", "rootdir", "vztmpl", "iso", "backup", "snippets"],
+  cifs: ["images", "rootdir", "vztmpl", "iso", "backup", "snippets"],
+  dir: ["images", "rootdir", "vztmpl", "iso", "backup", "snippets"],
+  pbs: ["backup"],
+  zfspool: ["images", "rootdir"],
+  lvm: ["images", "rootdir"],
+  lvmthin: ["images", "rootdir"],
+  rbd: ["images", "rootdir"],
+  cephfs: ["vztmpl", "iso", "backup", "snippets"],
+};
+
+const TYPE_DEFAULT_CONTENT = {
+  nfs: ["images", "rootdir", "iso", "backup"],
+  cifs: ["images", "rootdir", "iso", "backup"],
+  dir: ["images", "rootdir"],
+  pbs: ["backup"],
+  zfspool: ["images", "rootdir"],
+  lvm: ["images", "rootdir"],
+  lvmthin: ["images", "rootdir"],
+  rbd: ["images", "rootdir"],
+  cephfs: ["vztmpl", "iso", "backup"],
+};
+
+// Block/local types are node-local unless the cluster shares them; network and
+// Ceph types are shared by nature.
+const TYPE_DEFAULT_SHARED = {
+  nfs: true, cifs: true, pbs: true, rbd: true, cephfs: true,
+  dir: false, zfspool: false, lvm: false, lvmthin: false,
+};
+
+// One-line "where does this storage live" summary, shown read-only in the edit
+// form because none of these have a PUT parameter.
+const LOCATION_OF = {
+  nfs: s => `${s.server}:${s.export || ""}`,
+  cifs: s => `//${s.server}/${s.share || ""}`,
+  dir: s => s.path || "",
+  pbs: s => `${s.server}:${s.datastore || ""}${s.namespace ? " ns:" + s.namespace : ""}`,
+  zfspool: s => s.pool || "",
+  lvm: s => s.vgname || "",
+  lvmthin: s => `${s.vgname || ""}/${s.thinpool || ""}`,
+  rbd: s => `${s.pool || ""}${s.monhost ? " @ " + s.monhost : ""}`,
+  cephfs: s => `${s["fs-name"] || "cephfs"}${s.subdir ? s.subdir : ""}`,
+};
+
 function emptyForm(type = "nfs") {
   return {
     storage: "", type,
-    content: type === "dir" ? ["images", "rootdir"] : ["images", "rootdir", "iso", "backup"],
-    nodes: [], disable: false, shared: type !== "dir",
+    content: (TYPE_DEFAULT_CONTENT[type] || ["images", "rootdir"]).slice(),
+    nodes: [], disable: false, shared: !!TYPE_DEFAULT_SHARED[type],
     // nfs
     server: "", export: "", options: "",
     // cifs
     share: "", username: "", password: "", domain: "",
     // dir
     path: "", mkdir: true, is_mountpoint: false,
+    // pbs
+    datastore: "", fingerprint: "", namespace: "",
+    // zfspool
+    pool: "", sparse: true, blocksize: "", mountpoint: "",
+    // lvm / lvmthin
+    vgname: "", thinpool: "", base: "",
+    // rbd / cephfs
+    monhost: "", keyring: "", krbd: false, "fs-name": "", subdir: "",
   };
 }
 
@@ -55,6 +118,23 @@ export function storagesApp(initialStorages, nodeNames) {
     contentChoices: CONTENT_CHOICES,
     contentLabels: CONTENT_LABELS,
     creatableTypes: CREATABLE_TYPES,
+    typeLabels: TYPE_LABELS,
+
+    // Only the content types PVE accepts for the selected storage type.
+    get typeContentChoices() {
+      return TYPE_CONTENT[this.form.type] || CONTENT_CHOICES;
+    },
+
+    typeLabel(t) {
+      return TYPE_LABELS[t] || t;
+    },
+
+    // Switching type in the create form resets the type-specific defaults;
+    // anything already typed into a field of the old type is irrelevant.
+    onTypeChange() {
+      const keep = this.form.storage;
+      this.form = { ...emptyForm(this.form.type), storage: keep };
+    },
 
     get visible() {
       const q = this.search.trim().toLowerCase();
@@ -136,10 +216,16 @@ export function storagesApp(initialStorages, nodeNames) {
         username: s.username || "", password: "", domain: s.domain || "",
         mkdir: s.mkdir === undefined ? true : !!s.mkdir,
         is_mountpoint: !!s.is_mountpoint,
+        datastore: s.datastore || "", fingerprint: s.fingerprint || "",
+        namespace: s.namespace || "",
+        pool: s.pool || "", sparse: !!s.sparse,
+        blocksize: s.blocksize || "", mountpoint: s.mountpoint || "",
+        vgname: s.vgname || "", thinpool: s.thinpool || "", base: s.base || "",
+        // PVE never returns a stored keyring, so this is always a fresh entry.
+        monhost: s.monhost || "", keyring: "", krbd: !!s.krbd,
+        "fs-name": s["fs-name"] || "", subdir: s.subdir || "",
       };
-      this.formLocation = s.type === "nfs" ? `${s.server}:${s.export || ""}`
-        : s.type === "cifs" ? `//${s.server}/${s.share || ""}`
-        : (s.path || "");
+      this.formLocation = LOCATION_OF[s.type] ? LOCATION_OF[s.type](s) : (s.path || "");
       this._modal("storageModal").show();
     },
 
@@ -216,6 +302,39 @@ export function storagesApp(initialStorages, nodeNames) {
         body.mkdir = f.mkdir;
         body.is_mountpoint = f.is_mountpoint;
         if (this.creating) body.path = f.path;
+      } else if (f.type === "pbs") {
+        body.server = f.server;
+        body.username = f.username;
+        if (f.password) body.password = f.password;
+        body.fingerprint = f.fingerprint;
+        body.namespace = f.namespace;
+        if (this.creating) body.datastore = f.datastore;
+      } else if (f.type === "zfspool") {
+        body.sparse = f.sparse;
+        body.blocksize = f.blocksize;
+        body.mountpoint = f.mountpoint;
+        if (this.creating) body.pool = f.pool;
+      } else if (f.type === "lvm" || f.type === "lvmthin") {
+        // vgname/thinpool/base have no PUT parameter -- the volume group a
+        // storage points at is fixed once it exists.
+        if (this.creating) {
+          body.vgname = f.vgname;
+          if (f.type === "lvmthin") body.thinpool = f.thinpool;
+          else body.base = f.base;
+        }
+      } else if (f.type === "rbd") {
+        body.monhost = f.monhost;
+        body.username = f.username;
+        body.namespace = f.namespace;
+        if (f.keyring) body.keyring = f.keyring;
+        body.krbd = f.krbd;
+        if (this.creating) body.pool = f.pool;
+      } else if (f.type === "cephfs") {
+        body.monhost = f.monhost;
+        body.username = f.username;
+        body["fs-name"] = f["fs-name"];
+        body.subdir = f.subdir;
+        if (f.keyring) body.keyring = f.keyring;
       }
       if (this.creating) {
         body.storage = f.storage;

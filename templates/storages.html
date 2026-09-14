@@ -93,8 +93,8 @@
                         <div class="col-12 col-md-4" x-show="creating">
                             <div class="field">
                                 <label>Type</label>
-                                <select class="inp" x-model="form.type" @change="form = { ...emptyFormFor(form.type), storage: form.storage }">
-                                    <template x-for="t in creatableTypes" :key="t"><option :value="t" x-text="t.toUpperCase()"></option></template>
+                                <select class="inp" x-model="form.type" @change="onTypeChange()">
+                                    <template x-for="t in creatableTypes" :key="t"><option :value="t" x-text="typeLabel(t)"></option></template>
                                 </select>
                             </div>
                         </div>
@@ -252,13 +252,176 @@
                             </div>
                         </template>
 
+                        <template x-if="form.type === 'pbs'">
+                            <div class="col-12">
+                                <div class="row g-3">
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Server</label>
+                                            <input type="text" class="inp mono" x-model="form.server" placeholder="pbs.lan">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="creating">
+                                        <div class="field">
+                                            <label>Datastore</label>
+                                            <input type="text" class="inp mono" x-model="form.datastore" placeholder="backup-store">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Username</label>
+                                            <input type="text" class="inp mono" x-model="form.username" placeholder="root@pam">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Password / API token secret</label>
+                                            <input type="password" class="inp" x-model="form.password" autocomplete="new-password">
+                                            <div class="hint" x-show="!creating">Leave empty to keep the stored one.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-8">
+                                        <div class="field">
+                                            <label>Fingerprint (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.fingerprint" placeholder="AA:BB:CC:...">
+                                            <div class="hint">Required when the PBS certificate is self-signed.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-4">
+                                        <div class="field">
+                                            <label>Namespace (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.namespace">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <template x-if="form.type === 'zfspool'">
+                            <div class="col-12">
+                                <div class="row g-3">
+                                    <div class="col-12 col-md-6" x-show="creating">
+                                        <div class="field">
+                                            <label>ZFS pool</label>
+                                            <input type="text" class="inp mono" x-model="form.pool" placeholder="rpool/data">
+                                            <div class="hint">The pool or dataset must already exist on the node.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Block size (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.blocksize" placeholder="8k">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Mount point (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.mountpoint">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label class="d-flex align-items-center gap-2" style="font-size:12.5px">
+                                                <input type="checkbox" x-model="form.sparse"> Use sparse volumes (thin provisioning)
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <template x-if="form.type === 'lvm' || form.type === 'lvmthin'">
+                            <div class="col-12">
+                                <div class="row g-3">
+                                    <div class="col-12" x-show="!creating">
+                                        <div class="field">
+                                            <div class="hint">The volume group and thin pool are fixed at creation; only the settings below can be changed.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="creating">
+                                        <div class="field">
+                                            <label>Volume group</label>
+                                            <input type="text" class="inp mono" x-model="form.vgname" placeholder="pve">
+                                            <div class="hint">The volume group must already exist on the node.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="creating && form.type === 'lvmthin'">
+                                        <div class="field">
+                                            <label>Thin pool</label>
+                                            <input type="text" class="inp mono" x-model="form.thinpool" placeholder="data">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="creating && form.type === 'lvm'">
+                                        <div class="field">
+                                            <label>Base volume (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.base">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <template x-if="form.type === 'rbd' || form.type === 'cephfs'">
+                            <div class="col-12">
+                                <div class="row g-3">
+                                    <div class="col-12">
+                                        <div class="hint">Leave monitors and keyring empty for a hyperconverged Proxmox Ceph cluster &mdash; the node supplies both. Fill them in only for an external cluster.</div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="creating && form.type === 'rbd'">
+                                        <div class="field">
+                                            <label>Ceph pool</label>
+                                            <input type="text" class="inp mono" x-model="form.pool" placeholder="rbd">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="form.type === 'cephfs'">
+                                        <div class="field">
+                                            <label>Ceph filesystem name (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form['fs-name']" placeholder="cephfs">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="form.type === 'cephfs'">
+                                        <div class="field">
+                                            <label>Subdirectory (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.subdir" placeholder="/">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Monitor hosts (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.monhost" placeholder="10.0.0.1,10.0.0.2">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Ceph user (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.username" placeholder="admin">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="form.type === 'rbd'">
+                                        <div class="field">
+                                            <label class="d-flex align-items-center gap-2" style="font-size:12.5px">
+                                                <input type="checkbox" x-model="form.krbd"> Always access through the krbd kernel module
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="col-12">
+                                        <div class="field">
+                                            <label>Keyring (optional)</label>
+                                            <textarea class="inp mono" rows="3" x-model="form.keyring" placeholder="[client.admin]&#10;        key = ..."></textarea>
+                                            <div class="hint">Stored by Proxmox and never shown again. Leave empty to keep the existing one.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
                         <div class="col-12"><div class="divider"></div></div>
 
                         <div class="col-12">
                             <div class="field">
                                 <label>Content</label>
                                 <div class="nic-pick">
-                                    <template x-for="c in contentChoices" :key="c">
+                                    <template x-for="c in typeContentChoices" :key="c">
                                         <button type="button" :class="form.content.includes(c) && 'on'" @click="toggleContent(c)">
                                             <span x-text="contentLabels[c]"></span>
                                         </button>

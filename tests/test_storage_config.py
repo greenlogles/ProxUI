@@ -252,15 +252,122 @@ class TestStorageConfig(unittest.TestCase):
         self.assertEqual(kwargs["content"], "backup,iso")
 
     def test_update_unsupported_type_rejected(self):
+        # iscsi needs target/LUN setup ProxUI does not model, so it stays
+        # read-only here even though PVE itself accepts the type.
         self.mock_connection.storage.return_value.get.return_value = {
-            "storage": "cephstore",
-            "type": "rbd",
+            "storage": "sanstore",
+            "type": "iscsi",
         }
         response = self.client.put(
-            "/api/storages/cephstore", json={"content": ["images"]}
+            "/api/storages/sanstore", json={"content": ["images"]}
         )
         self.assertEqual(response.status_code, 400)
         self.mock_connection.storage.return_value.put.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Block, Ceph and PBS types
+
+    def test_create_pbs_requires_datastore(self):
+        response = self.client.post(
+            "/api/storages",
+            json={"storage": "pbs1", "type": "pbs", "server": "pbs.lan",
+                  "content": ["backup"]},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("datastore", json.loads(response.data)["error"].lower())
+        self.mock_connection.storage.post.assert_not_called()
+
+    def test_create_pbs_success(self):
+        response = self.client.post(
+            "/api/storages",
+            json={"storage": "pbs1", "type": "pbs", "server": "pbs.lan",
+                  "datastore": "store1", "username": "root@pam",
+                  "password": "sec", "fingerprint": "AA:BB",
+                  "content": ["backup"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        kwargs = self.mock_connection.storage.post.call_args.kwargs
+        self.assertEqual(kwargs["type"], "pbs")
+        self.assertEqual(kwargs["datastore"], "store1")
+        self.assertEqual(kwargs["fingerprint"], "AA:BB")
+
+    def test_create_zfspool_requires_pool(self):
+        response = self.client.post(
+            "/api/storages",
+            json={"storage": "zfs1", "type": "zfspool", "content": ["images"]},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("pool", json.loads(response.data)["error"].lower())
+
+    def test_create_lvmthin_requires_thinpool(self):
+        response = self.client.post(
+            "/api/storages",
+            json={"storage": "thin1", "type": "lvmthin", "vgname": "pve",
+                  "content": ["images"]},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("thin pool", json.loads(response.data)["error"].lower())
+
+    def test_create_lvmthin_success(self):
+        response = self.client.post(
+            "/api/storages",
+            json={"storage": "thin1", "type": "lvmthin", "vgname": "pve",
+                  "thinpool": "data", "content": ["images", "rootdir"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        kwargs = self.mock_connection.storage.post.call_args.kwargs
+        self.assertEqual(kwargs["vgname"], "pve")
+        self.assertEqual(kwargs["thinpool"], "data")
+
+    def test_create_rbd_allows_hyperconverged_without_monhost(self):
+        # A Proxmox-managed Ceph cluster supplies monhost/keyring itself.
+        response = self.client.post(
+            "/api/storages",
+            json={"storage": "ceph1", "type": "rbd", "pool": "rbd",
+                  "content": ["images"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        kwargs = self.mock_connection.storage.post.call_args.kwargs
+        self.assertEqual(kwargs["pool"], "rbd")
+        self.assertNotIn("monhost", kwargs)
+        self.assertNotIn("keyring", kwargs)
+
+    def test_update_lvmthin_does_not_send_create_only_keys(self):
+        self.mock_connection.storage.return_value.get.return_value = {
+            "storage": "thin1", "type": "lvmthin",
+        }
+        response = self.client.put(
+            "/api/storages/thin1",
+            json={"vgname": "other", "thinpool": "other", "content": ["images"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        kwargs = self.mock_connection.storage.return_value.put.call_args.kwargs
+        for key in ("vgname", "thinpool", "type", "storage"):
+            self.assertNotIn(key, kwargs)
+
+    def test_update_zfspool_does_not_repoint_the_pool(self):
+        self.mock_connection.storage.return_value.get.return_value = {
+            "storage": "zfs1", "type": "zfspool",
+        }
+        response = self.client.put(
+            "/api/storages/zfs1",
+            json={"pool": "other", "content": ["images"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        kwargs = self.mock_connection.storage.return_value.put.call_args.kwargs
+        self.assertNotIn("pool", kwargs)
+
+    def test_keyring_is_not_echoed_in_an_error(self):
+        secret = "[client.admin] key = SUPERSECRET"
+        self.mock_connection.storage.post.side_effect = Exception(
+            f"400 Bad Request: bad value '{secret}' for keyring"
+        )
+        response = self.client.post(
+            "/api/storages",
+            json={"storage": "ceph1", "type": "rbd", "pool": "rbd",
+                  "keyring": secret, "content": ["images"]},
+        )
+        self.assertNotIn("SUPERSECRET", response.get_data(as_text=True))
 
     # ------------------------------------------------------------------
     # Delete: destructive confirmation
