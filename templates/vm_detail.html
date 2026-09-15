@@ -60,16 +60,70 @@
             </button>
         </form>
 
-        <!-- Console (QEMU and LXC) -->
+{% if vm_type == 'lxc' %}
+        {# A container's VNC console is the same shell drawn as a bitmap, so the
+           xterm one is the default and VNC is the escape hatch behind it. #}
+        <div class="btn-group">
+            <a href="{{ url_for('vm_shell', node=node, vmid=vmid) }}"
+               class="btn-x pri {{ 'disabled' if (status.status != 'running' or status.lock) else '' }}"
+               :class="{ 'disabled': !isRunning || busy }"
+               :aria-disabled="!isRunning || busy"
+               :tabindex="(isRunning && !busy) ? null : '-1'"
+               :title="isRunning ? '' : 'Container must be running'"
+               style="text-decoration:none">
+                <i class="bi bi-terminal"></i> Console
+            </a>
+            <button type="button"
+                    class="btn-x pri dropdown-toggle dropdown-toggle-split"
+                    data-bs-toggle="dropdown" aria-expanded="false"
+                    :class="{ 'disabled': !isRunning || busy }"
+                    :aria-disabled="!isRunning || busy"
+                    aria-label="More console options"></button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <li>
+                    <a class="dropdown-item d-flex align-items-center gap-2"
+                       href="{{ url_for('vm_console', node=node, vmid=vmid) }}">
+                        <i class="bi bi-display"></i>
+                        <span>
+                            Graphical console (VNC)
+                            <small class="d-block text-muted-2">Use if the terminal will not connect.</small>
+                        </span>
+                    </a>
+                </li>
+            </ul>
+        </div>
+{% else %}
+        {# For a VM the two are not substitutes: VNC is the framebuffer (BIOS,
+           bootloader, installer), the shell is the serial console and needs a
+           serial port plus a getty in the guest. #}
         <a href="{{ url_for('vm_console', node=node, vmid=vmid) }}"
            class="btn-x pri {{ 'disabled' if (status.status != 'running' or status.lock) else '' }}"
            :class="{ 'disabled': !isRunning || busy }"
            :aria-disabled="!isRunning || busy"
            :tabindex="(isRunning && !busy) ? null : '-1'"
-           :title="isRunning ? '' : '{{ 'VM' if vm_type == 'qemu' else 'Container' }} must be running'"
+           :title="isRunning ? '' : 'VM must be running'"
            style="text-decoration:none">
-            <i class="bi bi-terminal"></i> Console
+            <i class="bi bi-display"></i> Console
         </a>
+
+        {% set has_serial = config.serial0 or config.serial1 or config.serial2 or config.serial3 %}
+        {% if has_serial %}
+        <a href="{{ url_for('vm_shell', node=node, vmid=vmid) }}"
+           class="btn-x {{ 'disabled' if (status.status != 'running' or status.lock) else '' }}"
+           :class="{ 'disabled': !isRunning || busy }"
+           :aria-disabled="!isRunning || busy"
+           :tabindex="(isRunning && !busy) ? null : '-1'"
+           :title="isRunning ? '' : 'VM must be running'"
+           style="text-decoration:none">
+            <i class="bi bi-terminal-split"></i> Serial console
+        </a>
+        {% else %}
+        <span class="btn-x disabled" aria-disabled="true" tabindex="-1"
+              title="This VM has no serial port. Add one (e.g. serial0: socket) and configure a getty inside the guest to use the serial console.">
+            <i class="bi bi-terminal-split"></i> Serial console
+        </span>
+        {% endif %}
+{% endif %}
 
         <!-- Migration -->
         <button type="button" class="btn-x {{ 'disabled' if migration_info else '' }}"
@@ -499,6 +553,155 @@
     </div>
 </div>
 
+<!-- Snapshots -->
+<div class="card-x mt-3" x-data="vmSnapshots('{{ node }}', '{{ vmid }}', '{{ vm_type }}')" x-cloak>
+    <div class="cx-head">
+        <i class="bi bi-camera" style="color:var(--accent)"></i><span class="cx-title">Snapshots</span>
+        <button class="icon-btn ms-auto" style="width:28px;height:28px;font-size:13px" @click="load()" :disabled="loading" title="Refresh Snapshots">
+            <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
+        </button>
+        <button class="btn-x sm primary" @click="openCreate()" :disabled="busy">
+            <i class="bi bi-plus-lg"></i> Take Snapshot
+        </button>
+    </div>
+    <div class="cx-body tight">
+        <template x-if="loading && snapshots.length === 0">
+            <div class="text-center p-4"><div class="spinner-border spinner-border-sm" role="status"></div> Loading snapshots…</div>
+        </template>
+        <template x-if="error">
+            <div class="text-danger p-4"><i class="bi bi-exclamation-triangle"></i> <span x-text="error"></span></div>
+        </template>
+        <template x-if="!loading && !error && snapshots.length === 0">
+            <div class="empty-hint"><i class="bi bi-camera"></i><p class="mb-0">No snapshots yet</p></div>
+        </template>
+        <div style="overflow-x:auto" x-show="snapshots.length > 0">
+            <table class="tbl">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Description</th>
+                        <th>Created</th>
+                        <th>Parent</th>
+                        <th style="text-align:right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="s in snapshots" :key="s.name">
+                        <tr>
+                            <td>
+                                <span class="nm mono" x-text="s.name"></span>
+                                <template x-if="s.vmstate">
+                                    <span class="tag ms-1" title="Includes guest RAM">RAM</span>
+                                </template>
+                            </td>
+                            <td class="text-faint" style="font-size:12px" x-text="s.description || '—'"></td>
+                            <td class="text-faint mono" style="font-size:11.5px" x-text="fmtDate(s.snaptime)"></td>
+                            <td class="text-faint mono" style="font-size:11.5px" x-text="s.parent || '—'"></td>
+                            <td style="text-align:right;white-space:nowrap">
+                                <button class="btn-x sm" @click="ask('rollback', s)" :disabled="busy" title="Roll back to this snapshot">
+                                    <i class="bi bi-arrow-counterclockwise"></i> Rollback
+                                </button>
+                                <button class="btn-x sm danger" @click="ask('delete', s)" :disabled="busy" title="Delete this snapshot">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </td>
+                        </tr>
+                    </template>
+                    <template x-if="current">
+                        <tr>
+                            <td class="mono text-faint">NOW</td>
+                            <td class="text-faint" style="font-size:12px">Current running state</td>
+                            <td class="text-faint">—</td>
+                            <td class="text-faint mono" style="font-size:11.5px" x-text="current.parent || '—'"></td>
+                            <td></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Create Snapshot Modal -->
+    <div class="modal fade" tabindex="-1" x-ref="createModal">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-camera"></i> Take snapshot of {{ vmid }}</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="field">
+                        <label>Name</label>
+                        <input type="text" class="inp" x-model="createForm.name" maxlength="40"
+                               :class="nameError && 'is-invalid'" placeholder="before-upgrade">
+                        <div class="hint" x-show="nameError" x-text="nameError" style="color:var(--danger)"></div>
+                        <div class="hint" x-show="!nameError">2-40 characters, starting with a letter.</div>
+                    </div>
+                    <div class="field">
+                        <label>Description <span class="text-faint">(optional)</span></label>
+                        <textarea class="inp" rows="2" x-model="createForm.description"></textarea>
+                    </div>
+                    {% if vm_type == 'qemu' %}
+                    <div class="field">
+                        <label class="d-flex align-items-center gap-2" style="cursor:pointer">
+                            <input type="checkbox" x-model="createForm.vmstate"> Include RAM (vmstate)
+                        </label>
+                        <div class="hint">Saves the guest's memory so the rollback resumes exactly where it left off. Takes longer and uses extra storage.</div>
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-x primary" @click="submitCreate()" :disabled="!canCreate">
+                        <i class="bi bi-camera"></i> Take snapshot
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Rollback / Delete confirmation -->
+    <div class="modal fade" tabindex="-1" x-ref="confirmModal">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title text-danger"><i class="bi bi-exclamation-triangle"></i> <span x-text="confirmTitle"></span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <template x-if="pending.action === 'rollback'">
+                        <div>
+                            <p>Roll {{ 'container' if vm_type == 'lxc' else 'VM' }} {{ vmid }} back to snapshot
+                               <strong class="mono" x-text="pending.name"></strong>?</p>
+                            <p class="text-faint" style="font-size:12.5px">
+                                Every change made since that snapshot is discarded, and the guest is stopped for the rollback.
+                            </p>
+                            <label class="d-flex align-items-center gap-2" style="cursor:pointer">
+                                <input type="checkbox" x-model="pending.start"> Start afterwards
+                            </label>
+                        </div>
+                    </template>
+                    <template x-if="pending.action === 'delete'">
+                        <div>
+                            <p>Permanently delete snapshot <strong class="mono" x-text="pending.name"></strong>
+                               of {{ 'container' if vm_type == 'lxc' else 'VM' }} {{ vmid }}?</p>
+                            <p class="text-faint" style="font-size:12.5px">This cannot be undone.</p>
+                        </div>
+                    </template>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-x primary" style="background:var(--danger);border-color:var(--danger)"
+                            @click="runPending()" :disabled="busy">
+                        <span x-text="pending.action === 'rollback' ? 'Roll back' : 'Delete'"></span>
+                        <span class="mono" x-text="pending.name"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Migration Modal -->
 <div class="modal fade" id="migrateModal" tabindex="-1" x-data="migrateStorages('{{ node }}', '{{ vmid }}', '{{ vm_type }}')">
     <div class="modal-dialog">
@@ -659,6 +862,7 @@
 {% block scripts %}
 <script type="module">
 import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
+import { vmSnapshots } from "{{ url_for('static', filename='js/snapshots.js') }}";
 window.ProxUtils = ProxUtils;
 
 const ALLOWED_STATUS = new Set(['primary','secondary','success','danger','warning','info','dark']);
@@ -1032,6 +1236,7 @@ function register() {
   window.Alpine.data('vmDelete', vmDelete);
   window.Alpine.data('vmStatus', vmStatus);
   window.Alpine.data('migrateStorages', migrateStorages);
+  window.Alpine.data('vmSnapshots', vmSnapshots);
   {% if vm_type == 'lxc' %}
   window.Alpine.data('lxcSummary', lxcSummary);
   {% endif %}

@@ -3,66 +3,515 @@
 {% block title %}Storage - Proxmox Manager{% endblock %}
 
 {% block content %}
-<div class="mb-3">
-    <div class="sec-title">Storage</div>
-    <div class="sec-sub">{{ storages|length }} storages across the cluster</div>
-</div>
-
-<div class="card-x">
-    <div class="cx-head"><i class="bi bi-hdd" style="color:var(--accent)"></i><span class="cx-title">Storage Overview</span></div>
-    <div class="cx-body flush tbl-scroll">
-        <table class="tbl">
-            <thead><tr><th>Storage</th><th>Nodes</th><th>Type</th><th>Shared</th><th>Status</th><th style="width:230px">Usage</th></tr></thead>
-            <tbody>
-                {% for storage in storages %}
-                <tr>
-                    <td>
-                        <span class="nm">{{ storage.storage }}</span>
-                        {% if storage.content %}<div class="text-faint" style="font-size:11px">{{ storage.content }}</div>{% endif %}
-                    </td>
-                    <td class="text-muted-2">
-                        {% if storage.nodes and storage.nodes|length > 1 %}
-                        {{ storage.nodes|length }} nodes
-                        <div class="text-faint" style="font-size:11px">{{ storage.nodes|join(', ') }}</div>
-                        {% elif storage.nodes %}
-                        {{ storage.nodes[0] }}
-                        {% else %}
-                        {{ storage.node }}
-                        {% endif %}
-                    </td>
-                    <td><span class="type-chip">{{ storage.type }}</span></td>
-                    <td>
-                        {% if storage.shared %}
-                        <i class="bi bi-check-circle-fill" style="color:var(--ok)"></i>
-                        {% else %}
-                        <i class="bi bi-dash" style="color:var(--text-faint)"></i>
-                        {% endif %}
-                    </td>
-                    <td>
-                        {% if storage.is_active or storage.enabled or (storage.status == 'available') %}
-                        <span class="pill ok"><span class="d"></span>Active</span>
-                        {% else %}
-                        <span class="pill err"><span class="d"></span>Inactive</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        {% if storage.maxdisk %}
-                        <div class="usage-cell">
-                            <div class="ubar" style="flex:1"><i class="{{ 'crit' if storage.used_percent > 80 else 'hot' if storage.used_percent > 60 else 'okc' }}" style="width:{{ storage.used_percent }}%"></i></div>
-                            <span class="pct">{{ "%.0f"|format(storage.used_percent) }}%</span>
-                        </div>
-                        <div class="text-faint mono" style="font-size:10.5px">{{ storage.disk|humanize_bytes }} / {{ storage.maxdisk|humanize_bytes }}</div>
-                        {% else %}
-                        <span class="text-faint">N/A</span>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% if not storages %}
-        <div class="empty-hint"><i class="bi bi-inbox" style="font-size:26px"></i><div class="mt-2">No storages found.</div></div>
-        {% endif %}
+<div class="mb-3 d-flex align-items-end justify-content-between flex-wrap gap-2">
+    <div>
+        <div class="sec-title">Storage</div>
+        <div class="sec-sub">{{ storages|length }} storages across the cluster</div>
     </div>
 </div>
+
+<div x-data="storagesApp({{ storages|tojson|forceescape }}, {{ node_names|tojson|forceescape }})">
+
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+        <input type="text" class="inp" style="max-width:240px" placeholder="Search storages…" x-model="search">
+        <button class="btn-x sm primary ms-auto" @click="newStorage()">
+            <i class="bi bi-plus-lg"></i> Add storage
+        </button>
+    </div>
+
+    <div class="card-x">
+        <div class="cx-head"><i class="bi bi-hdd" style="color:var(--accent)"></i><span class="cx-title">Storage Overview</span></div>
+        <div class="cx-body flush tbl-scroll">
+            <table class="tbl">
+                <thead><tr><th>Storage</th><th>Nodes</th><th>Type</th><th>Shared</th><th>Status</th><th style="width:210px">Usage</th><th style="width:90px"></th></tr></thead>
+                <tbody>
+                    <template x-for="storage in visible" :key="rowKey(storage)">
+                    <tr>
+                        <td>
+                            <span class="nm" x-text="storage.storage"></span>
+                            <div class="text-faint" style="font-size:11px" x-show="storage.content" x-text="storage.content"></div>
+                        </td>
+                        <td class="text-muted-2">
+                            <template x-if="storage.nodes && storage.nodes.length > 1">
+                                <span><span x-text="storage.nodes.length"></span> nodes
+                                    <div class="text-faint" style="font-size:11px" x-text="storage.nodes.join(', ')"></div>
+                                </span>
+                            </template>
+                            <template x-if="storage.nodes && storage.nodes.length === 1"><span x-text="storage.nodes[0]"></span></template>
+                            <template x-if="!storage.nodes"><span x-text="storage.node"></span></template>
+                        </td>
+                        <td><span class="type-chip" x-text="pluginType(storage)"></span></td>
+                        <td>
+                            <i class="bi bi-check-circle-fill" style="color:var(--ok)" x-show="storage.shared"></i>
+                            <i class="bi bi-dash" style="color:var(--text-faint)" x-show="!storage.shared"></i>
+                        </td>
+                        <td>
+                            <span class="pill ok" x-show="storage.is_active || storage.enabled || storage.status === 'available'"><span class="d"></span>Active</span>
+                            <span class="pill err" x-show="!(storage.is_active || storage.enabled || storage.status === 'available')"><span class="d"></span>Inactive</span>
+                        </td>
+                        <td>
+                            <template x-if="storage.maxdisk">
+                                <div>
+                                    <div class="usage-cell">
+                                        <div class="ubar" style="flex:1"><i :class="storage.used_percent > 80 ? 'crit' : storage.used_percent > 60 ? 'hot' : 'okc'" :style="'width:' + storage.used_percent + '%'"></i></div>
+                                        <span class="pct" x-text="Math.round(storage.used_percent) + '%'"></span>
+                                    </div>
+                                    <div class="text-faint mono" style="font-size:10.5px" x-text="humanizeBytes(storage.disk) + ' / ' + humanizeBytes(storage.maxdisk)"></div>
+                                </div>
+                            </template>
+                            <span class="text-faint" x-show="!storage.maxdisk">N/A</span>
+                        </td>
+                        <td class="text-end">
+                            <template x-if="editable(storage)">
+                                <div class="d-flex gap-1 justify-content-end">
+                                    <button class="btn-x sm ghost" title="Edit" @click="editStorage(storage)"><i class="bi bi-pencil"></i></button>
+                                    <button class="btn-x sm ghost danger" title="Remove" @click="confirmRemove(storage)"><i class="bi bi-trash"></i></button>
+                                </div>
+                            </template>
+                        </td>
+                    </tr>
+                    </template>
+                </tbody>
+            </table>
+            <div class="empty-hint" x-show="!storages.length"><i class="bi bi-inbox" style="font-size:26px"></i><div class="mt-2">No storages found.</div></div>
+        </div>
+    </div>
+
+    <!-- ==================== STORAGE EDITOR ==================== -->
+    <div class="modal fade" tabindex="-1" x-ref="storageModal">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-hdd-network"></i>
+                        <span x-text="creating ? 'Add storage' : 'Edit ' + form.storage"></span>
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-12 col-md-4" x-show="creating">
+                            <div class="field">
+                                <label>Type</label>
+                                <select class="inp" x-model="form.type" @change="onTypeChange()">
+                                    <template x-for="t in creatableTypes" :key="t"><option :value="t" x-text="typeLabel(t)"></option></template>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-8" x-show="creating">
+                            <div class="field">
+                                <label>Storage ID</label>
+                                <input type="text" class="inp mono" x-model="form.storage" placeholder="my-nas">
+                                <div class="hint">Letters, digits, '_' or '-'; cannot be changed later.</div>
+                            </div>
+                        </div>
+
+                        <div class="col-12" x-show="!creating">
+                            <div class="field">
+                                <label>Location</label>
+                                <div class="mono" style="font-size:12.5px" x-text="formLocation"></div>
+                                <div class="hint">The storage type and location are set at creation and cannot be changed.</div>
+                            </div>
+                        </div>
+
+                        <!-- NFS -->
+                        <template x-if="form.type === 'nfs'">
+                            <div class="col-12">
+                                <div class="row g-3">
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Server</label>
+                                            <input type="text" class="inp mono" x-model="form.server" placeholder="192.168.1.50">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="creating">
+                                        <div class="field">
+                                            <label>Export</label>
+                                            <input type="text" class="inp mono" x-model="form.export" placeholder="/mnt/tank/data">
+                                        </div>
+                                    </div>
+                                    <div class="col-12" x-show="creating">
+                                        <div class="field">
+                                            <label>Scan for exports</label>
+                                            <div class="d-flex gap-2">
+                                                <select class="inp" style="max-width:200px" x-model="scanNode">
+                                                    <template x-for="n in nodeNames" :key="n"><option :value="n" x-text="n"></option></template>
+                                                </select>
+                                                <button type="button" class="btn-x sm" @click="scan()" :disabled="scanning || !form.server">
+                                                    <i class="bi" :class="scanning ? 'bi-hourglass-split' : 'bi-search'"></i> Scan
+                                                </button>
+                                            </div>
+                                            <div class="text-danger mt-1" style="font-size:12px" x-show="scanError" x-text="scanError"></div>
+                                            <div class="mt-2" x-show="scanResults.length">
+                                                <template x-for="r in scanResults" :key="r.path">
+                                                    <button type="button" class="btn-x sm ghost d-block mb-1" @click="pickExport(r)">
+                                                        <span class="mono" x-text="r.path"></span>
+                                                        <span class="text-faint ms-1" x-text="r.options"></span>
+                                                    </button>
+                                                </template>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Mount options</label>
+                                            <input type="text" class="inp mono" x-model="form.options" placeholder="vers=4">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- CIFS -->
+                        <template x-if="form.type === 'cifs'">
+                            <div class="col-12">
+                                <div class="row g-3">
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Server</label>
+                                            <input type="text" class="inp mono" x-model="form.server" placeholder="192.168.1.50">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="creating">
+                                        <div class="field">
+                                            <label>Share</label>
+                                            <input type="text" class="inp mono" x-model="form.share" placeholder="data">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-4">
+                                        <div class="field">
+                                            <label>Username</label>
+                                            <input type="text" class="inp" x-model="form.username" autocomplete="off">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-4">
+                                        <div class="field">
+                                            <label>Password</label>
+                                            <input type="password" class="inp" x-model="form.password" autocomplete="new-password"
+                                                   :placeholder="creating ? '' : 'Leave blank to keep current'">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-4">
+                                        <div class="field">
+                                            <label>Domain</label>
+                                            <input type="text" class="inp" x-model="form.domain" placeholder="WORKGROUP">
+                                        </div>
+                                    </div>
+                                    <div class="col-12" x-show="creating">
+                                        <div class="field">
+                                            <label>Scan for shares</label>
+                                            <div class="d-flex gap-2">
+                                                <select class="inp" style="max-width:200px" x-model="scanNode">
+                                                    <template x-for="n in nodeNames" :key="n"><option :value="n" x-text="n"></option></template>
+                                                </select>
+                                                <button type="button" class="btn-x sm" @click="scan()" :disabled="scanning || !form.server">
+                                                    <i class="bi" :class="scanning ? 'bi-hourglass-split' : 'bi-search'"></i> Scan
+                                                </button>
+                                            </div>
+                                            <div class="text-danger mt-1" style="font-size:12px" x-show="scanError" x-text="scanError"></div>
+                                            <div class="mt-2" x-show="scanResults.length">
+                                                <template x-for="r in scanResults" :key="r.share">
+                                                    <button type="button" class="btn-x sm ghost d-block mb-1" @click="pickShare(r)">
+                                                        <span class="mono" x-text="r.share"></span>
+                                                        <span class="text-faint ms-1" x-text="r.description"></span>
+                                                    </button>
+                                                </template>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- DIR -->
+                        <template x-if="form.type === 'dir'">
+                            <div class="col-12">
+                                <div class="row g-3">
+                                    <div class="col-12" x-show="creating">
+                                        <div class="field">
+                                            <label>Path</label>
+                                            <input type="text" class="inp mono" x-model="form.path" placeholder="/mnt/data">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label class="d-flex align-items-center gap-2" style="font-size:12.5px">
+                                                <input type="checkbox" x-model="form.mkdir"> Create the directory if it doesn't exist
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label class="d-flex align-items-center gap-2" style="font-size:12.5px">
+                                                <input type="checkbox" x-model="form.is_mountpoint"> Treat as an externally managed mountpoint
+                                            </label>
+                                            <div class="hint">Storage is considered offline if the path is not mounted.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <template x-if="form.type === 'pbs'">
+                            <div class="col-12">
+                                <div class="row g-3">
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Server</label>
+                                            <input type="text" class="inp mono" x-model="form.server" placeholder="pbs.lan">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="creating">
+                                        <div class="field">
+                                            <label>Datastore</label>
+                                            <input type="text" class="inp mono" x-model="form.datastore" placeholder="backup-store">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Username</label>
+                                            <input type="text" class="inp mono" x-model="form.username" placeholder="root@pam">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Password / API token secret</label>
+                                            <input type="password" class="inp" x-model="form.password" autocomplete="new-password">
+                                            <div class="hint" x-show="!creating">Leave empty to keep the stored one.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-8">
+                                        <div class="field">
+                                            <label>Fingerprint (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.fingerprint" placeholder="AA:BB:CC:...">
+                                            <div class="hint">Required when the PBS certificate is self-signed.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-4">
+                                        <div class="field">
+                                            <label>Namespace (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.namespace">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <template x-if="form.type === 'zfspool'">
+                            <div class="col-12">
+                                <div class="row g-3">
+                                    <div class="col-12 col-md-6" x-show="creating">
+                                        <div class="field">
+                                            <label>ZFS pool</label>
+                                            <input type="text" class="inp mono" x-model="form.pool" placeholder="rpool/data">
+                                            <div class="hint">The pool or dataset must already exist on the node.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Block size (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.blocksize" placeholder="8k">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Mount point (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.mountpoint">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label class="d-flex align-items-center gap-2" style="font-size:12.5px">
+                                                <input type="checkbox" x-model="form.sparse"> Use sparse volumes (thin provisioning)
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <template x-if="form.type === 'lvm' || form.type === 'lvmthin'">
+                            <div class="col-12">
+                                <div class="row g-3">
+                                    <div class="col-12" x-show="!creating">
+                                        <div class="field">
+                                            <div class="hint">The volume group and thin pool are fixed at creation; only the settings below can be changed.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="creating">
+                                        <div class="field">
+                                            <label>Volume group</label>
+                                            <input type="text" class="inp mono" x-model="form.vgname" placeholder="pve">
+                                            <div class="hint">The volume group must already exist on the node.</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="creating && form.type === 'lvmthin'">
+                                        <div class="field">
+                                            <label>Thin pool</label>
+                                            <input type="text" class="inp mono" x-model="form.thinpool" placeholder="data">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="creating && form.type === 'lvm'">
+                                        <div class="field">
+                                            <label>Base volume (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.base">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <template x-if="form.type === 'rbd' || form.type === 'cephfs'">
+                            <div class="col-12">
+                                <div class="row g-3">
+                                    <div class="col-12">
+                                        <div class="hint">Leave monitors and keyring empty for a hyperconverged Proxmox Ceph cluster &mdash; the node supplies both. Fill them in only for an external cluster.</div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="creating && form.type === 'rbd'">
+                                        <div class="field">
+                                            <label>Ceph pool</label>
+                                            <input type="text" class="inp mono" x-model="form.pool" placeholder="rbd">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="form.type === 'cephfs'">
+                                        <div class="field">
+                                            <label>Ceph filesystem name (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form['fs-name']" placeholder="cephfs">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="form.type === 'cephfs'">
+                                        <div class="field">
+                                            <label>Subdirectory (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.subdir" placeholder="/">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Monitor hosts (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.monhost" placeholder="10.0.0.1,10.0.0.2">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="field">
+                                            <label>Ceph user (optional)</label>
+                                            <input type="text" class="inp mono" x-model="form.username" placeholder="admin">
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-6" x-show="form.type === 'rbd'">
+                                        <div class="field">
+                                            <label class="d-flex align-items-center gap-2" style="font-size:12.5px">
+                                                <input type="checkbox" x-model="form.krbd"> Always access through the krbd kernel module
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="col-12">
+                                        <div class="field">
+                                            <label>Keyring (optional)</label>
+                                            <textarea class="inp mono" rows="3" x-model="form.keyring" placeholder="[client.admin]&#10;        key = ..."></textarea>
+                                            <div class="hint">Stored by Proxmox and never shown again. Leave empty to keep the existing one.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <div class="col-12"><div class="divider"></div></div>
+
+                        <div class="col-12">
+                            <div class="field">
+                                <label>Content</label>
+                                <div class="nic-pick">
+                                    <template x-for="c in typeContentChoices" :key="c">
+                                        <button type="button" :class="form.content.includes(c) && 'on'" @click="toggleContent(c)">
+                                            <span x-text="contentLabels[c]"></span>
+                                        </button>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="col-12">
+                            <div class="field">
+                                <label>Nodes (optional restriction)</label>
+                                <div class="nic-pick">
+                                    <template x-for="n in nodeNames" :key="n">
+                                        <button type="button" :class="form.nodes.includes(n) && 'on'" @click="toggleNode(n)">
+                                            <span x-text="n"></span>
+                                        </button>
+                                    </template>
+                                </div>
+                                <div class="hint">Leave empty for all nodes.</div>
+                            </div>
+                        </div>
+
+                        <div class="col-12 col-md-6">
+                            <div class="field">
+                                <label class="d-flex align-items-center gap-2" style="font-size:12.5px">
+                                    <input type="checkbox" x-model="form.shared"> Shared (same contents on all nodes)
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <div class="field">
+                                <label class="d-flex align-items-center gap-2" style="font-size:12.5px">
+                                    <input type="checkbox" x-model="form.disable"> Disabled
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="alert alert-danger mt-3 mb-0" style="font-size:12px" x-show="formError" x-text="formError"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-x primary" @click="submit()" :disabled="saving || !form.storage || !form.content.length">
+                        <i class="bi" :class="saving ? 'bi-hourglass-split' : 'bi-check-lg'"></i>
+                        <span x-text="creating ? 'Create storage' : 'Save changes'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== REMOVE CONFIRMATION ==================== -->
+    <div class="modal fade" tabindex="-1" x-ref="removeModal">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-exclamation-triangle" style="color:var(--danger)"></i> Remove storage</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" x-show="removeTarget">
+                    <p>This removes <strong x-text="removeTarget && removeTarget.storage"></strong> from the cluster's storage
+                        configuration and detaches it from every node.</p>
+                    <div class="alert alert-warning" style="font-size:12px">
+                        <i class="bi bi-info-circle me-1"></i>
+                        The underlying data (files on the NFS/CIFS share or directory) is <strong>not</strong> deleted —
+                        only the definition Proxmox uses to reach it.
+                    </div>
+                    <div class="field">
+                        <label>Type <span class="mono" x-text="removeTarget && removeTarget.storage"></span> to confirm</label>
+                        <input type="text" class="inp mono" x-model="removeConfirm" @keyup.enter="remove()">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-x danger" @click="remove()"
+                            :disabled="removing || !removeTarget || removeConfirm !== removeTarget.storage">
+                        <i class="bi" :class="removing ? 'bi-hourglass-split' : 'bi-trash'"></i> Remove
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { storagesApp } from "{{ url_for('static', filename='js/storages.js') }}";
+  function register() { window.Alpine.data('storagesApp', storagesApp); }
+  if (window.Alpine) register();
+  else document.addEventListener('alpine:init', register);
+</script>
 {% endblock %}

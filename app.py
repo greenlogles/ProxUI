@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import math
 import os
@@ -290,6 +291,12 @@ sock = Sock(app)
 vnc_sessions = {}  # session_id -> {ticket, port, node, vmid, created_at, proxmox_host}
 vnc_sessions_lock = threading.Lock()
 VNC_SESSION_TIMEOUT = 300  # 5 minutes
+
+# Terminal (termproxy) sessions. The browser only ever sees the session id —
+# the PVE tickets stay here and are used by the websocket proxy.
+shell_sessions = {}
+shell_sessions_lock = threading.Lock()
+SHELL_SESSION_TIMEOUT = 60  # single-use, redeemed immediately by the websocket
 
 lxc_config_backups = (
     {}
@@ -1612,6 +1619,70 @@ def _next_key_index(config, prefix):
     return i
 
 
+# Max index per PVE hardware bus (inclusive), from the /config API schema
+# descriptions ("n is 0 to 30" etc.) — see qemu/{vmid}/config PUT parameters.
+DISK_BUS_MAX_INDEX = {"scsi": 30, "virtio": 15, "ide": 3, "sata": 5}
+MP_MAX_INDEX = 255
+NET_MAX_INDEX = 31
+
+
+def _build_qemu_disk_value(
+    storage, size_gb, cache=None, discard=None, ssd=None, iothread=None, backup=None
+):
+    """Build a scsiN/virtioN/ideN/sataN value that allocates a new volume.
+
+    STORAGE_ID:SIZE_IN_GiB is the PVE syntax for allocating a fresh volume
+    (as opposed to referencing an existing vm-<id>-disk-N).
+    """
+    parts = [f"{storage}:{size_gb}"]
+    if cache:
+        parts.append(f"cache={cache}")
+    if discard:
+        parts.append("discard=on")
+    if ssd:
+        parts.append("ssd=1")
+    if iothread:
+        parts.append("iothread=1")
+    if backup is False:
+        parts.append("backup=0")
+    return ",".join(parts)
+
+
+def _build_lxc_mp_value(storage, size_gb, path, backup=None):
+    """Build an mpN value that allocates a new volume mounted at `path`."""
+    parts = [f"{storage}:{size_gb}", f"mp={path}"]
+    if backup is False:
+        parts.append("backup=0")
+    return ",".join(parts)
+
+
+def _build_qemu_net_value(model, bridge, vlan=None, firewall=None, mac=None, rate=None):
+    """Build a netN value for a QEMU guest (model is the format's default_key)."""
+    head = f"{model}={mac}" if mac else model
+    parts = [head, f"bridge={bridge}"]
+    if vlan:
+        parts.append(f"tag={vlan}")
+    if firewall:
+        parts.append("firewall=1")
+    if rate:
+        parts.append(f"rate={rate}")
+    return ",".join(parts)
+
+
+def _build_lxc_net_value(name, bridge, vlan=None, firewall=None, mac=None, rate=None):
+    """Build a netN value for an LXC container (name= is required, no model=)."""
+    parts = [f"name={name}", f"bridge={bridge}"]
+    if mac:
+        parts.append(f"hwaddr={mac}")
+    if vlan:
+        parts.append(f"tag={vlan}")
+    if firewall:
+        parts.append("firewall=1")
+    if rate:
+        parts.append(f"rate={rate}")
+    return ",".join(parts)
+
+
 def _proxmox_error_response(e):
     """Convert a proxmoxer/requests exception to a JSON Flask response."""
     traceback.print_exc()
@@ -2859,7 +2930,10 @@ def storages():
     # Sort storages alphabetically by storage name
     grouped_storages.sort(key=lambda x: x.get("storage", "").lower())
 
-    return render_template("storages.html", storages=grouped_storages)
+    node_names = sorted(n["name"] for n in cluster_nodes)
+    return render_template(
+        "storages.html", storages=grouped_storages, node_names=node_names
+    )
 
 
 def get_storages_fallback():
@@ -2961,6 +3035,363 @@ def group_shared_storages(all_storages):
                 grouped_storages.append(storage)
 
     return grouped_storages
+
+
+# Types ProxUI can add/edit/remove. iscsi/iscsidirect/btrfs/esxi and ZFS-over-
+# iSCSI are left out: they need target/LUN or vendor setup with no safe defaults.
+_STORAGE_TYPES = (
+    "nfs",
+    "cifs",
+    "dir",
+    "pbs",
+    "zfspool",
+    "lvm",
+    "lvmthin",
+    "rbd",
+    "cephfs",
+)
+_STORAGE_CONTENT_CHOICES = ("images", "rootdir", "vztmpl", "iso", "backup", "snippets")
+_STORAGE_ID_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
+
+
+def _storage_params(data, stype, creating):
+    """Validate a storage form into API parameters. Raises ValueError.
+
+    PUT /storage/{id} has no 'export'/'share'/'path'/'type' parameters — the
+    backing location and type are fixed at creation, only metadata (content,
+    nodes, credentials, disable/shared) can be changed afterwards.
+    """
+    params = {}
+
+    content = data.get("content") or []
+    if isinstance(content, str):
+        content = [c.strip() for c in content.split(",") if c.strip()]
+    content = [c for c in content if c in _STORAGE_CONTENT_CHOICES]
+    if not content:
+        raise ValueError("Select at least one content type")
+    params["content"] = ",".join(content)
+
+    nodes = data.get("nodes")
+    if isinstance(nodes, list):
+        nodes = ",".join(n.strip() for n in nodes if n.strip())
+    else:
+        nodes = (nodes or "").strip()
+    if nodes:
+        params["nodes"] = nodes
+
+    params["disable"] = 1 if data.get("disable") else 0
+    params["shared"] = 1 if data.get("shared") else 0
+
+    if stype == "nfs":
+        if creating:
+            export = (data.get("export") or "").strip()
+            if not export:
+                raise ValueError("NFS export is required")
+            params["export"] = export
+        server = (data.get("server") or "").strip()
+        if creating and not server:
+            raise ValueError("NFS server is required")
+        if server:
+            params["server"] = server
+        options = (data.get("options") or "").strip()
+        if options:
+            params["options"] = options
+    elif stype == "cifs":
+        if creating:
+            share = (data.get("share") or "").strip()
+            if not share:
+                raise ValueError("CIFS share is required")
+            params["share"] = share
+        server = (data.get("server") or "").strip()
+        if creating and not server:
+            raise ValueError("CIFS server is required")
+        if server:
+            params["server"] = server
+        username = (data.get("username") or "").strip()
+        if username:
+            params["username"] = username
+        password = data.get("password") or ""
+        if password:
+            params["password"] = password
+        domain = (data.get("domain") or "").strip()
+        if domain:
+            params["domain"] = domain
+    elif stype == "dir":
+        if creating:
+            path = (data.get("path") or "").strip()
+            if not path:
+                raise ValueError("Path is required")
+            params["path"] = path
+        params["mkdir"] = 1 if data.get("mkdir") else 0
+        params["is_mountpoint"] = 1 if data.get("is_mountpoint") else 0
+    elif stype == "pbs":
+        if creating:
+            datastore = (data.get("datastore") or "").strip()
+            if not datastore:
+                raise ValueError("PBS datastore is required")
+            params["datastore"] = datastore
+        server = (data.get("server") or "").strip()
+        if creating and not server:
+            raise ValueError("PBS server is required")
+        if server:
+            params["server"] = server
+        for key in ("username", "fingerprint", "namespace"):
+            value = (data.get(key) or "").strip()
+            if value:
+                params[key] = value
+        password = data.get("password") or ""
+        if password:
+            params["password"] = password
+    elif stype == "zfspool":
+        # `pool` is accepted by PUT, but repointing a live storage at another
+        # pool orphans every volume on it, so it is only set at creation.
+        if creating:
+            pool = (data.get("pool") or "").strip()
+            if not pool:
+                raise ValueError("ZFS pool is required")
+            params["pool"] = pool
+        params["sparse"] = 1 if data.get("sparse") else 0
+        blocksize = (data.get("blocksize") or "").strip()
+        if blocksize:
+            params["blocksize"] = blocksize
+        mountpoint = (data.get("mountpoint") or "").strip()
+        if mountpoint:
+            params["mountpoint"] = mountpoint
+    elif stype in ("lvm", "lvmthin"):
+        if creating:
+            vgname = (data.get("vgname") or "").strip()
+            if not vgname:
+                raise ValueError("Volume group name is required")
+            params["vgname"] = vgname
+            if stype == "lvmthin":
+                thinpool = (data.get("thinpool") or "").strip()
+                if not thinpool:
+                    raise ValueError("Thin pool name is required")
+                params["thinpool"] = thinpool
+            else:
+                base = (data.get("base") or "").strip()
+                if base:
+                    params["base"] = base
+    elif stype == "rbd":
+        # An external Ceph cluster needs monhost/keyring; a hyperconverged one
+        # reads both from the node, so neither can be required here.
+        if creating:
+            pool = (data.get("pool") or "").strip()
+            if not pool:
+                raise ValueError("Ceph pool is required")
+            params["pool"] = pool
+        for key in ("monhost", "username", "namespace"):
+            value = (data.get(key) or "").strip()
+            if value:
+                params[key] = value
+        keyring = data.get("keyring") or ""
+        if keyring.strip():
+            params["keyring"] = keyring
+        params["krbd"] = 1 if data.get("krbd") else 0
+    elif stype == "cephfs":
+        for key in ("monhost", "username", "fs-name", "subdir"):
+            value = (data.get(key) or "").strip()
+            if value:
+                params[key] = value
+        keyring = data.get("keyring") or ""
+        if keyring.strip():
+            params["keyring"] = keyring
+
+    return params
+
+
+def _storage_error_response(e, *secrets):
+    """Like _proxmox_error_response, but keeps storage credentials out of the log.
+
+    ResourceException's message is built from the server's response body, not
+    the outgoing request, so a CIFS/PBS password or a Ceph keyring should never
+    appear here in practice -- this just makes sure a future PVE error that
+    echoes back a bad field can't leak one.
+    """
+    err = str(e)
+    secrets = [str(v) for v in secrets if v]
+    if secrets:
+        for secret in secrets:
+            err = err.replace(secret, "***")
+        print(f"Storage API error: {err}")
+    else:
+        traceback.print_exc()
+    if "403" in err or "Forbidden" in err:
+        return jsonify({"error": err}), 403
+    if "400" in err or "Bad Request" in err:
+        return jsonify({"error": err}), 400
+    if "404" in err or "Not Found" in err:
+        return jsonify({"error": err}), 404
+    return jsonify({"error": err}), 500
+
+
+@app.route("/api/storages", methods=["GET"])
+def api_storages():
+    """List cluster storage definitions. PVE never returns stored passwords."""
+    proxmox = _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        return jsonify(proxmox.storage.get())
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/storages/<storage_id>", methods=["GET"])
+def api_storage_get(storage_id):
+    """Read one storage's full config, for the edit form."""
+    proxmox = _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        return jsonify(proxmox.storage(storage_id).get())
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/storages", methods=["POST"])
+def api_storage_create():
+    """Create an nfs, cifs or dir storage definition (cluster-wide)."""
+    if DEMO_MODE:
+        return jsonify({"error": "Creating storage is disabled in demo mode"}), 403
+    proxmox = _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    data = request.get_json(silent=True) or {}
+    stype = (data.get("type") or "").strip()
+    if stype not in _STORAGE_TYPES:
+        return (
+            jsonify({"error": f"Type must be one of: {', '.join(_STORAGE_TYPES)}"}),
+            400,
+        )
+    storage_id = (data.get("storage") or "").strip()
+    if not storage_id or not _STORAGE_ID_RE.match(storage_id):
+        return (
+            jsonify(
+                {
+                    "error": "Storage ID is required and may only contain letters, "
+                    "digits, '_' or '-', starting with a letter"
+                }
+            ),
+            400,
+        )
+    try:
+        params = _storage_params(data, stype, creating=True)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    try:
+        proxmox.storage.post(storage=storage_id, type=stype, **params)
+    except Exception as e:
+        return _storage_error_response(e, data.get("password"), data.get("keyring"))
+    return jsonify(
+        {
+            "success": True,
+            "message": f"Storage '{storage_id}' created.",
+            "storage": storage_id,
+        }
+    )
+
+
+@app.route("/api/storages/<storage_id>", methods=["PUT"])
+def api_storage_update(storage_id):
+    """Update an existing storage's content types, nodes, credentials, etc.
+
+    The storage ID and its type/location (export, share, path) are immutable
+    here -- PVE's own PUT endpoint has no parameters for them.
+    """
+    if DEMO_MODE:
+        return jsonify({"error": "Editing storage is disabled in demo mode"}), 403
+    proxmox = _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    data = request.get_json(silent=True) or {}
+    try:
+        current = proxmox.storage(storage_id).get()
+    except Exception as e:
+        return _proxmox_error_response(e)
+    stype = current.get("type")
+    if stype not in _STORAGE_TYPES:
+        return (
+            jsonify({"error": f"Editing '{stype}' storage is not supported here"}),
+            400,
+        )
+    try:
+        params = _storage_params(data, stype, creating=False)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    try:
+        proxmox.storage(storage_id).put(**params)
+    except Exception as e:
+        return _storage_error_response(e, data.get("password"), data.get("keyring"))
+    return jsonify({"success": True, "message": f"Storage '{storage_id}' updated."})
+
+
+@app.route("/api/storages/<storage_id>", methods=["DELETE"])
+def api_storage_delete(storage_id):
+    """Remove a storage definition. Does not touch the underlying data."""
+    if DEMO_MODE:
+        return jsonify({"error": "Deleting storage is disabled in demo mode"}), 403
+    data = request.get_json(silent=True) or {}
+    if (data.get("confirm") or "").strip() != storage_id:
+        return jsonify({"error": "Confirmation does not match the storage ID"}), 400
+    proxmox = _any_proxmox()
+    if not proxmox:
+        return jsonify({"error": "No Proxmox connection"}), 404
+    try:
+        proxmox.storage(storage_id).delete()
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify(
+        {
+            "success": True,
+            "message": f"Storage '{storage_id}' removed from the cluster. "
+            "The underlying data was not deleted.",
+        }
+    )
+
+
+@app.route("/api/storage-scan/nfs", methods=["POST"])
+def api_storage_scan_nfs():
+    """List NFS exports available on a server, via a node's scan endpoint."""
+    data = request.get_json(silent=True) or {}
+    node = data.get("node")
+    server = (data.get("server") or "").strip()
+    if not node or not server:
+        return jsonify({"error": "node and server are required"}), 400
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    try:
+        return jsonify(proxmox.nodes(node).scan.nfs.get(server=server))
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/storage-scan/cifs", methods=["POST"])
+def api_storage_scan_cifs():
+    """List CIFS shares available on a server, via a node's scan endpoint."""
+    data = request.get_json(silent=True) or {}
+    node = data.get("node")
+    server = (data.get("server") or "").strip()
+    if not node or not server:
+        return jsonify({"error": "node and server are required"}), 400
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    kwargs = {"server": server}
+    username = (data.get("username") or "").strip()
+    if username:
+        kwargs["username"] = username
+    password = data.get("password") or ""
+    if password:
+        kwargs["password"] = password
+    domain = (data.get("domain") or "").strip()
+    if domain:
+        kwargs["domain"] = domain
+    try:
+        return jsonify(proxmox.nodes(node).scan.cifs.get(**kwargs))
+    except Exception as e:
+        return _storage_error_response(e, password)
 
 
 @app.route("/networks")
@@ -3469,8 +3900,13 @@ def _backup_storages(proxmox):
 
 def _backup_item(item, storage, node):
     """Normalise one storage content entry into the shape the UI consumes."""
+    try:
+        guest_type = _parse_backup_volid(item.get("volid", ""))[1]
+    except ValueError:
+        guest_type = ""
     return {
         "volid": item.get("volid", ""),
+        "type": guest_type,
         "storage": storage,
         "node": node,
         "vmid": int(item["vmid"]) if item.get("vmid") else None,
@@ -4802,6 +5238,7 @@ def api_vm_tasks(node, vmid):
                         "qmclone",
                         "qmcreate",
                         "qmdestroy",
+                        "qmrestore",
                         "vzstart",
                         "vzstop",
                         "vzshutdown",
@@ -4809,6 +5246,7 @@ def api_vm_tasks(node, vmid):
                         "vzclone",
                         "vzcreate",
                         "vzdestroy",
+                        "vzrestore",
                     ]
                     and vmid in str(task.get("id", ""))
                 )
@@ -4911,6 +5349,7 @@ def api_cluster_tasks():
                 "qmdestroy",
                 "qmtemplate",
                 "qmdisk",
+                "qmrestore",
                 "vzstart",
                 "vzstop",
                 "vzshutdown",
@@ -4919,6 +5358,7 @@ def api_cluster_tasks():
                 "vzcreate",
                 "vzdestroy",
                 "vzdump",
+                "vzrestore",
             ]:
                 try:
                     upid_parts = upid.split(":")
@@ -5223,6 +5663,171 @@ def api_vm_config(node, vmid):
         return jsonify({"error": str(e)}), 500
 
 
+# Snapshots API
+# PVE validates snapname against the pve-configid format (max 40 chars); reject
+# bad names here so the user gets a readable message instead of a 400 from PVE.
+SNAPSHOT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,39}$")
+
+
+def _guest_type(proxmox, node, vmid):
+    """Return 'qemu' or 'lxc' for a guest, probing QEMU first."""
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+        return "qemu"
+    except Exception:
+        return "lxc"
+
+
+def _guest_endpoint(proxmox, node, vmid, vm_type):
+    if vm_type == "qemu":
+        return proxmox.nodes(node).qemu(vmid)
+    return proxmox.nodes(node).lxc(vmid)
+
+
+def _validate_snapshot_name(name):
+    """Return an error string for an unusable snapshot name, else None."""
+    if not name:
+        return "Snapshot name is required"
+    if name == "current":
+        return "'current' is reserved by Proxmox"
+    if not SNAPSHOT_NAME_RE.match(name):
+        return (
+            "Invalid snapshot name: use 2-40 characters, start with a letter and "
+            "use only letters, digits, underscore or hyphen"
+        )
+    return None
+
+
+@app.route("/api/vm/<node>/<vmid>/snapshots", methods=["GET", "POST"])
+def api_vm_snapshots(node, vmid):
+    """List snapshots for a guest, or create a new one."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    vm_type = _guest_type(proxmox, node, vmid)
+    guest = _guest_endpoint(proxmox, node, vmid, vm_type)
+
+    if request.method == "GET":
+        try:
+            snapshots = guest.snapshot.get() or []
+        except Exception as e:
+            return _proxmox_error_response(e)
+
+        current = None
+        stored = []
+        for snap in snapshots:
+            entry = {
+                "name": snap.get("name"),
+                "description": (snap.get("description") or "").strip(),
+                "parent": snap.get("parent"),
+                "snaptime": snap.get("snaptime"),
+                "vmstate": int(snap.get("vmstate") or 0),
+            }
+            if entry["name"] == "current":
+                current = entry
+            else:
+                stored.append(entry)
+
+        stored.sort(key=lambda s: s.get("snaptime") or 0)
+        return jsonify(
+            {
+                "vm_type": vm_type,
+                "snapshots": stored,
+                "current": current,
+                "count": len(stored),
+            }
+        )
+
+    data = request.get_json(silent=True) or {}
+    snapname = (data.get("name") or "").strip()
+    error = _validate_snapshot_name(snapname)
+    if error:
+        return jsonify({"error": error}), 400
+
+    params = {"snapname": snapname}
+    description = (data.get("description") or "").strip()
+    if description:
+        params["description"] = description
+    # vmstate (save RAM) only exists on the QEMU endpoint.
+    if vm_type == "qemu" and data.get("vmstate"):
+        params["vmstate"] = 1
+
+    try:
+        upid = guest.snapshot.post(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+    return jsonify(
+        {
+            "success": True,
+            "message": f"Snapshot '{snapname}' started.",
+            "upid": upid,
+        }
+    )
+
+
+@app.route("/api/vm/<node>/<vmid>/snapshots/<snapname>", methods=["DELETE"])
+def api_vm_snapshot_delete(node, vmid, snapname):
+    """Delete a snapshot."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    error = _validate_snapshot_name(snapname)
+    if error:
+        return jsonify({"error": error}), 400
+
+    vm_type = _guest_type(proxmox, node, vmid)
+    guest = _guest_endpoint(proxmox, node, vmid, vm_type)
+
+    try:
+        upid = guest.snapshot(snapname).delete()
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+    return jsonify(
+        {
+            "success": True,
+            "message": f"Deleting snapshot '{snapname}'.",
+            "upid": upid,
+        }
+    )
+
+
+@app.route("/api/vm/<node>/<vmid>/snapshots/<snapname>/rollback", methods=["POST"])
+def api_vm_snapshot_rollback(node, vmid, snapname):
+    """Roll the guest back to a snapshot."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    error = _validate_snapshot_name(snapname)
+    if error:
+        return jsonify({"error": error}), 400
+
+    vm_type = _guest_type(proxmox, node, vmid)
+    guest = _guest_endpoint(proxmox, node, vmid, vm_type)
+
+    data = request.get_json(silent=True) or {}
+    params = {}
+    if data.get("start"):
+        params["start"] = 1
+
+    try:
+        upid = guest.snapshot(snapname).rollback.post(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+    return jsonify(
+        {
+            "success": True,
+            "message": f"Rolling back to snapshot '{snapname}'.",
+            "upid": upid,
+        }
+    )
+
+
 @app.route("/api/vm/<node>/<vmid>/resize-disk", methods=["PUT"])
 def api_vm_resize_disk(node, vmid):
     """Resize VM/Container disk"""
@@ -5267,6 +5872,268 @@ def api_vm_resize_disk(node, vmid):
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/vm/<node>/<vmid>/disks", methods=["POST"])
+def api_vm_add_disk(node, vmid):
+    """Allocate a new disk (QEMU) or mount point (LXC) on an existing guest."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    vm_type = "qemu"
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+    except Exception:
+        vm_type = "lxc"
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        storage = (data.get("storage") or "").strip()
+        if not storage:
+            return jsonify({"error": "storage is required"}), 400
+
+        try:
+            size_gb = int(data.get("size_gb"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "size_gb must be an integer"}), 400
+        if size_gb <= 0:
+            return jsonify({"error": "size_gb must be greater than 0"}), 400
+
+        if vm_type == "qemu":
+            bus = (data.get("bus") or "").strip().lower()
+            if bus not in DISK_BUS_MAX_INDEX:
+                return (
+                    jsonify({"error": "bus must be one of: scsi, virtio, ide, sata"}),
+                    400,
+                )
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+            idx = _next_key_index(config, bus)
+            if idx > DISK_BUS_MAX_INDEX[bus]:
+                return jsonify({"error": f"No free {bus} slots available"}), 400
+
+            value = _build_qemu_disk_value(
+                storage,
+                size_gb,
+                cache=data.get("cache") or None,
+                discard=bool(data.get("discard")),
+                ssd=bool(data.get("ssd")),
+                iothread=bool(data.get("iothread")),
+                backup=data.get("backup", True),
+            )
+            key = f"{bus}{idx}"
+            proxmox.nodes(node).qemu(vmid).config.put(**{key: value})
+        else:
+            path = (data.get("path") or "").strip()
+            if not path.startswith("/"):
+                return (
+                    jsonify({"error": "path must be an absolute container path"}),
+                    400,
+                )
+            config = proxmox.nodes(node).lxc(vmid).config.get()
+            idx = _next_key_index(config, "mp")
+            if idx > MP_MAX_INDEX:
+                return jsonify({"error": "No free mount point slots available"}), 400
+
+            value = _build_lxc_mp_value(
+                storage, size_gb, path, backup=data.get("backup", True)
+            )
+            key = f"mp{idx}"
+            proxmox.nodes(node).lxc(vmid).config.put(**{key: value})
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Disk {key} ({storage}:{size_gb}) added",
+                "key": key,
+            }
+        )
+
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/disks/<key>", methods=["DELETE"])
+def api_vm_remove_disk(node, vmid, key):
+    """Detach a disk/mount point. The underlying volume is kept as unusedN."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    vm_type = "qemu"
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+    except Exception:
+        vm_type = "lxc"
+
+    if key == "rootfs":
+        return (
+            jsonify({"error": "The container root filesystem cannot be removed"}),
+            400,
+        )
+
+    disk_pattern = re.compile(r"^(scsi|virtio|ide|sata|mp)\d+$")
+    if not disk_pattern.match(key):
+        return jsonify({"error": f"'{key}' is not a removable disk key"}), 400
+
+    try:
+        if vm_type == "qemu":
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+        else:
+            config = proxmox.nodes(node).lxc(vmid).config.get()
+
+        if key not in config:
+            return jsonify({"error": f"Key '{key}' not found in guest config"}), 404
+
+        if vm_type == "qemu":
+            proxmox.nodes(node).qemu(vmid).config.put(delete=key)
+        else:
+            proxmox.nodes(node).lxc(vmid).config.put(delete=key)
+
+        return jsonify(
+            {
+                "success": True,
+                "message": (
+                    f"Disk {key} detached. The underlying volume was kept as an "
+                    "unused volume (unusedN) and was not erased."
+                ),
+            }
+        )
+
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/netifs", methods=["POST"])
+def api_vm_add_netif(node, vmid):
+    """Add a new network interface (netN) to an existing guest."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    vm_type = "qemu"
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+    except Exception:
+        vm_type = "lxc"
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        bridge = (data.get("bridge") or "").strip()
+        if not bridge:
+            return jsonify({"error": "bridge is required"}), 400
+
+        vlan = data.get("vlan") or None
+        if vlan is not None:
+            try:
+                vlan = int(vlan)
+            except (TypeError, ValueError):
+                return jsonify({"error": "vlan must be an integer"}), 400
+            if not (1 <= vlan <= 4094):
+                return jsonify({"error": "vlan must be between 1 and 4094"}), 400
+
+        rate = data.get("rate") or None
+        if rate is not None:
+            try:
+                rate = float(rate)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rate must be a number"}), 400
+
+        mac = (data.get("mac") or "").strip() or None
+        firewall = bool(data.get("firewall"))
+
+        if vm_type == "qemu":
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+            model = (data.get("model") or "virtio").strip().lower()
+            if model not in ("virtio", "e1000", "rtl8139"):
+                return (
+                    jsonify({"error": "model must be one of: virtio, e1000, rtl8139"}),
+                    400,
+                )
+            idx = _next_key_index(config, "net")
+            if idx > NET_MAX_INDEX:
+                return (
+                    jsonify({"error": "No free network interface slots available"}),
+                    400,
+                )
+
+            value = _build_qemu_net_value(
+                model, bridge, vlan=vlan, firewall=firewall, mac=mac, rate=rate
+            )
+            key = f"net{idx}"
+            proxmox.nodes(node).qemu(vmid).config.put(**{key: value})
+        else:
+            config = proxmox.nodes(node).lxc(vmid).config.get()
+            idx = _next_key_index(config, "net")
+            if idx > NET_MAX_INDEX:
+                return (
+                    jsonify({"error": "No free network interface slots available"}),
+                    400,
+                )
+
+            name = (data.get("name") or f"eth{idx}").strip()
+
+            value = _build_lxc_net_value(
+                name, bridge, vlan=vlan, firewall=firewall, mac=mac, rate=rate
+            )
+            key = f"net{idx}"
+            proxmox.nodes(node).lxc(vmid).config.put(**{key: value})
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Network interface {key} added",
+                "key": key,
+            }
+        )
+
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/netifs/<key>", methods=["DELETE"])
+def api_vm_remove_netif(node, vmid, key):
+    """Remove a network interface by config key."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    vm_type = "qemu"
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+    except Exception:
+        vm_type = "lxc"
+
+    if not re.match(r"^net\d+$", key):
+        return (
+            jsonify({"error": f"'{key}' is not a removable network interface key"}),
+            400,
+        )
+
+    try:
+        if vm_type == "qemu":
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+        else:
+            config = proxmox.nodes(node).lxc(vmid).config.get()
+
+        if key not in config:
+            return jsonify({"error": f"Key '{key}' not found in guest config"}), 404
+
+        if vm_type == "qemu":
+            proxmox.nodes(node).qemu(vmid).config.put(delete=key)
+        else:
+            proxmox.nodes(node).lxc(vmid).config.put(delete=key)
+
+        return jsonify({"success": True, "message": f"Network interface {key} removed"})
+
+    except Exception as e:
+        return _proxmox_error_response(e)
 
 
 @app.route("/api/vm/<node>/<vmid>/iso/attach", methods=["POST"])
@@ -5873,6 +6740,318 @@ def vm_console(node, vmid):
     except Exception as e:
         flash(f"Error loading console: {str(e)}")
         return redirect(url_for("vm_detail", node=node, vmid=vmid))
+
+
+# =============================================================================
+# Terminal (termproxy) Endpoints
+#
+# Same shape as the VNC proxy above: a POST mints a short-lived session and the
+# browser opens a websocket against ProxUI, which relays to the PVE node. The
+# browser never gets the PVE ticket — the relay performs the termproxy
+# handshake itself, so tickets stay server-side.
+# =============================================================================
+
+SHELL_TOKEN_AUTH_MESSAGE = (
+    "This node's connection uses an API token. Proxmox only issues console "
+    "(termproxy) tickets to username/password logins, so the terminal is not "
+    "available. Reconnect this cluster with a username and password to use it."
+)
+
+
+def cleanup_expired_shell_sessions():
+    """Remove shell sessions that were never redeemed."""
+    now = time.time()
+    with shell_sessions_lock:
+        expired = [
+            sid
+            for sid, data in shell_sessions.items()
+            if now - data["created_at"] > SHELL_SESSION_TIMEOUT
+        ]
+        for sid in expired:
+            del shell_sessions[sid]
+
+
+def _shell_uses_token_auth(node):
+    """True if this node's connection can't open a console (API token auth)."""
+    meta = connection_metadata.get(node) or {}
+    return bool(meta.get("token_name")) and not meta.get("password")
+
+
+def _create_shell_session(node, term_path, ws_path, params=None, timeout=20):
+    """Mint a termproxy ticket and stash it as a single-use shell session.
+
+    Returns the session id. Never log or return the ticket itself.
+    """
+    host, login_ticket, csrf, verify = _pve_login_ticket(node)
+    r = requests.post(
+        f"https://{host}:8006/api2/json{term_path}",
+        headers={
+            "CSRFPreventionToken": csrf,
+            "Cookie": f"PVEAuthCookie={login_ticket}",
+        },
+        data=params or {},
+        verify=verify,
+        timeout=timeout,
+    )
+    if r.status_code == 403:
+        raise SnippetWriteError(
+            "Proxmox denied the console session — the API user needs the "
+            "'Sys.Console' privilege on the node (or 'VM.Console' on the guest)."
+        )
+    r.raise_for_status()
+    d = r.json()["data"]
+
+    cleanup_expired_shell_sessions()
+    session_id = str(uuid.uuid4())
+    with shell_sessions_lock:
+        shell_sessions[session_id] = {
+            "host": host,
+            "verify_ssl": verify,
+            "auth_ticket": login_ticket,
+            "ticket": d["ticket"],
+            "port": d["port"],
+            "user": d["user"],
+            "ws_path": ws_path,
+            "created_at": time.time(),
+        }
+    return session_id
+
+
+def _shell_session_response(node, term_path, ws_path, params=None):
+    """Shared body for the shell-ticket endpoints."""
+    if _shell_uses_token_auth(node):
+        return jsonify({"error": SHELL_TOKEN_AUTH_MESSAGE, "token_auth": True}), 400
+    try:
+        session_id = _create_shell_session(node, term_path, ws_path, params)
+    except SnippetWriteError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Failed to open terminal session: {e}"}), 500
+    return jsonify(
+        {
+            "success": True,
+            "session_id": session_id,
+            "websocket_url": f"/shell-ws/{session_id}",
+        }
+    )
+
+
+@app.route("/api/node/<node>/shell-ticket", methods=["POST"])
+def api_node_shell_ticket(node):
+    """Open a root shell session on a node via termproxy."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    return _shell_session_response(
+        node,
+        f"/nodes/{node}/termproxy",
+        f"/nodes/{node}/vncwebsocket",
+    )
+
+
+@app.route("/api/vm/<node>/<vmid>/shell-ticket", methods=["POST"])
+def api_vm_shell_ticket(node, vmid):
+    """Open a guest terminal: LXC console, or a QEMU serial terminal."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    vm_type = "qemu"
+    try:
+        proxmox.nodes(node).qemu(vmid).status.current.get()
+    except Exception:
+        vm_type = "lxc"
+
+    params = None
+    if vm_type == "qemu":
+        try:
+            config = proxmox.nodes(node).qemu(vmid).config.get()
+        except Exception as e:
+            return jsonify({"error": f"Failed to read VM config: {e}"}), 500
+        serial = next(
+            (p for p in ("serial0", "serial1", "serial2", "serial3") if config.get(p)),
+            None,
+        )
+        if not serial:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "This VM has no serial port, so it has no serial "
+                            "terminal. Add a serial port (e.g. serial0: socket) "
+                            "to the VM and configure a getty inside the guest, "
+                            "or use the graphical console instead."
+                        ),
+                        "no_serial": True,
+                    }
+                ),
+                400,
+            )
+        params = {"serial": serial}
+
+    return _shell_session_response(
+        node,
+        f"/nodes/{node}/{vm_type}/{vmid}/termproxy",
+        f"/nodes/{node}/{vm_type}/{vmid}/vncwebsocket",
+        params,
+    )
+
+
+@sock.route("/shell-ws/<session_id>")
+def shell_websocket_proxy(ws, session_id):
+    """Relay xterm.js traffic between the browser and a PVE termproxy socket."""
+    from urllib.parse import quote
+
+    with shell_sessions_lock:
+        session = shell_sessions.pop(session_id, None)
+    if not session:
+        ws.close(1008, "Invalid or expired session")
+        return
+
+    if time.time() - session["created_at"] > SHELL_SESSION_TIMEOUT:
+        ws.close(1008, "Invalid or expired session")
+        return
+
+    url = (
+        f"wss://{session['host']}:8006/api2/json{session['ws_path']}"
+        f"?port={session['port']}&vncticket={quote(session['ticket'], safe='')}"
+    )
+    sslopt = (
+        {}
+        if session["verify_ssl"]
+        else {"sslopt": {"cert_reqs": ssl.CERT_NONE, "check_hostname": False}}
+    )
+
+    proxmox_ws = None
+    try:
+        proxmox_ws = websocket.create_connection(
+            url,
+            timeout=30,
+            header=[f"Cookie: PVEAuthCookie={session['auth_ticket']}"],
+            **sslopt,
+        )
+        # termproxy's own handshake, done here so the ticket never reaches the
+        # browser. The node replies "OK" once the PTY is attached.
+        proxmox_ws.send(f"{session['user']}:{session['ticket']}\n")
+        first = proxmox_ws.recv()
+        if isinstance(first, (bytes, bytearray)):
+            first = first.decode("utf-8", errors="replace")
+        if not str(first).startswith("OK"):
+            ws.close(1011, "Terminal handshake rejected")
+            return
+
+        stop_event = threading.Event()
+
+        def relay_to_browser():
+            try:
+                proxmox_ws.settimeout(1.0)
+                while not stop_event.is_set():
+                    try:
+                        data = proxmox_ws.recv()
+                    except websocket.WebSocketTimeoutException:
+                        continue
+                    except Exception:
+                        break
+                    if not data:
+                        break
+                    if isinstance(data, (bytes, bytearray)):
+                        data = data.decode("utf-8", errors="replace")
+                    ws.send(data)
+            finally:
+                stop_event.set()
+
+        def relay_to_proxmox():
+            from simple_websocket import ConnectionClosed
+
+            try:
+                while not stop_event.is_set():
+                    try:
+                        data = ws.receive(timeout=30)
+                    except ConnectionClosed:
+                        break
+                    except TimeoutError:
+                        continue
+                    except Exception:
+                        break
+                    if data is None:
+                        continue
+                    if isinstance(data, (bytes, bytearray)):
+                        data = data.decode("utf-8", errors="replace")
+                    proxmox_ws.send(data)
+            finally:
+                stop_event.set()
+
+        browser_thread = threading.Thread(target=relay_to_browser, daemon=True)
+        proxmox_thread = threading.Thread(target=relay_to_proxmox, daemon=True)
+        browser_thread.start()
+        proxmox_thread.start()
+
+        while not stop_event.is_set():
+            time.sleep(0.1)
+
+    except Exception:
+        pass  # Connection error, silently close
+    finally:
+        if proxmox_ws:
+            try:
+                proxmox_ws.close()
+            except Exception:
+                pass
+
+
+@app.route("/node/<node>/shell")
+def node_shell(node):
+    """Terminal page for a node's root shell."""
+    if not get_proxmox_connection(node, auto_renew=True):
+        flash("Proxmox connection not available")
+        return redirect(url_for("index"))
+
+    return render_template(
+        "shell.html",
+        node=node,
+        vmid=None,
+        target_name=node,
+        subtitle="Node shell",
+        ticket_url=url_for("api_node_shell_ticket", node=node),
+        back_url=url_for("node_detail", node=node),
+        token_auth=_shell_uses_token_auth(node),
+        token_auth_message=SHELL_TOKEN_AUTH_MESSAGE,
+    )
+
+
+@app.route("/vm/<node>/<vmid>/shell")
+def vm_shell(node, vmid):
+    """Terminal page for an LXC console or a QEMU serial console."""
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        flash("Proxmox connection not available")
+        return redirect(url_for("index"))
+
+    vm_type = "qemu"
+    try:
+        config = proxmox.nodes(node).qemu(vmid).config.get()
+    except Exception:
+        vm_type = "lxc"
+        try:
+            config = proxmox.nodes(node).lxc(vmid).config.get()
+        except Exception as e:
+            flash(f"Error loading terminal: {e}")
+            return redirect(url_for("vm_detail", node=node, vmid=vmid))
+
+    name = config.get("name") or config.get("hostname") or f"VM {vmid}"
+    return render_template(
+        "shell.html",
+        node=node,
+        vmid=vmid,
+        target_name=name,
+        subtitle="Serial console" if vm_type == "qemu" else "Container console",
+        ticket_url=url_for("api_vm_shell_ticket", node=node, vmid=vmid),
+        back_url=url_for("vm_detail", node=node, vmid=vmid),
+        console_url=url_for("vm_console", node=node, vmid=vmid),
+        token_auth=_shell_uses_token_auth(node),
+        token_auth_message=SHELL_TOKEN_AUTH_MESSAGE,
+    )
 
 
 @app.route("/api/cloud-images")
@@ -8625,6 +9804,128 @@ def api_backup_content_config():
     except Exception as e:
         return _proxmox_error_response(e)
     return jsonify({"volid": volid, "config": config or ""})
+
+
+_VZDUMP_ARCHIVE_RE = re.compile(r"vzdump-(qemu|lxc|openvz)-(\d+)-")
+_PBS_SNAPSHOT_RE = re.compile(r"^backup/(vm|ct)/(\d+)/")
+
+
+def _parse_backup_volid(volid):
+    """Split a backup volume id into (storage, guest type, source VMID).
+
+    Two shapes reach here. A file archive carries the guest type in the vzdump
+    filename (``local:backup/vzdump-qemu-100-...vma.zst``); a Proxmox Backup
+    Server snapshot has no such filename and encodes it in the path instead
+    (``lan-pbs:backup/ct/201/2026-07-12T06:00:09Z``).
+    """
+    if not isinstance(volid, str) or ":" not in volid:
+        raise ValueError(f"'{volid}' is not a backup volume id")
+    storage, path = volid.split(":", 1)
+    if not storage or not path:
+        raise ValueError(f"'{volid}' is not a backup volume id")
+
+    match = _VZDUMP_ARCHIVE_RE.search(path)
+    if match:
+        kind, vmid = match.group(1), match.group(2)
+        return storage, "qemu" if kind == "qemu" else "lxc", int(vmid)
+
+    match = _PBS_SNAPSHOT_RE.match(path)
+    if match:
+        return storage, "qemu" if match.group(1) == "vm" else "lxc", int(match.group(2))
+
+    raise ValueError(f"Cannot determine the guest type of '{volid}'")
+
+
+def _restore_params(
+    guest_type, volid, vmid, storage=None, force=False, start=False, unique=False
+):
+    """Build the create-from-archive parameters for one guest type.
+
+    A restore is a create call, and the two guest types disagree on how the
+    archive is named: POST /nodes/{node}/qemu takes it as ``archive``, while
+    POST /nodes/{node}/lxc has no ``archive`` parameter at all and reuses the
+    required ``ostemplate`` together with ``restore=1``.
+    """
+    params = {"vmid": int(vmid)}
+    if guest_type == "qemu":
+        params["archive"] = volid
+    else:
+        params["ostemplate"] = volid
+        params["restore"] = 1
+    if storage:
+        params["storage"] = storage
+    if force:
+        params["force"] = 1
+    if unique:
+        params["unique"] = 1
+    if start:
+        params["start"] = 1
+    return params
+
+
+@app.route("/api/backups/restore", methods=["POST"])
+def api_backup_restore():
+    """Restore a stored backup into a guest, optionally overwriting an existing one."""
+    if DEMO_MODE:
+        return jsonify({"error": "Restoring backups is disabled in demo mode"}), 403
+    data = request.get_json(silent=True) or {}
+    volid = (data.get("volid") or "").strip()
+    node = (data.get("node") or "").strip()
+    if not volid or not node:
+        return jsonify({"error": "volid and node are required"}), 400
+
+    try:
+        _, guest_type, source_vmid = _parse_backup_volid(volid)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    try:
+        vmid = int(data["vmid"]) if str(data.get("vmid", "")).strip() else source_vmid
+    except (TypeError, ValueError):
+        return jsonify({"error": "vmid must be a number"}), 400
+    if vmid < 100:
+        return jsonify({"error": "VMID must be >= 100"}), 400
+
+    # Overwriting is destructive, so it is never inferred: the caller has to ask
+    # for it *and* name the VMID it expects to lose.
+    force = data.get("force") is True
+    if force and str(data.get("confirm_vmid", "")).strip() != str(vmid):
+        return (
+            jsonify({"error": f"Overwriting VMID {vmid} must be confirmed explicitly"}),
+            400,
+        )
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    params = _restore_params(
+        guest_type,
+        volid,
+        vmid,
+        storage=(data.get("storage") or "").strip() or None,
+        force=force,
+        start=data.get("start") is True,
+        unique=data.get("unique") is True,
+    )
+    endpoint = (
+        proxmox.nodes(node).qemu if guest_type == "qemu" else proxmox.nodes(node).lxc
+    )
+    try:
+        upid = endpoint.post(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+    return jsonify(
+        {
+            "success": True,
+            "upid": upid,
+            "node": node,
+            "vmid": vmid,
+            "type": guest_type,
+            "message": f"Restore into {vmid} started on {node}.",
+        }
+    )
 
 
 @app.route("/api/backups/guest/<int:vmid>")
