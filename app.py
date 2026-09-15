@@ -1626,8 +1626,9 @@ MP_MAX_INDEX = 255
 NET_MAX_INDEX = 31
 
 
-def _build_qemu_disk_value(storage, size_gb, cache=None, discard=None, ssd=None,
-                            iothread=None, backup=None):
+def _build_qemu_disk_value(
+    storage, size_gb, cache=None, discard=None, ssd=None, iothread=None, backup=None
+):
     """Build a scsiN/virtioN/ideN/sataN value that allocates a new volume.
 
     STORAGE_ID:SIZE_IN_GiB is the PVE syntax for allocating a fresh volume
@@ -3259,7 +3260,10 @@ def api_storage_create():
     data = request.get_json(silent=True) or {}
     stype = (data.get("type") or "").strip()
     if stype not in _STORAGE_TYPES:
-        return jsonify({"error": f"Type must be one of: {', '.join(_STORAGE_TYPES)}"}), 400
+        return (
+            jsonify({"error": f"Type must be one of: {', '.join(_STORAGE_TYPES)}"}),
+            400,
+        )
     storage_id = (data.get("storage") or "").strip()
     if not storage_id or not _STORAGE_ID_RE.match(storage_id):
         return (
@@ -3307,7 +3311,10 @@ def api_storage_update(storage_id):
         return _proxmox_error_response(e)
     stype = current.get("type")
     if stype not in _STORAGE_TYPES:
-        return jsonify({"error": f"Editing '{stype}' storage is not supported here"}), 400
+        return (
+            jsonify({"error": f"Editing '{stype}' storage is not supported here"}),
+            400,
+        )
     try:
         params = _storage_params(data, stype, creating=False)
     except ValueError as e:
@@ -5963,7 +5970,10 @@ def api_vm_remove_disk(node, vmid, key):
         vm_type = "lxc"
 
     if key == "rootfs":
-        return jsonify({"error": "The container root filesystem cannot be removed"}), 400
+        return (
+            jsonify({"error": "The container root filesystem cannot be removed"}),
+            400,
+        )
 
     disk_pattern = re.compile(r"^(scsi|virtio|ide|sata|mp)\d+$")
     if not disk_pattern.match(key):
@@ -6048,7 +6058,10 @@ def api_vm_add_netif(node, vmid):
                 )
             idx = _next_key_index(config, "net")
             if idx > NET_MAX_INDEX:
-                return jsonify({"error": "No free network interface slots available"}), 400
+                return (
+                    jsonify({"error": "No free network interface slots available"}),
+                    400,
+                )
 
             value = _build_qemu_net_value(
                 model, bridge, vlan=vlan, firewall=firewall, mac=mac, rate=rate
@@ -6059,7 +6072,10 @@ def api_vm_add_netif(node, vmid):
             config = proxmox.nodes(node).lxc(vmid).config.get()
             idx = _next_key_index(config, "net")
             if idx > NET_MAX_INDEX:
-                return jsonify({"error": "No free network interface slots available"}), 400
+                return (
+                    jsonify({"error": "No free network interface slots available"}),
+                    400,
+                )
 
             name = (data.get("name") or f"eth{idx}").strip()
 
@@ -6095,7 +6111,10 @@ def api_vm_remove_netif(node, vmid, key):
         vm_type = "lxc"
 
     if not re.match(r"^net\d+$", key):
-        return jsonify({"error": f"'{key}' is not a removable network interface key"}), 400
+        return (
+            jsonify({"error": f"'{key}' is not a removable network interface key"}),
+            400,
+        )
 
     try:
         if vm_type == "qemu":

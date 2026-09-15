@@ -19,7 +19,10 @@ class TestHardwareHelpers(unittest.TestCase):
     """Pure-function tests for slot selection and value-string builders."""
 
     def test_next_key_index_skips_occupied(self):
-        config = {"scsi0": "local-lvm:vm-100-disk-0", "scsi1": "local-lvm:vm-100-disk-1"}
+        config = {
+            "scsi0": "local-lvm:vm-100-disk-0",
+            "scsi1": "local-lvm:vm-100-disk-1",
+        }
         self.assertEqual(app._next_key_index(config, "scsi"), 2)
 
     def test_next_key_index_fills_gap(self):
@@ -39,8 +42,13 @@ class TestHardwareHelpers(unittest.TestCase):
 
     def test_build_qemu_disk_value_with_options(self):
         value = app._build_qemu_disk_value(
-            "local-lvm", 32, cache="writeback", discard=True, ssd=True,
-            iothread=True, backup=False,
+            "local-lvm",
+            32,
+            cache="writeback",
+            discard=True,
+            ssd=True,
+            iothread=True,
+            backup=False,
         )
         self.assertEqual(
             value,
@@ -110,7 +118,11 @@ class TestHardwareEndpoints(unittest.TestCase):
         self.mock_connection = Mock()
         app.proxmox_nodes["test-node"] = self.mock_connection
         app.cluster_nodes.append(
-            {"name": "test-node", "status": "online", "connection": self.mock_connection}
+            {
+                "name": "test-node",
+                "status": "online",
+                "connection": self.mock_connection,
+            }
         )
 
     def tearDown(self):
@@ -199,7 +211,9 @@ class TestHardwareEndpoints(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
 
     def test_add_disk_lxc_next_mp_slot(self):
-        lxc_mock = self._mock_lxc({"rootfs": "local-lvm:8", "mp0": "local-lvm:4,mp=/data0"})
+        lxc_mock = self._mock_lxc(
+            {"rootfs": "local-lvm:8", "mp0": "local-lvm:4,mp=/data0"}
+        )
         resp = self.client.post(
             "/api/vm/test-node/101/disks",
             json={"storage": "local-lvm", "size_gb": 16, "path": "/mnt/extra"},

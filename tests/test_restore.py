@@ -307,7 +307,9 @@ class TestBackupItemType(unittest.TestCase):
     """The listing carries the guest type so the UI knows what it is restoring."""
 
     def test_backup_item_tags_guest_type(self):
-        item = app._backup_item({"volid": QEMU_VOLID, "vmid": 100}, "local", "test-node")
+        item = app._backup_item(
+            {"volid": QEMU_VOLID, "vmid": 100}, "local", "test-node"
+        )
         self.assertEqual(item["type"], "qemu")
 
     def test_backup_item_tolerates_an_unparseable_volid(self):

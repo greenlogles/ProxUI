@@ -60,7 +60,12 @@ class TestStorageConfig(unittest.TestCase):
     def test_create_nfs_missing_export(self):
         response = self.client.post(
             "/api/storages",
-            json={"storage": "nasnfs", "type": "nfs", "server": "10.0.0.5", "content": ["backup"]},
+            json={
+                "storage": "nasnfs",
+                "type": "nfs",
+                "server": "10.0.0.5",
+                "content": ["backup"],
+            },
         )
         self.assertEqual(response.status_code, 400)
         data = json.loads(response.data)
@@ -70,7 +75,12 @@ class TestStorageConfig(unittest.TestCase):
     def test_create_nfs_missing_server(self):
         response = self.client.post(
             "/api/storages",
-            json={"storage": "nasnfs", "type": "nfs", "export": "/tank/data", "content": ["backup"]},
+            json={
+                "storage": "nasnfs",
+                "type": "nfs",
+                "export": "/tank/data",
+                "content": ["backup"],
+            },
         )
         self.assertEqual(response.status_code, 400)
         data = json.loads(response.data)
@@ -79,7 +89,12 @@ class TestStorageConfig(unittest.TestCase):
     def test_create_cifs_missing_share(self):
         response = self.client.post(
             "/api/storages",
-            json={"storage": "nascifs", "type": "cifs", "server": "10.0.0.5", "content": ["backup"]},
+            json={
+                "storage": "nascifs",
+                "type": "cifs",
+                "server": "10.0.0.5",
+                "content": ["backup"],
+            },
         )
         self.assertEqual(response.status_code, 400)
         data = json.loads(response.data)
@@ -88,7 +103,12 @@ class TestStorageConfig(unittest.TestCase):
     def test_create_cifs_missing_server(self):
         response = self.client.post(
             "/api/storages",
-            json={"storage": "nascifs", "type": "cifs", "share": "data", "content": ["backup"]},
+            json={
+                "storage": "nascifs",
+                "type": "cifs",
+                "share": "data",
+                "content": ["backup"],
+            },
         )
         self.assertEqual(response.status_code, 400)
         data = json.loads(response.data)
@@ -270,8 +290,12 @@ class TestStorageConfig(unittest.TestCase):
     def test_create_pbs_requires_datastore(self):
         response = self.client.post(
             "/api/storages",
-            json={"storage": "pbs1", "type": "pbs", "server": "pbs.lan",
-                  "content": ["backup"]},
+            json={
+                "storage": "pbs1",
+                "type": "pbs",
+                "server": "pbs.lan",
+                "content": ["backup"],
+            },
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("datastore", json.loads(response.data)["error"].lower())
@@ -280,10 +304,16 @@ class TestStorageConfig(unittest.TestCase):
     def test_create_pbs_success(self):
         response = self.client.post(
             "/api/storages",
-            json={"storage": "pbs1", "type": "pbs", "server": "pbs.lan",
-                  "datastore": "store1", "username": "root@pam",
-                  "password": "sec", "fingerprint": "AA:BB",
-                  "content": ["backup"]},
+            json={
+                "storage": "pbs1",
+                "type": "pbs",
+                "server": "pbs.lan",
+                "datastore": "store1",
+                "username": "root@pam",
+                "password": "sec",
+                "fingerprint": "AA:BB",
+                "content": ["backup"],
+            },
         )
         self.assertEqual(response.status_code, 200)
         kwargs = self.mock_connection.storage.post.call_args.kwargs
@@ -302,8 +332,12 @@ class TestStorageConfig(unittest.TestCase):
     def test_create_lvmthin_requires_thinpool(self):
         response = self.client.post(
             "/api/storages",
-            json={"storage": "thin1", "type": "lvmthin", "vgname": "pve",
-                  "content": ["images"]},
+            json={
+                "storage": "thin1",
+                "type": "lvmthin",
+                "vgname": "pve",
+                "content": ["images"],
+            },
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("thin pool", json.loads(response.data)["error"].lower())
@@ -311,8 +345,13 @@ class TestStorageConfig(unittest.TestCase):
     def test_create_lvmthin_success(self):
         response = self.client.post(
             "/api/storages",
-            json={"storage": "thin1", "type": "lvmthin", "vgname": "pve",
-                  "thinpool": "data", "content": ["images", "rootdir"]},
+            json={
+                "storage": "thin1",
+                "type": "lvmthin",
+                "vgname": "pve",
+                "thinpool": "data",
+                "content": ["images", "rootdir"],
+            },
         )
         self.assertEqual(response.status_code, 200)
         kwargs = self.mock_connection.storage.post.call_args.kwargs
@@ -323,8 +362,12 @@ class TestStorageConfig(unittest.TestCase):
         # A Proxmox-managed Ceph cluster supplies monhost/keyring itself.
         response = self.client.post(
             "/api/storages",
-            json={"storage": "ceph1", "type": "rbd", "pool": "rbd",
-                  "content": ["images"]},
+            json={
+                "storage": "ceph1",
+                "type": "rbd",
+                "pool": "rbd",
+                "content": ["images"],
+            },
         )
         self.assertEqual(response.status_code, 200)
         kwargs = self.mock_connection.storage.post.call_args.kwargs
@@ -334,7 +377,8 @@ class TestStorageConfig(unittest.TestCase):
 
     def test_update_lvmthin_does_not_send_create_only_keys(self):
         self.mock_connection.storage.return_value.get.return_value = {
-            "storage": "thin1", "type": "lvmthin",
+            "storage": "thin1",
+            "type": "lvmthin",
         }
         response = self.client.put(
             "/api/storages/thin1",
@@ -347,7 +391,8 @@ class TestStorageConfig(unittest.TestCase):
 
     def test_update_zfspool_does_not_repoint_the_pool(self):
         self.mock_connection.storage.return_value.get.return_value = {
-            "storage": "zfs1", "type": "zfspool",
+            "storage": "zfs1",
+            "type": "zfspool",
         }
         response = self.client.put(
             "/api/storages/zfs1",
@@ -364,8 +409,13 @@ class TestStorageConfig(unittest.TestCase):
         )
         response = self.client.post(
             "/api/storages",
-            json={"storage": "ceph1", "type": "rbd", "pool": "rbd",
-                  "keyring": secret, "content": ["images"]},
+            json={
+                "storage": "ceph1",
+                "type": "rbd",
+                "pool": "rbd",
+                "keyring": secret,
+                "content": ["images"],
+            },
         )
         self.assertNotIn("SUPERSECRET", response.get_data(as_text=True))
 
@@ -410,7 +460,12 @@ class TestStorageConfig(unittest.TestCase):
 
     def test_password_not_in_storage_list(self):
         self.mock_connection.storage.get.return_value = [
-            {"storage": "nascifs", "type": "cifs", "server": "10.0.0.5", "share": "data"}
+            {
+                "storage": "nascifs",
+                "type": "cifs",
+                "server": "10.0.0.5",
+                "share": "data",
+            }
         ]
         response = self.client.get("/api/storages")
         self.assertNotIn(b"password", response.data)
@@ -467,9 +522,7 @@ class TestStorageConfig(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_scan_nfs_requires_server(self):
-        response = self.client.post(
-            "/api/storage-scan/nfs", json={"node": "test-node"}
-        )
+        response = self.client.post("/api/storage-scan/nfs", json={"node": "test-node"})
         self.assertEqual(response.status_code, 400)
 
     def test_scan_nfs_success(self):
