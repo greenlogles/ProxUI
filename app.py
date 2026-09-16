@@ -717,6 +717,7 @@ def init_proxmox_connections(cluster_id=None):
     proxmox_nodes.clear()
     cluster_nodes.clear()
     connection_metadata.clear()
+    node_cluster_ips.clear()
 
     cluster_config = all_clusters[current_cluster_id]
     discovered_nodes = set()
@@ -784,6 +785,14 @@ def init_proxmox_connections(cluster_id=None):
         f"Discovered {len(cluster_nodes)} cluster nodes: {[n['name'] for n in cluster_nodes]}"
     )
     print(f"Active connections to {len(proxmox_nodes)} nodes")
+
+    # Learn the other nodes' own addresses now, while something is reachable --
+    # they are the failover targets once the entry host stops answering.
+    for connection in proxmox_nodes.values():
+        _refresh_node_cluster_ips(connection)
+        if node_cluster_ips:
+            break
+
     return len(proxmox_nodes) > 0
 
 
@@ -845,6 +854,149 @@ def renew_proxmox_connection(node_name):
         return None
 
 
+# Cluster addresses discovered at init, used to reach a sibling node when the
+# host we normally go through stops answering. Every node in a cluster is
+# usually reached through one entry point, so losing it costs us every node.
+node_cluster_ips = {}
+
+_failover_lock = threading.Lock()
+_last_failover_attempt = 0.0
+
+# How long to wait before trying to fail over again after a failed sweep, so a
+# fully unreachable cluster costs one probe round per window instead of one per
+# request. Probes use a short timeout: a rebooting node usually hangs rather
+# than refusing, and the default 30s would stall the request that triggered it.
+FAILOVER_RETRY_SECONDS = 30
+FAILOVER_PROBE_TIMEOUT = 5
+
+
+def _refresh_node_cluster_ips(proxmox):
+    """Record each node's cluster address, for failover. Best effort."""
+    try:
+        for entry in proxmox.cluster.status.get() or []:
+            if entry.get("type") == "node" and entry.get("name") and entry.get("ip"):
+                node_cluster_ips[entry["name"]] = entry["ip"]
+    except Exception:
+        # A standalone node has no cluster status, and a malformed reply must
+        # not take down connection setup -- failover just has fewer targets.
+        return
+
+
+def _failover_candidates(failed_host):
+    """Connection configs worth trying when failed_host stops answering."""
+    seen = {failed_host} if failed_host else set()
+    candidates = []
+
+    cluster_config = all_clusters.get(current_cluster_id) or {}
+    for node_config in cluster_config.get("nodes", []):
+        host = node_config.get("host")
+        if host and host not in seen:
+            seen.add(host)
+            candidates.append(dict(node_config))
+
+    # PVE authentication is cluster-wide, so the credentials we already hold
+    # work against any other node's address just as well.
+    template = next(
+        (m for m in connection_metadata.values() if m.get("host") == failed_host),
+        None,
+    ) or next(iter(connection_metadata.values()), None)
+    if template:
+        for ip in node_cluster_ips.values():
+            if ip and ip not in seen:
+                seen.add(ip)
+                candidate = dict(template)
+                candidate["host"] = ip
+                candidates.append(candidate)
+    return candidates
+
+
+def _remap_connection(old_conn, new_conn, metadata=None):
+    """Point every node that used old_conn at new_conn."""
+    moved = [n for n, c in proxmox_nodes.items() if c is old_conn]
+    for name in moved:
+        proxmox_nodes[name] = new_conn
+        if metadata is not None:
+            connection_metadata[name] = metadata
+    for node_info in cluster_nodes:
+        if node_info.get("connection") is old_conn:
+            node_info["connection"] = new_conn
+    return moved
+
+
+def _failover_from(failed_conn, failed_host):
+    """Route around a node that stopped answering. Returns a live connection.
+
+    Only connectivity failures land here; an auth failure is handled by
+    renew_proxmox_connection against the same host.
+    """
+    global _last_failover_attempt
+
+    with _failover_lock:
+        if proxmox_nodes.get(_any_name_for(failed_conn)) is not failed_conn:
+            # Another request already failed this connection over.
+            replacement = _any_live_connection(exclude=failed_conn)
+            if replacement:
+                return replacement
+
+        now = time.monotonic()
+        if now - _last_failover_attempt < FAILOVER_RETRY_SECONDS:
+            return None
+        _last_failover_attempt = now
+
+        # A connection to a different host may already be in the pool.
+        for conn in list(proxmox_nodes.values()):
+            if conn is failed_conn:
+                continue
+            try:
+                conn.version.get()
+            except Exception:
+                continue
+            moved = _remap_connection(failed_conn, conn)
+            print(f"Connection failover: moved {len(moved)} node(s) to a live peer")
+            _last_failover_attempt = 0.0
+            return conn
+
+        for candidate in _failover_candidates(failed_host):
+            host = candidate.get("host")
+            try:
+                conn = create_proxmox_connection(
+                    candidate, timeout=FAILOVER_PROBE_TIMEOUT
+                )
+                version = conn.version.get()
+            except Exception:
+                continue
+            metadata = dict(candidate)
+            metadata["last_authenticated"] = datetime.now()
+            metadata["pve_version"] = (version or {}).get("version", "")
+            moved = _remap_connection(failed_conn, conn, metadata)
+            print(
+                f"Connection failover: {failed_host or 'previous host'} is not "
+                f"answering, moved {len(moved)} node(s) to {host}"
+            )
+            _refresh_node_cluster_ips(conn)
+            _last_failover_attempt = 0.0
+            return conn
+
+    print(f"Connection failover: no reachable node found for {failed_host}")
+    return None
+
+
+def _any_name_for(conn):
+    return next((n for n, c in proxmox_nodes.items() if c is conn), None)
+
+
+def _any_live_connection(exclude=None):
+    for conn in proxmox_nodes.values():
+        if conn is exclude:
+            continue
+        try:
+            conn.version.get()
+            return conn
+        except Exception:
+            continue
+    return None
+
+
 def get_proxmox_connection(node_name, auto_renew=True):
     """Get a Proxmox connection with automatic renewal on auth errors"""
     connection = get_proxmox_for_node(node_name)
@@ -872,7 +1024,16 @@ def get_proxmox_connection(node_name, auto_renew=True):
                 print(f"Failed to renew connection for {node_name}")
                 return None
         else:
-            # Non-authentication error, return original connection
+            # Connectivity failure: the node is down or rebooting. The whole
+            # cluster is normally reached through one entry host, so this
+            # connection is dead for every node, not just this one -- try to
+            # route through a peer before giving the caller a dead handle.
+            failed_host = (connection_metadata.get(node_name) or {}).get("host", "")
+            replacement = _failover_from(connection, failed_host)
+            if replacement:
+                return replacement
+            # Nothing reachable; hand back the original so the caller surfaces
+            # the real transport error rather than a bare "node not found".
             return connection
 
 
