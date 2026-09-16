@@ -700,7 +700,9 @@ def init_all_clusters():
 
 def init_proxmox_connections(cluster_id=None):
     """Initialize connections to Proxmox nodes for specified cluster"""
-    global cluster_nodes, proxmox_nodes, current_cluster_id, connection_metadata
+    # Only current_cluster_id is rebound; the three collections are mutated in
+    # place so imported references stay valid.
+    global current_cluster_id
 
     if cluster_id:
         current_cluster_id = cluster_id
@@ -709,10 +711,12 @@ def init_proxmox_connections(cluster_id=None):
         print("No valid cluster selected")
         return False
 
-    # Clear existing connections
-    proxmox_nodes = {}
-    cluster_nodes = []
-    connection_metadata = {}
+    # Cleared in place, not rebound: `from app import proxmox_nodes` elsewhere
+    # (and in the tests) would otherwise keep pointing at the orphaned dict and
+    # silently read stale connection state after a cluster switch.
+    proxmox_nodes.clear()
+    cluster_nodes.clear()
+    connection_metadata.clear()
 
     cluster_config = all_clusters[current_cluster_id]
     discovered_nodes = set()
