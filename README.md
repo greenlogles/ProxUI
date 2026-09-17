@@ -145,7 +145,7 @@ Configuration file can be managed manually or through the web UI (Cluster Manage
 
 ### Custom Cloud Images
 
-ProxUI includes a default list of popular cloud images (Ubuntu, Debian, Rocky Linux, AlmaLinux, Fedora). You can customize this list by:
+ProxUI includes a default list of popular cloud images (Ubuntu, Debian, Rocky Linux, AlmaLinux, Fedora, FreeBSD, OpenBSD, and NetBSD). You can customize this list by:
 
 1. Create your own `cloud_images.json` file:
 ```json
