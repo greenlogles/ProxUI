@@ -796,8 +796,41 @@ def init_proxmox_connections(cluster_id=None):
     return len(proxmox_nodes) > 0
 
 
+# Transport failures, i.e. the node is down, rebooting or unroutable. These
+# must be told apart from auth failures: proxmoxer re-authenticates against
+# /api2/json/access/ticket, so an unreachable node raises a connection error
+# whose text contains that URL -- and therefore the word "ticket". Classifying
+# that as an auth error sends it to a renewal against the same dead host
+# instead of failing over to a live one.
+_CONNECTION_ERROR_INDICATORS = (
+    "max retries exceeded",
+    "connection refused",
+    "connecttimeout",
+    "readtimeout",
+    "read timed out",
+    "timed out",
+    "newconnectionerror",
+    "connection aborted",
+    "connection reset",
+    "network is unreachable",
+    "no route to host",
+    "name or service not known",
+    "temporary failure in name resolution",
+)
+
+
+def is_connection_error(error):
+    """True if the node could not be reached at all."""
+    error_str = str(error).lower()
+    return any(i in error_str for i in _CONNECTION_ERROR_INDICATORS)
+
+
 def is_authentication_error(error):
     """Check if an error is related to authentication/authorization"""
+    # A node we cannot reach has not rejected our credentials.
+    if is_connection_error(error):
+        return False
+
     error_str = str(error).lower()
     auth_indicators = [
         "couldn't authenticate",
@@ -1020,9 +1053,14 @@ def get_proxmox_connection(node_name, auto_renew=True):
             renewed_connection = renew_proxmox_connection(node_name)
             if renewed_connection:
                 return renewed_connection
-            else:
-                print(f"Failed to renew connection for {node_name}")
-                return None
+            print(f"Failed to renew connection for {node_name}")
+            # Renewal dials the same host. If that host is the one that died,
+            # a peer may still be able to serve this node.
+            failed_host = (connection_metadata.get(node_name) or {}).get("host", "")
+            replacement = _failover_from(connection, failed_host)
+            if replacement:
+                return replacement
+            return None
         else:
             # Connectivity failure: the node is down or rebooting. The whole
             # cluster is normally reached through one entry host, so this
@@ -3951,8 +3989,20 @@ def cluster():
             node_name = node_info["name"]
             proxmox = node_info["connection"]
 
-            # Get node status
-            status = proxmox.nodes(node_name).status.get()
+            # Get node status. The cached connection is used directly so the
+            # healthy path costs no extra probe, but every node in a cluster is
+            # normally reached through one host: if that host is the one that
+            # died, this would report the whole cluster offline. Retry once
+            # through the failover path before believing that.
+            try:
+                status = proxmox.nodes(node_name).status.get()
+            except Exception as e:
+                if not is_connection_error(e):
+                    raise
+                proxmox = get_proxmox_connection(node_name, auto_renew=True)
+                if proxmox is None:
+                    raise
+                status = proxmox.nodes(node_name).status.get()
             status["host"] = node_name
             status["online"] = True
 

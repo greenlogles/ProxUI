@@ -9,9 +9,23 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import app
 
+# The verbatim shape proxmoxer raises when a node is unreachable. The
+# /api2/json/access/ticket URL matters: it contains the word "ticket", which a
+# naive auth check matches on, and an earlier version of these tests used a
+# trimmed message that hid exactly that bug.
 TIMEOUT = Exception(
     "HTTPSConnectionPool(host='10.0.0.1', port=8006): Max retries exceeded "
-    "(Caused by ConnectTimeoutError(...))"
+    "with url: /api2/json/access/ticket "
+    "(Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection "
+    "object at 0x7f00>, 'Connection to 10.0.0.1 timed out. "
+    "(connect timeout=30)'))"
+)
+
+REFUSED = Exception(
+    "HTTPSConnectionPool(host='10.0.0.1', port=8006): Max retries exceeded "
+    "with url: /api2/json/access/ticket (Caused by NewConnectionError("
+    "'<urllib3.connection.HTTPSConnection object>: Failed to establish a new "
+    "connection: [Errno 111] Connection refused'))"
 )
 
 
@@ -163,6 +177,53 @@ class FailoverTestCase(unittest.TestCase):
         self.assertIs(got, renewed)
         ren.assert_called_once_with("node1")
         make.assert_not_called()
+
+    def test_unreachable_node_is_not_mistaken_for_an_auth_failure(self):
+        # proxmoxer re-authenticates against /api2/json/access/ticket, so an
+        # unreachable node's error mentions "ticket". Treating that as an auth
+        # failure renews against the same dead host and never fails over.
+        for err in (TIMEOUT, REFUSED):
+            with self.subTest(err=str(err)[:40]):
+                self.assertTrue(app.is_connection_error(err))
+                self.assertFalse(app.is_authentication_error(err))
+
+    def test_real_outage_message_still_fails_over(self):
+        dead, live = dead_connection(), live_connection()
+        self._seed(dead)
+        with patch.object(app, "renew_proxmox_connection") as renew:
+            with patch.object(app, "create_proxmox_connection", return_value=live):
+                got = app.get_proxmox_connection("node1")
+        self.assertIs(got, live)
+        renew.assert_not_called()
+
+    def test_connection_refused_also_fails_over(self):
+        dead, live = dead_connection(), live_connection()
+        dead.version.get.side_effect = REFUSED
+        self._seed(dead)
+        with patch.object(app, "create_proxmox_connection", return_value=live):
+            got = app.get_proxmox_connection("node1")
+        self.assertIs(got, live)
+
+    def test_failed_renewal_falls_back_to_failover(self):
+        conn = Mock()
+        conn.version.get.side_effect = Exception("401 Unauthorized")
+        self._seed(conn)
+        live = live_connection()
+        with patch.object(app, "renew_proxmox_connection", return_value=None):
+            with patch.object(app, "create_proxmox_connection", return_value=live):
+                got = app.get_proxmox_connection("node1")
+        self.assertIs(got, live)
+
+    def test_genuine_auth_errors_are_still_auth_errors(self):
+        for msg in (
+            "401 Unauthorized",
+            "authentication failed",
+            "Couldn't authenticate user: root@pam",
+            "invalid ticket",
+        ):
+            with self.subTest(msg=msg):
+                self.assertTrue(app.is_authentication_error(Exception(msg)))
+                self.assertFalse(app.is_connection_error(Exception(msg)))
 
     def test_healthy_connection_is_returned_untouched(self):
         live = live_connection()
