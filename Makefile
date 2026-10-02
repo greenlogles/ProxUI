@@ -1,6 +1,6 @@
 # ProxUI Development Makefile
 
-.PHONY: help install install-dev test test-coverage lint format security clean docker-build docker-test run
+.PHONY: help install install-dev vendor test test-coverage lint format security clean docker-build docker-test run
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -13,6 +13,9 @@ install-dev: ## Install development dependencies
 	pip install -r requirements.txt
 	pip install -r requirements-test.txt
 	pre-commit install
+
+vendor: ## Download pinned UI libraries into static/vendor (use FORCE=1 to refetch)
+	python3 misc/fetch_vendor.py $(if $(FORCE),--force)
 
 test: ## Run tests
 	pytest tests/ -v
