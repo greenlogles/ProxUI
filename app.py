@@ -7345,6 +7345,35 @@ def wait_for_task(proxmox, node, task_upid, job_id, timeout=600, poll_interval=3
     return {"success": False, "error": "Task timed out"}
 
 
+def wait_for_vm_unlock(proxmox, node, vmid, job_id, timeout=120, poll_interval=2):
+    """Wait until a VM carries no ``lock`` in its status.
+
+    Proxmox holds a 'create' lock for a moment after the create task returns, and
+    the next config write is rejected with "VM is locked (create)" while it does.
+    """
+    waited = 0
+    last_lock = None
+    while waited < timeout:
+        try:
+            status = proxmox.nodes(node).qemu(vmid).status.current.get()
+            lock = status.get("lock", "")
+            if not lock:
+                return {"success": True}
+            if lock != last_lock:
+                last_lock = lock
+                job_queue.add_step(job_id, f"Waiting for VM lock to clear ({lock})...")
+        except Exception as e:
+            job_queue.add_step(job_id, f"Error checking VM lock: {e}")
+
+        time.sleep(poll_interval)
+        waited += poll_interval
+
+    return {
+        "success": False,
+        "error": f"VM {vmid} still locked ({last_lock}) after {timeout}s",
+    }
+
+
 def run_clone_job(
     job_id, source_node, target_node, target_vmid, task_upid, agent_enabled
 ):
@@ -7602,10 +7631,24 @@ def run_cloud_template_job(job_id, node, params):
         }
 
         try:
-            proxmox.nodes(node).qemu.create(**vm_config)
+            create_task = proxmox.nodes(node).qemu.create(**vm_config)
+            if create_task:
+                result = wait_for_task(
+                    proxmox, node, create_task, job_id, timeout=300, poll_interval=2
+                )
+                if not result["success"]:
+                    job_queue.set_failed(job_id, f"VM create failed: {result['error']}")
+                    return
             job_queue.add_step(job_id, f"VM {vmid} created")
         except Exception as e:
             job_queue.set_failed(job_id, f"Failed to create VM: {e}")
+            return
+
+        # The 'create' lock can outlive the create task; the disk import below is
+        # rejected with "VM is locked (create)" while it is held.
+        result = wait_for_vm_unlock(proxmox, node, vmid, job_id)
+        if not result["success"]:
+            job_queue.set_failed(job_id, result["error"])
             return
 
         job_queue.update_job(job_id, progress=50)
@@ -7627,10 +7670,18 @@ def run_cloud_template_job(job_id, node, params):
             job_queue.add_step(job_id, f"Disk import task started: {import_task}")
 
             # Wait for import task to complete (can take several minutes for large images)
-            result = wait_for_task(proxmox, node, import_task, job_id, timeout=600)
-            if not result["success"]:
-                job_queue.set_failed(job_id, f"Disk import failed: {result['error']}")
-                return
+            if import_task:
+                result = wait_for_task(proxmox, node, import_task, job_id, timeout=600)
+                if not result["success"]:
+                    job_queue.set_failed(
+                        job_id, f"Disk import failed: {result['error']}"
+                    )
+                    return
+            else:
+                result = wait_for_vm_unlock(proxmox, node, vmid, job_id, timeout=600)
+                if not result["success"]:
+                    job_queue.set_failed(job_id, result["error"])
+                    return
             job_queue.add_step(job_id, "Disk imported successfully")
         except Exception as e:
             job_queue.set_failed(job_id, f"Failed to import disk: {e}")
