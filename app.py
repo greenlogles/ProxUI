@@ -7422,6 +7422,50 @@ def run_clone_job(
         job_queue.set_failed(job_id, str(e))
 
 
+# LVM/ZFS/RBD can't hold 'import' volumes; only file-based storages can.
+IMPORT_CAPABLE_STORAGE_TYPES = {"dir", "nfs", "cifs", "cephfs", "btrfs"}
+
+
+def _enable_import_content(proxmox, node, storages, preferred, job_id):
+    """Add 'import' to the content types of a file-based storage on `node`.
+
+    Tries the target storage first, then 'local', then any other candidate.
+    Returns the storage name it enabled, or None.
+    """
+    candidates = [
+        s
+        for s in storages
+        if s.get("active", 0) == 1
+        and s.get("type") in IMPORT_CAPABLE_STORAGE_TYPES
+    ]
+    candidates.sort(
+        key=lambda s: (s.get("storage") != preferred, s.get("storage") != "local")
+    )
+    for s in candidates:
+        name = s.get("storage")
+        content = [c for c in (s.get("content") or "").split(",") if c]
+        joined = ",".join(content + ["import"])
+        try:
+            proxmox.storage(name).put(content=joined)
+        except Exception as api_err:
+            try:
+                rc, out, err = _ssh_run_root(
+                    node,
+                    f"pvesm set {shlex.quote(name)} --content {shlex.quote(joined)}",
+                )
+            except Exception:
+                rc, out, err = 1, "", ""
+            if rc != 0:
+                job_queue.add_step(
+                    job_id,
+                    f"Could not enable 'import' on '{name}': {(err or out or str(api_err))[-200:].strip()}",
+                )
+                continue
+        job_queue.add_step(job_id, f"Enabled 'import' content type on storage '{name}'")
+        return name
+    return None
+
+
 def run_cloud_template_job(job_id, node, params):
     """Background job to create a cloud template via Proxmox API"""
     job_queue.set_running(job_id)
@@ -7493,31 +7537,23 @@ def run_cloud_template_job(job_id, node, params):
                 download_content_type = "import"
                 break
 
-        # If no 'import' storage, check if target storage supports images
         if not download_storage:
-            for s in storages:
-                if s.get("storage") == storage and s.get("active", 0) == 1:
-                    content = s.get("content", "").split(",")
-                    if "images" in content:
-                        download_storage = storage
-                        download_content_type = "import"  # Try import content type
-                        break
-
-        # Fallback: any storage with images content
-        if not download_storage:
-            for s in storages:
-                if s.get("active", 0) != 1:
-                    continue
-                content = s.get("content", "").split(",")
-                if "images" in content:
-                    download_storage = s.get("storage")
-                    download_content_type = "import"
-                    break
+            job_queue.add_step(
+                job_id,
+                "No storage has the 'import' content type; trying to enable it...",
+            )
+            download_storage = _enable_import_content(
+                proxmox, node, storages, storage, job_id
+            )
+            download_content_type = "import"
 
         if not download_storage:
             job_queue.set_failed(
                 job_id,
-                "No storage with 'import' or 'images' content type found. Proxmox 8.1+ required for cloud template import.",
+                "No storage with the 'import' content type, and it could not be enabled "
+                "on any file-based storage (dir/nfs/cifs/cephfs/btrfs). Enable it under "
+                "Datacenter > Storage > <storage> > Content, or run "
+                "'pvesm set local --content <existing>,import'. Proxmox 8.2+ required.",
             )
             return
 
