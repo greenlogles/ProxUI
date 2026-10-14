@@ -1368,6 +1368,58 @@ def get_qemu_guest_disk_info(proxmox, node, vmid):
         return None
 
 
+# Docker's own bridges and container veth ends; br-<12 hex> is a compose network.
+GUEST_IGNORED_IFACE_RE = re.compile(
+    r"^(lo|docker\d*|docker_gwbridge|veth.*|br-[0-9a-f]{12})$"
+)
+
+
+def get_qemu_guest_network_info(proxmox, node, vmid):
+    """Get guest IP addresses from the QEMU guest agent.
+
+    Skips loopback and Docker interfaces and IPv6 link-local addresses, which
+    aren't useful for reaching the VM. Returns a list of
+    {name, mac, addresses: [{address, prefix, family}]}, or None on failure.
+    """
+    try:
+        result = (
+            proxmox.nodes(node).qemu(vmid).agent.get("network-get-interfaces") or {}
+        ).get("result")
+        if not isinstance(result, list):
+            return None
+        interfaces = []
+        for iface in result:
+            name = iface.get("name", "")
+            if GUEST_IGNORED_IFACE_RE.match(name):
+                continue
+            addresses = []
+            for ip in iface.get("ip-addresses") or []:
+                addr = ip.get("ip-address", "")
+                family = ip.get("ip-address-type", "")
+                if (
+                    not addr
+                    or addr.startswith("127.")
+                    or addr == "::1"
+                    or addr.lower().startswith("fe80:")
+                ):
+                    continue
+                addresses.append(
+                    {"address": addr, "prefix": ip.get("prefix"), "family": family}
+                )
+            if addresses:
+                interfaces.append(
+                    {
+                        "name": name,
+                        "mac": iface.get("hardware-address", ""),
+                        "addresses": addresses,
+                    }
+                )
+        return interfaces
+    except Exception as e:
+        print(f"Error getting guest agent network info: {e}")
+        return None
+
+
 def get_lxc_disk_info(status):
     """Build rootfs disk-usage info for an LXC container from status/current.
 
@@ -2711,12 +2763,17 @@ def vm_detail(node, vmid):
         # Get guest agent disk information for QEMU VMs — only when the agent is
         # actually enabled, otherwise the agent call stalls the whole page load.
         guest_disk_info = None
+        guest_network_info = None
         if (
             vm_type == "qemu"
             and status.get("status") == "running"
             and is_agent_enabled(config)
         ):
             guest_disk_info = get_qemu_guest_disk_info(proxmox, node, vmid)
+            # A failed fsinfo usually means the agent isn't running in the guest;
+            # skip the second call so the page doesn't wait out another timeout.
+            if guest_disk_info is not None:
+                guest_network_info = get_qemu_guest_network_info(proxmox, node, vmid)
         elif vm_type == "lxc" and status.get("status") == "running":
             # Containers have no guest agent; the host reports rootfs usage
             # directly via status/current (same as 'pct df' rootfs row).
@@ -2768,6 +2825,7 @@ def vm_detail(node, vmid):
             available_nodes=available_nodes,
             migration_info=migration_info,
             guest_disk_info=guest_disk_info,
+            guest_network_info=guest_network_info,
         )
     except Exception as e:
         flash(f"Error getting VM details: {e}", "error")
@@ -7435,8 +7493,7 @@ def _enable_import_content(proxmox, node, storages, preferred, job_id):
     candidates = [
         s
         for s in storages
-        if s.get("active", 0) == 1
-        and s.get("type") in IMPORT_CAPABLE_STORAGE_TYPES
+        if s.get("active", 0) == 1 and s.get("type") in IMPORT_CAPABLE_STORAGE_TYPES
     ]
     candidates.sort(
         key=lambda s: (s.get("storage") != preferred, s.get("storage") != "local")
