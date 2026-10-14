@@ -203,7 +203,7 @@
             {% if disk.mountpoint == '/' %}
     <div class="hero-stat">
         <div class="k">Disk</div>
-        <div class="v" style="font-size:15px">{{ "%.0f"|format(disk.used_gb) }} / {{ "%.0f"|format(disk.total_gb) }}GB</div>
+        <div class="v" style="font-size:15px">{{ "%.1f"|format(disk.used_gb) }} / {{ "%.1f"|format(disk.total_gb) }}GB</div>
         <div class="ubar mt-2"><i class="{{ 'crit' if disk.used_percent > 80 else 'hot' if disk.used_percent > 60 else 'okc' }}" style="width:{{ disk.used_percent }}%"></i></div>
     </div>
             {% endif %}
