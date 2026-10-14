@@ -1368,6 +1368,58 @@ def get_qemu_guest_disk_info(proxmox, node, vmid):
         return None
 
 
+# Docker's own bridges and container veth ends; br-<12 hex> is a compose network.
+GUEST_IGNORED_IFACE_RE = re.compile(
+    r"^(lo|docker\d*|docker_gwbridge|veth.*|br-[0-9a-f]{12})$"
+)
+
+
+def get_qemu_guest_network_info(proxmox, node, vmid):
+    """Get guest IP addresses from the QEMU guest agent.
+
+    Skips loopback and Docker interfaces and IPv6 link-local addresses, which
+    aren't useful for reaching the VM. Returns a list of
+    {name, mac, addresses: [{address, prefix, family}]}, or None on failure.
+    """
+    try:
+        result = (
+            proxmox.nodes(node).qemu(vmid).agent.get("network-get-interfaces") or {}
+        ).get("result")
+        if not isinstance(result, list):
+            return None
+        interfaces = []
+        for iface in result:
+            name = iface.get("name", "")
+            if GUEST_IGNORED_IFACE_RE.match(name):
+                continue
+            addresses = []
+            for ip in iface.get("ip-addresses") or []:
+                addr = ip.get("ip-address", "")
+                family = ip.get("ip-address-type", "")
+                if (
+                    not addr
+                    or addr.startswith("127.")
+                    or addr == "::1"
+                    or addr.lower().startswith("fe80:")
+                ):
+                    continue
+                addresses.append(
+                    {"address": addr, "prefix": ip.get("prefix"), "family": family}
+                )
+            if addresses:
+                interfaces.append(
+                    {
+                        "name": name,
+                        "mac": iface.get("hardware-address", ""),
+                        "addresses": addresses,
+                    }
+                )
+        return interfaces
+    except Exception as e:
+        print(f"Error getting guest agent network info: {e}")
+        return None
+
+
 def get_lxc_disk_info(status):
     """Build rootfs disk-usage info for an LXC container from status/current.
 
@@ -2711,12 +2763,17 @@ def vm_detail(node, vmid):
         # Get guest agent disk information for QEMU VMs — only when the agent is
         # actually enabled, otherwise the agent call stalls the whole page load.
         guest_disk_info = None
+        guest_network_info = None
         if (
             vm_type == "qemu"
             and status.get("status") == "running"
             and is_agent_enabled(config)
         ):
             guest_disk_info = get_qemu_guest_disk_info(proxmox, node, vmid)
+            # A failed fsinfo usually means the agent isn't running in the guest;
+            # skip the second call so the page doesn't wait out another timeout.
+            if guest_disk_info is not None:
+                guest_network_info = get_qemu_guest_network_info(proxmox, node, vmid)
         elif vm_type == "lxc" and status.get("status") == "running":
             # Containers have no guest agent; the host reports rootfs usage
             # directly via status/current (same as 'pct df' rootfs row).
@@ -2768,6 +2825,7 @@ def vm_detail(node, vmid):
             available_nodes=available_nodes,
             migration_info=migration_info,
             guest_disk_info=guest_disk_info,
+            guest_network_info=guest_network_info,
         )
     except Exception as e:
         flash(f"Error getting VM details: {e}", "error")
@@ -7422,6 +7480,49 @@ def run_clone_job(
         job_queue.set_failed(job_id, str(e))
 
 
+# LVM/ZFS/RBD can't hold 'import' volumes; only file-based storages can.
+IMPORT_CAPABLE_STORAGE_TYPES = {"dir", "nfs", "cifs", "cephfs", "btrfs"}
+
+
+def _enable_import_content(proxmox, node, storages, preferred, job_id):
+    """Add 'import' to the content types of a file-based storage on `node`.
+
+    Tries the target storage first, then 'local', then any other candidate.
+    Returns the storage name it enabled, or None.
+    """
+    candidates = [
+        s
+        for s in storages
+        if s.get("active", 0) == 1 and s.get("type") in IMPORT_CAPABLE_STORAGE_TYPES
+    ]
+    candidates.sort(
+        key=lambda s: (s.get("storage") != preferred, s.get("storage") != "local")
+    )
+    for s in candidates:
+        name = s.get("storage")
+        content = [c for c in (s.get("content") or "").split(",") if c]
+        joined = ",".join(content + ["import"])
+        try:
+            proxmox.storage(name).put(content=joined)
+        except Exception as api_err:
+            try:
+                rc, out, err = _ssh_run_root(
+                    node,
+                    f"pvesm set {shlex.quote(name)} --content {shlex.quote(joined)}",
+                )
+            except Exception:
+                rc, out, err = 1, "", ""
+            if rc != 0:
+                job_queue.add_step(
+                    job_id,
+                    f"Could not enable 'import' on '{name}': {(err or out or str(api_err))[-200:].strip()}",
+                )
+                continue
+        job_queue.add_step(job_id, f"Enabled 'import' content type on storage '{name}'")
+        return name
+    return None
+
+
 def run_cloud_template_job(job_id, node, params):
     """Background job to create a cloud template via Proxmox API"""
     job_queue.set_running(job_id)
@@ -7493,31 +7594,23 @@ def run_cloud_template_job(job_id, node, params):
                 download_content_type = "import"
                 break
 
-        # If no 'import' storage, check if target storage supports images
         if not download_storage:
-            for s in storages:
-                if s.get("storage") == storage and s.get("active", 0) == 1:
-                    content = s.get("content", "").split(",")
-                    if "images" in content:
-                        download_storage = storage
-                        download_content_type = "import"  # Try import content type
-                        break
-
-        # Fallback: any storage with images content
-        if not download_storage:
-            for s in storages:
-                if s.get("active", 0) != 1:
-                    continue
-                content = s.get("content", "").split(",")
-                if "images" in content:
-                    download_storage = s.get("storage")
-                    download_content_type = "import"
-                    break
+            job_queue.add_step(
+                job_id,
+                "No storage has the 'import' content type; trying to enable it...",
+            )
+            download_storage = _enable_import_content(
+                proxmox, node, storages, storage, job_id
+            )
+            download_content_type = "import"
 
         if not download_storage:
             job_queue.set_failed(
                 job_id,
-                "No storage with 'import' or 'images' content type found. Proxmox 8.1+ required for cloud template import.",
+                "No storage with the 'import' content type, and it could not be enabled "
+                "on any file-based storage (dir/nfs/cifs/cephfs/btrfs). Enable it under "
+                "Datacenter > Storage > <storage> > Content, or run "
+                "'pvesm set local --content <existing>,import'. Proxmox 8.2+ required.",
             )
             return
 

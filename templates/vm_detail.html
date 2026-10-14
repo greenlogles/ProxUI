@@ -203,7 +203,7 @@
             {% if disk.mountpoint == '/' %}
     <div class="hero-stat">
         <div class="k">Disk</div>
-        <div class="v" style="font-size:15px">{{ "%.0f"|format(disk.used_gb) }} / {{ "%.0f"|format(disk.total_gb) }}GB</div>
+        <div class="v" style="font-size:15px">{{ "%.1f"|format(disk.used_gb) }} / {{ "%.1f"|format(disk.total_gb) }}GB</div>
         <div class="ubar mt-2"><i class="{{ 'crit' if disk.used_percent > 80 else 'hot' if disk.used_percent > 60 else 'okc' }}" style="width:{{ disk.used_percent }}%"></i></div>
     </div>
             {% endif %}
@@ -324,6 +324,29 @@
                         <p class="mb-0">Guest agent not available or no disk info</p>
                     </div>
                     {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
+            {% if guest_network_info %}
+            <!-- Guest IP Addresses Card -->
+            <div class="card-x">
+                <div class="cx-head"><i class="bi bi-ethernet" style="color:var(--accent)"></i><span class="cx-title">Guest IP Addresses</span></div>
+                <div class="cx-body" style="max-height:300px;overflow-y:auto">
+                    {% for iface in guest_network_info %}
+                    <div>
+                        <div class="d-flex justify-content-between" style="font-size:12.5px">
+                            <span class="mono">{{ iface.name }}</span>
+                            <span class="text-faint mono" style="font-size:11px">{{ iface.mac }}</span>
+                        </div>
+                        {% for ip in iface.addresses %}
+                        <div class="mono mt-1" style="font-size:12.5px">
+                            <span style="user-select:all">{{ ip.address }}</span><span class="text-faint">{% if ip.prefix is not none %}/{{ ip.prefix }}{% endif %}</span>
+                        </div>
+                        {% endfor %}
+                        {% if not loop.last %}<div class="divider my-3"></div>{% endif %}
+                    </div>
+                    {% endfor %}
                 </div>
             </div>
             {% endif %}

@@ -1,6 +1,6 @@
 # ProxUI Development Makefile
 
-.PHONY: help install install-dev vendor test test-coverage lint format security clean docker-build docker-test run
+.PHONY: help install install-dev vendor test test-coverage lint format security clean docker-build docker-test run run-host
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -62,6 +62,12 @@ docker-test: docker-build ## Test Docker image
 run: docker-build ## Build image and run locally with ./data mounted (Ctrl-C to stop)
 	mkdir -p data
 	docker run --rm -it -p 8080:8080 -v "$(PWD)/data:/app/data" --name proxui proxui:latest
+
+
+run-host: docker-build ## Like run, but on the host network (reach libvirt NAT VMs); serves on :8080
+	mkdir -p data
+	docker run --rm -it --network host -v "$(PWD)/data:/app/data" --name proxui proxui:latest
+
 
 ci: lint test security ## Run all CI checks locally
 

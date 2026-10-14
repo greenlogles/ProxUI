@@ -17,6 +17,7 @@ from app import (
     get_all_vms_and_containers_fallback,
     get_lxc_disk_info,
     get_qemu_guest_disk_info,
+    get_qemu_guest_network_info,
     parse_ssh_keys,
     parse_vm_configuration,
     proxmox_nodes,
@@ -228,6 +229,60 @@ class TestVMManagement(unittest.TestCase):
         result = get_qemu_guest_disk_info(mock_proxmox, "test-node", "100")
 
         self.assertIsNone(result)
+
+    def test_get_qemu_guest_network_info_filters(self):
+        """Loopback, Docker interfaces and link-local addresses are dropped"""
+        mock_proxmox = Mock()
+
+        def iface(name, *ips):
+            return {
+                "name": name,
+                "hardware-address": "bc:24:11:00:00:01",
+                "ip-addresses": [
+                    {"ip-address": a, "ip-address-type": t, "prefix": p}
+                    for a, t, p in ips
+                ],
+            }
+
+        mock_proxmox.nodes.return_value.qemu.return_value.agent.get.return_value = {
+            "result": [
+                iface("lo", ("127.0.0.1", "ipv4", 8), ("::1", "ipv6", 128)),
+                iface(
+                    "eth0",
+                    ("192.168.122.50", "ipv4", 24),
+                    ("fe80::be24:11ff:fe00:1", "ipv6", 64),
+                    ("fd00::50", "ipv6", 64),
+                ),
+                iface("docker0", ("172.17.0.1", "ipv4", 16)),
+                iface("br-0123456789ab", ("172.18.0.1", "ipv4", 16)),
+                iface("veth1a2b3c", ("fe80::1", "ipv6", 64)),
+                iface("tailscale0", ("100.64.0.5", "ipv4", 32)),
+                iface("tun0", ("10.8.0.2", "ipv4", 24)),
+                iface("eth1"),
+            ]
+        }
+
+        result = get_qemu_guest_network_info(mock_proxmox, "test-node", "100")
+
+        self.assertEqual([i["name"] for i in result], ["eth0", "tailscale0", "tun0"])
+        self.assertEqual(
+            [a["address"] for a in result[0]["addresses"]],
+            ["192.168.122.50", "fd00::50"],
+        )
+        self.assertEqual(result[0]["mac"], "bc:24:11:00:00:01")
+        self.assertEqual(result[1]["addresses"][0]["prefix"], 32)
+        mock_proxmox.nodes.return_value.qemu.return_value.agent.get.assert_called_with(
+            "network-get-interfaces"
+        )
+
+    def test_get_qemu_guest_network_info_failure(self):
+        """Agent errors return None"""
+        mock_proxmox = Mock()
+        mock_proxmox.nodes.return_value.qemu.return_value.agent.get.side_effect = (
+            Exception("Guest agent not available")
+        )
+
+        self.assertIsNone(get_qemu_guest_network_info(mock_proxmox, "test-node", "100"))
 
     def test_get_lxc_disk_info_success(self):
         """Test LXC rootfs disk info derived from status/current"""
