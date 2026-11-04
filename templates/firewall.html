@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+
+{% block title %}Firewall - Proxmox Manager{% endblock %}
+
+{% macro confirm_modal() %}
+    <div class="modal fade" tabindex="-1" x-ref="confirmModal">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-exclamation-triangle"></i> <span x-text="confirm.title"></span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body"><p class="mb-0" x-text="confirm.body"></p></div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-x danger" @click="runConfirm()" :disabled="busy">Delete</button>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endmacro %}
+
+{% macro load_state(what) %}
+        <template x-if="error">
+            <div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> <span x-text="error"></span></div>
+        </template>
+        <template x-if="loading && !{{ what }}.length">
+            <div class="text-center p-4"><div class="spinner-border spinner-border-sm" role="status"></div> Loading…</div>
+        </template>
+{% endmacro %}
+
+{% block content %}
+<div class="mb-3">
+    <div class="sec-title">Firewall</div>
+    <div class="sec-sub">Datacenter-wide firewall for {{ current_cluster.name }} · node and guest rules are on their detail pages</div>
+</div>
+
+<div x-data="{ tab: ['rules', 'groups', 'aliases', 'ipsets'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'rules',
+               show(t) { this.tab = t; history.replaceState(null, '', '#' + t); } }">
+    <ul class="nav nav-tabs">
+        <li class="nav-item"><a class="nav-link" :class="{active: tab === 'rules'}" href="#rules" @click.prevent="show('rules')"><i class="bi bi-list-check"></i> Rules</a></li>
+        <li class="nav-item"><a class="nav-link" :class="{active: tab === 'groups'}" href="#groups" @click.prevent="show('groups')"><i class="bi bi-collection"></i> Security Groups</a></li>
+        <li class="nav-item"><a class="nav-link" :class="{active: tab === 'aliases'}" href="#aliases" @click.prevent="show('aliases')"><i class="bi bi-tag"></i> Aliases</a></li>
+        <li class="nav-item"><a class="nav-link" :class="{active: tab === 'ipsets'}" href="#ipsets" @click.prevent="show('ipsets')"><i class="bi bi-hdd-network"></i> IP Sets</a></li>
+    </ul>
+
+    <!-- Datacenter rules / options -->
+    <div x-show="tab === 'rules'">
+        {% with fw_scope = 'cluster' %}{% include "_firewall_card.html" %}{% endwith %}
+    </div>
+
+    <!-- Security groups -->
+    <div x-show="tab === 'groups'" x-data="fwGroups()" x-cloak>
+        <div class="card-x mt-3">
+            <div class="cx-head">
+                <i class="bi bi-collection" style="color:var(--accent)"></i><span class="cx-title">Security Groups</span>
+                <span class="text-faint ms-2" style="font-size:12px">Reusable rule sets; add one to a datacenter, node or guest with a rule of direction "group".</span>
+                <button class="icon-btn ms-auto" style="width:28px;height:28px;font-size:13px" @click="load()" :disabled="loading" title="Refresh">
+                    <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
+                </button>
+                <button class="btn-x sm primary" @click="open(null)" :disabled="busy"><i class="bi bi-plus-lg"></i> New group</button>
+            </div>
+            <div class="cx-body tight">
+                {{ load_state('groups') }}
+                <template x-if="!loading && !error && !groups.length">
+                    <div class="empty-hint"><i class="bi bi-collection"></i><p class="mb-0">No security groups</p></div>
+                </template>
+                <table class="tbl" x-show="groups.length">
+                    <thead><tr><th>Name</th><th>Comment</th><th style="text-align:right">Actions</th></tr></thead>
+                    <tbody>
+                        <template x-for="g in groups" :key="g.group">
+                            <tr :style="selected === g.group ? 'background:var(--panel-hover)' : ''">
+                                <td><a href="#" class="nm mono" @click.prevent="selected = g.group" x-text="g.group"></a></td>
+                                <td class="text-faint" style="font-size:12px" x-text="g.comment || ''"></td>
+                                <td style="text-align:right;white-space:nowrap">
+                                    <button class="btn-x sm" @click="selected = g.group" title="Show rules"><i class="bi bi-list-check"></i> Rules</button>
+                                    <button class="btn-x sm" @click="open(g)" :disabled="busy" title="Rename / edit comment"><i class="bi bi-pencil"></i></button>
+                                    <button class="btn-x sm danger" @click="remove(g)" :disabled="busy" title="Delete group"><i class="bi bi-trash"></i></button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        {# Keyed on the name so switching groups builds a fresh rule panel. #}
+        <template x-for="g in (selected ? [selected] : [])" :key="g">
+            <div>{% with fw_scope = 'group', fw_group_expr = 'g' %}{% include "_firewall_card.html" %}{% endwith %}</div>
+        </template>
+
+        <div class="modal fade" tabindex="-1" x-ref="editModal">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="bi bi-collection"></i> <span x-text="form.orig ? 'Edit security group' : 'New security group'"></span></h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="field"><label>Name</label><input type="text" class="inp mono" x-model="form.group" maxlength="18" placeholder="webservers"></div>
+                        <div class="field mb-0"><label>Comment</label><input type="text" class="inp" x-model="form.comment"></div>
+                        <div class="text-danger small mt-2" x-show="formError" x-text="formError"></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn-x primary" @click="save()" :disabled="busy"><i class="bi bi-check-lg"></i> Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {{ confirm_modal() }}
+    </div>
+
+    <!-- Aliases -->
+    <div x-show="tab === 'aliases'" x-data="fwAliases()" x-cloak>
+        <div class="card-x mt-3">
+            <div class="cx-head">
+                <i class="bi bi-tag" style="color:var(--accent)"></i><span class="cx-title">Aliases</span>
+                <span class="text-faint ms-2" style="font-size:12px">Named addresses; use the name as a rule's source or destination.</span>
+                <button class="icon-btn ms-auto" style="width:28px;height:28px;font-size:13px" @click="load()" :disabled="loading" title="Refresh">
+                    <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
+                </button>
+                <button class="btn-x sm primary" @click="open(null)" :disabled="busy"><i class="bi bi-plus-lg"></i> New alias</button>
+            </div>
+            <div class="cx-body tight">
+                {{ load_state('aliases') }}
+                <template x-if="!loading && !error && !aliases.length">
+                    <div class="empty-hint"><i class="bi bi-tag"></i><p class="mb-0">No aliases</p></div>
+                </template>
+                <table class="tbl" x-show="aliases.length">
+                    <thead><tr><th>Name</th><th>IP / CIDR</th><th>Comment</th><th style="text-align:right">Actions</th></tr></thead>
+                    <tbody>
+                        <template x-for="a in aliases" :key="a.name">
+                            <tr>
+                                <td class="nm mono" x-text="a.name"></td>
+                                <td class="mono" style="font-size:12px" x-text="a.cidr"></td>
+                                <td class="text-faint" style="font-size:12px" x-text="a.comment || ''"></td>
+                                <td style="text-align:right;white-space:nowrap">
+                                    <button class="btn-x sm" @click="open(a)" :disabled="busy" title="Edit alias"><i class="bi bi-pencil"></i></button>
+                                    <button class="btn-x sm danger" @click="remove(a)" :disabled="busy" title="Delete alias"><i class="bi bi-trash"></i></button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="modal fade" tabindex="-1" x-ref="editModal">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="bi bi-tag"></i> <span x-text="form.orig ? 'Edit alias' : 'New alias'"></span></h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="field"><label>Name</label><input type="text" class="inp mono" x-model="form.name" maxlength="64" placeholder="office-lan"></div>
+                        <div class="field"><label>IP / CIDR</label><input type="text" class="inp mono" x-model="form.cidr" placeholder="192.168.10.0/24"></div>
+                        <div class="field mb-0"><label>Comment</label><input type="text" class="inp" x-model="form.comment"></div>
+                        <div class="text-danger small mt-2" x-show="formError" x-text="formError"></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn-x primary" @click="save()" :disabled="busy"><i class="bi bi-check-lg"></i> Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {{ confirm_modal() }}
+    </div>
+
+    <!-- IP sets -->
+    <div x-show="tab === 'ipsets'" x-data="fwIpsets()" x-cloak>
+        <div class="card-x mt-3">
+            <div class="cx-head">
+                <i class="bi bi-hdd-network" style="color:var(--accent)"></i><span class="cx-title">IP Sets</span>
+                <span class="text-faint ms-2" style="font-size:12px">Groups of addresses; use <code>+name</code> as a rule's source or destination.</span>
+                <button class="icon-btn ms-auto" style="width:28px;height:28px;font-size:13px" @click="load()" :disabled="loading" title="Refresh">
+                    <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
+                </button>
+                <button class="btn-x sm primary" @click="open(null)" :disabled="busy"><i class="bi bi-plus-lg"></i> New IP set</button>
+            </div>
+            <div class="cx-body tight">
+                {{ load_state('ipsets') }}
+                <template x-if="!loading && !error && !ipsets.length">
+                    <div class="empty-hint"><i class="bi bi-hdd-network"></i><p class="mb-0">No IP sets</p></div>
+                </template>
+                <table class="tbl" x-show="ipsets.length">
+                    <thead><tr><th>Name</th><th>Entries</th><th>Comment</th><th style="text-align:right">Actions</th></tr></thead>
+                    <tbody>
+                        <template x-for="s in ipsets" :key="s.name">
+                            <tr :style="selected === s.name ? 'background:var(--panel-hover)' : ''">
+                                <td><a href="#" class="nm mono" @click.prevent="selected = s.name" x-text="s.name"></a></td>
+                                <td class="mono text-faint" style="font-size:12px" x-text="(s.entries || []).length"></td>
+                                <td class="text-faint" style="font-size:12px" x-text="s.comment || ''"></td>
+                                <td style="text-align:right;white-space:nowrap">
+                                    <button class="btn-x sm" @click="selected = s.name" title="Show entries"><i class="bi bi-list-ul"></i> Entries</button>
+                                    <button class="btn-x sm" @click="open(s)" :disabled="busy" title="Rename / edit comment"><i class="bi bi-pencil"></i></button>
+                                    <button class="btn-x sm danger" @click="remove(s)" :disabled="busy" title="Delete IP set"><i class="bi bi-trash"></i></button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <template x-if="current">
+            <div class="card-x mt-3">
+                <div class="cx-head">
+                    <i class="bi bi-list-ul" style="color:var(--accent)"></i>
+                    <span class="cx-title" x-text="'Entries of ' + current.name"></span>
+                </div>
+                <div class="cx-body tight">
+                    <div class="d-flex flex-wrap gap-2 align-items-end px-3 pt-3">
+                        <div class="field mb-2"><label>IP / CIDR / alias</label>
+                            <input type="text" class="inp mono" style="min-width:200px" x-model="entry.cidr" placeholder="10.0.0.0/24" @keydown.enter="addEntry()"></div>
+                        <div class="field mb-2"><label>Comment</label>
+                            <input type="text" class="inp" style="min-width:220px" x-model="entry.comment" @keydown.enter="addEntry()"></div>
+                        <label class="d-flex align-items-center gap-2 mb-3" style="cursor:pointer;font-size:13px"
+                               title="Exclude this address from the set">
+                            <input type="checkbox" x-model="entry.nomatch"> nomatch
+                        </label>
+                        <button class="btn-x sm primary mb-3" @click="addEntry()" :disabled="busy || !entry.cidr.trim()"><i class="bi bi-plus-lg"></i> Add</button>
+                    </div>
+                    <template x-if="!current.entries.length">
+                        <div class="empty-hint"><i class="bi bi-list-ul"></i><p class="mb-0">No entries</p></div>
+                    </template>
+                    <table class="tbl" x-show="current.entries.length">
+                        <thead><tr><th>IP / CIDR</th><th>nomatch</th><th>Comment</th><th style="text-align:right">Actions</th></tr></thead>
+                        <tbody>
+                            <template x-for="e in current.entries" :key="e.cidr">
+                                <tr>
+                                    <td class="mono" x-text="e.cidr"></td>
+                                    <td><span class="tag" x-show="Number(e.nomatch)">nomatch</span></td>
+                                    <td class="text-faint" style="font-size:12px" x-text="e.comment || ''"></td>
+                                    <td style="text-align:right;white-space:nowrap">
+                                        <button class="btn-x sm" @click="openEntry(e)" :disabled="busy" title="Edit entry"><i class="bi bi-pencil"></i></button>
+                                        <button class="btn-x sm danger" @click="removeEntry(e)" :disabled="busy" title="Remove entry"><i class="bi bi-trash"></i></button>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </template>
+
+        <div class="modal fade" tabindex="-1" x-ref="editModal">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="bi bi-hdd-network"></i> <span x-text="form.orig ? 'Edit IP set' : 'New IP set'"></span></h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="field"><label>Name</label><input type="text" class="inp mono" x-model="form.name" maxlength="64" placeholder="admins"></div>
+                        <div class="field mb-0"><label>Comment</label><input type="text" class="inp" x-model="form.comment"></div>
+                        <div class="text-danger small mt-2" x-show="formError" x-text="formError"></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn-x primary" @click="save()" :disabled="busy"><i class="bi bi-check-lg"></i> Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal fade" tabindex="-1" x-ref="entryModal">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="bi bi-pencil"></i> Edit <span class="mono" x-text="entryEdit.cidr"></span></h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="field"><label>Comment</label><input type="text" class="inp" x-model="entryEdit.comment"></div>
+                        <label class="d-flex align-items-center gap-2" style="cursor:pointer">
+                            <input type="checkbox" x-model="entryEdit.nomatch"> nomatch (exclude this address)
+                        </label>
+                        <div class="text-danger small mt-2" x-show="formError" x-text="formError"></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn-x primary" @click="saveEntry()" :disabled="busy"><i class="bi bi-check-lg"></i> Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {{ confirm_modal() }}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+import { firewallPanel } from "{{ url_for('static', filename='js/firewall.js') }}";
+import { fwGroups, fwAliases, fwIpsets } from "{{ url_for('static', filename='js/firewall-objects.js') }}";
+
+function register() {
+  window.Alpine.data('firewallPanel', firewallPanel);
+  window.Alpine.data('fwGroups', fwGroups);
+  window.Alpine.data('fwAliases', fwAliases);
+  window.Alpine.data('fwIpsets', fwIpsets);
+}
+if (window.Alpine) register();
+else document.addEventListener('alpine:init', register);
+</script>
+{% endblock %}

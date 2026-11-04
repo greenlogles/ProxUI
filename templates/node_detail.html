@@ -280,12 +280,15 @@
         </template>
     </div>
 </div>
+
+{% with fw_scope = 'node' %}{% include "_firewall_card.html" %}{% endwith %}
 {% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script type="module">
   import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
+  import { firewallPanel } from "{{ url_for('static', filename='js/firewall.js') }}";
 
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   function withAlpha(hex, alpha) {
@@ -463,6 +466,7 @@
     window.Alpine.data('nodeDisks', nodeDisks);
     window.Alpine.data('nodeZfs', nodeZfs);
     window.Alpine.data('nodeGuests', nodeGuests);
+    window.Alpine.data('firewallPanel', firewallPanel);
   }
   if (window.Alpine) register();
   else document.addEventListener('alpine:init', register);

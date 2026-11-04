@@ -1,0 +1,266 @@
+{# Firewall card shared by the firewall, node and guest pages.
+   Expects fw_scope ('cluster' | 'node' | 'guest' | 'group') and, below cluster
+   level, node (and vmid for guests) in the including template's context. For
+   'group', fw_group_expr is the Alpine expression holding the group name. #}
+<div class="card-x mt-3" x-data="firewallPanel('{{ fw_scope }}', '{{ node|default('') }}', '{{ vmid|default('') }}'{% if fw_group_expr %}, {{ fw_group_expr }}{% endif %})" x-cloak>
+    <div class="cx-head">
+        <i class="bi bi-shield-lock" style="color:var(--accent)"></i>
+        <span class="cx-title" x-text="scope === 'group' ? 'Rules of ' + group : 'Firewall'"></span>
+        <template x-if="loaded && scope !== 'group'">
+            <span class="pill ms-2" :class="enabled ? 'ok' : 'stop'">
+                <span class="d"></span><span x-text="enabled ? 'Enabled' : 'Disabled'"></span>
+            </span>
+        </template>
+        <button class="icon-btn ms-auto" style="width:28px;height:28px;font-size:13px" @click="load()" :disabled="loading" title="Refresh firewall">
+            <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i>
+        </button>
+        <button class="btn-x sm" @click="askToggle()" :disabled="busy || !loaded" x-show="scope !== 'group'">
+            <i class="bi" :class="enabled ? 'bi-shield-x' : 'bi-shield-check'"></i>
+            <span x-text="enabled ? 'Disable' : 'Enable'"></span>
+        </button>
+        <button class="btn-x sm primary" @click="openRule(null)" :disabled="busy || !loaded">
+            <i class="bi bi-plus-lg"></i> Add rule
+        </button>
+    </div>
+    <div class="cx-body tight">
+        <template x-if="error">
+            <div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> <span x-text="error"></span></div>
+        </template>
+
+        <template x-if="loaded && scope !== 'cluster' && clusterEnabled === false">
+            <div class="alert alert-warning py-2 small m-3 mb-0">
+                <i class="bi bi-exclamation-triangle"></i> <strong>Datacenter firewall is off.</strong>
+                Rules here are not applied until the firewall is enabled at datacenter level
+                (<a href="{{ url_for('firewall') }}">Firewall page</a>).
+            </div>
+        </template>
+        <template x-if="loaded && scope === 'guest' && enabled && !nics.some(n => n.firewall)">
+            <div class="alert alert-warning py-2 small m-3 mb-0">
+                <i class="bi bi-exclamation-triangle"></i> <strong>No network interface has the firewall flag.</strong>
+                Guest rules only apply to NICs with <code>firewall=1</code>; turn it on per interface in the
+                <a href="{{ url_for('vm_edit', node=node, vmid=vmid) if fw_scope == 'guest' else '#' }}#network">Network section of the edit page</a>.
+            </div>
+        </template>
+        <template x-if="loaded && scope === 'guest' && nics.length">
+            <div class="d-flex flex-wrap align-items-center gap-3 px-3 pt-3">
+                <span class="text-faint" style="font-size:12px">Firewall on interface:</span>
+                <template x-for="n in nics" :key="n.key">
+                    <span class="d-inline-flex align-items-center gap-1" style="font-size:12px">
+                        <i class="bi" :class="(n.pending ? !n.firewall : n.firewall) ? 'bi-check-circle-fill text-success' : 'bi-x-circle text-muted'"></i>
+                        <span class="mono" x-text="n.key"></span>
+                        <span class="tag" x-show="n.pending" title="Applies after the guest restarts">pending</span>
+                    </span>
+                </template>
+                {% if fw_scope == 'guest' %}
+                <a href="{{ url_for('vm_edit', node=node, vmid=vmid) }}#network" style="font-size:12px">
+                    <i class="bi bi-pencil"></i> Change
+                </a>
+                {% endif %}
+            </div>
+        </template>
+
+        <template x-if="loaded && policyKeys.length">
+            <div class="d-flex flex-wrap gap-3 px-3 pt-3">
+                <template x-for="key in policyKeys" :key="key">
+                    <div class="field mb-2">
+                        <label x-text="policyLabel(key)"></label>
+                        <select class="inp" style="min-width:150px" :value="options[key] || ''"
+                                @change="savePolicy(key, $event.target.value)" :disabled="busy">
+                            <option value="" x-text="'Default (' + defaults[key] + ')'"></option>
+                            <template x-for="p in policyChoices(key)" :key="p">
+                                <option :value="p" x-text="p" :selected="options[key] === p"></option>
+                            </template>
+                        </select>
+                    </div>
+                </template>
+            </div>
+        </template>
+
+        <template x-if="loading && !loaded">
+            <div class="text-center p-4"><div class="spinner-border spinner-border-sm" role="status"></div> Loading firewall…</div>
+        </template>
+        <template x-if="loaded && rules.length === 0">
+            <div class="empty-hint"><i class="bi bi-shield"></i><p class="mb-0">No rules</p></div>
+        </template>
+        <div style="overflow-x:auto" x-show="rules.length > 0">
+            <table class="tbl">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>On</th>
+                        <th>Dir</th>
+                        <th>Action</th>
+                        <th>Macro / Proto</th>
+                        <th>Source</th>
+                        <th>Dest</th>
+                        <th>Port</th>
+                        <th>Iface</th>
+                        <th>Comment</th>
+                        <th style="text-align:right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="r in rules" :key="r.pos">
+                        <tr :style="r.enable ? '' : 'opacity:.55'">
+                            <td class="mono text-faint" x-text="r.pos"></td>
+                            <td><span class="sw" style="display:inline-block;vertical-align:middle" :class="r.enable && 'on'" role="switch" :aria-checked="!!r.enable"
+                                      @click="!busy && toggleRule(r)" :title="r.enable ? 'Disable rule' : 'Enable rule'"></span></td>
+                            <td class="mono" x-text="r.type"></td>
+                            <td><span class="tag" x-text="r.action"></span></td>
+                            <td class="mono" style="font-size:12px" x-text="r.macro || r.proto || 'any'"></td>
+                            <td class="mono" style="font-size:12px" x-text="r.source || 'any'"></td>
+                            <td class="mono" style="font-size:12px" x-text="r.dest || 'any'"></td>
+                            <td class="mono" style="font-size:12px" x-text="portText(r)"></td>
+                            <td class="mono text-faint" style="font-size:12px" x-text="r.iface || '—'"></td>
+                            <td class="text-faint" style="font-size:12px" x-text="r.comment || ''"></td>
+                            <td style="text-align:right;white-space:nowrap">
+                                <button class="btn-x sm" @click="move(r, 'up')" :disabled="busy || r.pos === 0" title="Move up"><i class="bi bi-arrow-up"></i></button>
+                                <button class="btn-x sm" @click="move(r, 'down')" :disabled="busy || r.pos === rules.length - 1" title="Move down"><i class="bi bi-arrow-down"></i></button>
+                                <button class="btn-x sm" @click="openRule(r)" :disabled="busy" title="Edit rule"><i class="bi bi-pencil"></i></button>
+                                <button class="btn-x sm danger" @click="askDelete(r)" :disabled="busy" title="Delete rule"><i class="bi bi-trash"></i></button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Add / edit rule -->
+    <div class="modal fade" tabindex="-1" x-ref="ruleModal">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-shield-lock"></i>
+                        <span x-text="form.pos === null ? 'Add firewall rule' : 'Edit firewall rule #' + form.pos"></span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-6 col-md-3 field mb-0">
+                            <label>Direction</label>
+                            <select class="inp" x-model="form.type">
+                                <option value="in">in</option>
+                                <option value="out">out</option>
+                                <template x-if="scope === 'node'"><option value="forward">forward</option></template>
+                                <template x-if="scope !== 'group'"><option value="group">group</option></template>
+                            </select>
+                        </div>
+                        <div class="col-6 col-md-3 field mb-0">
+                            <label x-text="form.type === 'group' ? 'Security group' : 'Action'"></label>
+                            <template x-if="form.type !== 'group'">
+                                <select class="inp" x-model="form.action">
+                                    <option value="ACCEPT">ACCEPT</option>
+                                    <option value="DROP">DROP</option>
+                                    <option value="REJECT">REJECT</option>
+                                </select>
+                            </template>
+                            <template x-if="form.type === 'group'">
+                                <select class="inp" x-model="form.action">
+                                    <option value="">— choose —</option>
+                                    <template x-for="g in groups" :key="g"><option :value="g" x-text="g" :selected="form.action === g"></option></template>
+                                </select>
+                            </template>
+                        </div>
+                        <div class="col-6 col-md-3 field mb-0" x-show="form.type !== 'group'">
+                            <label>Macro</label>
+                            <select class="inp" x-model="form.macro">
+                                <option value="">— none —</option>
+                                <template x-for="m in macros" :key="m.name"><option :value="m.name" x-text="m.name" :title="m.descr" :selected="form.macro === m.name"></option></template>
+                            </select>
+                        </div>
+                        <div class="col-6 col-md-3 field mb-0">
+                            <label>Interface</label>
+                            <input type="text" class="inp mono" x-model="form.iface" :placeholder="scope === 'guest' ? 'net0' : 'vmbr0'">
+                        </div>
+
+                        <template x-if="form.type !== 'group'">
+                            <div class="col-12"><div class="row g-3">
+                                <div class="col-6 col-md-3 field mb-0" x-show="!form.macro">
+                                    <label>Protocol</label>
+                                    <input type="text" class="inp mono" x-model="form.proto" list="fwProtoList" placeholder="tcp / udp / icmp">
+                                </div>
+                                <div class="col-6 col-md-3 field mb-0" x-show="!form.macro && /^icmp|ipv6-icmp/.test(form.proto)">
+                                    <label>ICMP type</label>
+                                    <input type="text" class="inp mono" x-model="form['icmp-type']" placeholder="echo-request">
+                                </div>
+                                <div class="col-6 col-md-3 field mb-0">
+                                    <label>Source</label>
+                                    <input type="text" class="inp mono" x-model="form.source" :list="'fwAddr-' + scope" placeholder="10.0.0.0/24, alias, +ipset">
+                                </div>
+                                <div class="col-6 col-md-3 field mb-0">
+                                    <label>Destination</label>
+                                    <input type="text" class="inp mono" x-model="form.dest" :list="'fwAddr-' + scope" placeholder="any">
+                                </div>
+                                <div class="col-6 col-md-3 field mb-0" x-show="!form.macro">
+                                    <label>Source port</label>
+                                    <input type="text" class="inp mono" x-model="form.sport" placeholder="any">
+                                </div>
+                                <div class="col-6 col-md-3 field mb-0" x-show="!form.macro">
+                                    <label>Dest. port</label>
+                                    <input type="text" class="inp mono" x-model="form.dport" placeholder="22, 80:90">
+                                </div>
+                                <div class="col-6 col-md-3 field mb-0">
+                                    <label>Log level</label>
+                                    <select class="inp" x-model="form.log">
+                                        <option value="">— default (nolog) —</option>
+                                        <template x-for="l in logLevels" :key="l"><option :value="l" x-text="l" :selected="form.log === l"></option></template>
+                                    </select>
+                                </div>
+                            </div></div>
+                        </template>
+
+                        <div class="col-12 field mb-0">
+                            <label>Comment</label>
+                            <input type="text" class="inp" x-model="form.comment">
+                        </div>
+                        <div class="col-12">
+                            <label class="d-flex align-items-center gap-2" style="cursor:pointer">
+                                <input type="checkbox" x-model="form.enable"> Enable rule
+                            </label>
+                        </div>
+                    </div>
+                    <datalist :id="'fwAddr-' + scope">
+                        <template x-for="a in addresses" :key="a"><option :value="a"></option></template>
+                    </datalist>
+                    <datalist id="fwProtoList">
+                        <option value="tcp"></option><option value="udp"></option>
+                        <option value="icmp"></option><option value="ipv6-icmp"></option>
+                    </datalist>
+                    <div class="text-danger small mt-2" x-show="formError" x-text="formError"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-x primary" @click="saveRule()" :disabled="busy">
+                        <i class="bi bi-check-lg"></i> <span x-text="form.pos === null ? 'Add rule' : 'Save rule'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Enable / disable / delete confirmation -->
+    <div class="modal fade" tabindex="-1" x-ref="confirmModal">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-exclamation-triangle"></i> <span x-text="confirm.title"></span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p x-text="confirm.body"></p>
+                    <template x-if="confirm.warn">
+                        <div class="alert alert-warning py-2 small mb-0">
+                            <i class="bi bi-exclamation-triangle"></i> <span x-text="confirm.warn"></span>
+                        </div>
+                    </template>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-x" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn-x" :class="confirm.danger ? 'danger' : 'primary'" @click="runConfirm()" :disabled="busy"
+                            x-text="confirm.label"></button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
