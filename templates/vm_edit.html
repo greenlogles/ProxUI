@@ -747,7 +747,7 @@
                         </div>
                         <div class="form-text small mt-1">
                             Adds a <code>chpasswd</code> block (with <code>ssh_pwauth</code>) to the YAML above.
-                            The password is stored in plaintext inside the snippet file — use SSH keys where you can.
+                            The password is stored as a SHA-512 crypt hash, not plaintext — still, prefer SSH keys where you can.
                         </div>
                     </div>
 
@@ -3387,17 +3387,24 @@ function cloudInit(node, vmid) {
       this.validateResult = null;
     },
 
-    insertPasswordBlock() {
+    async insertPasswordBlock() {
       const user = (this.pwUser || 'root').trim();
       const pw = this.pwPassword;
       if (!pw.trim()) return;
+      this.snippetError = ''; this.snippetSuccess = '';
+      let hash;
+      try {
+        hash = (await ProxUtils.apiJson('/api/cloudinit/hash-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pw }),
+        })).hash;
+      } catch(e) { this.snippetError = e.message || 'Could not hash password'; return; }
       let content = this.snippetContent || '';
       if (!content.trim()) content = '#cloud-config\n';
       if (!content.endsWith('\n')) content += '\n';
-      // Escape the password for a YAML double-quoted scalar.
-      const esc = pw.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       content += `\nchpasswd:\n  expire: false\n  users:\n` +
-                 `    - {name: ${user}, password: "${esc}", type: text}\n` +
+                 `    - {name: ${user}, password: "${hash}", type: hash}\n` +
                  `ssh_pwauth: true\n`;
       this.snippetContent = content;
       this.pwPassword = '';
