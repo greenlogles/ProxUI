@@ -35,11 +35,23 @@
          status (:class object syntax; Jinja sets the initial class).
          Hidden while the VM is locked (clone/migrate/etc.). -->
     <div class="d-flex flex-wrap gap-2">
+{% if config.template %}
+        {# Proxmox refuses to start a template; cloning is what it's for.
+           The clone page is QEMU-only, so LXC templates get no button. #}
+        {% if vm_type == 'qemu' %}
+        <a href="{{ url_for('vm_clone', node=node, vmid=vmid) }}"
+           class="btn-x primary {{ 'd-none' if status.lock else '' }}"
+           :class="{ 'd-none': busy }" style="text-decoration:none">
+            <i class="bi bi-files"></i> Clone
+        </a>
+        {% endif %}
+{% else %}
         <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='start') }}"
               class="d-inline {{ '' if (status.status == 'stopped' and not status.lock) else 'd-none' }}"
               :class="{ 'd-none': !isStopped || busy }">
             <button type="submit" class="btn-x primary"><i class="bi bi-play-fill"></i> Start</button>
         </form>
+{% endif %}
         <form method="POST" action="{{ url_for('vm_action', node=node, vmid=vmid, action='shutdown') }}"
               class="d-inline {{ 'd-none' if (status.status == 'stopped' or status.lock) else '' }}"
               :class="{ 'd-none': isStopped || busy }">
