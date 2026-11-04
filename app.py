@@ -894,7 +894,9 @@ def renew_proxmox_connection(node_name):
 node_cluster_ips = {}
 
 _failover_lock = threading.Lock()
-_last_failover_attempt = 0.0
+# -inf, not 0.0: time.monotonic() counts from boot, so on a host up for less
+# than FAILOVER_RETRY_SECONDS a 0.0 start would throttle the first failover.
+_last_failover_attempt = float("-inf")
 
 # How long to wait before trying to fail over again after a failed sweep, so a
 # fully unreachable cluster costs one probe round per window instead of one per
@@ -987,7 +989,7 @@ def _failover_from(failed_conn, failed_host):
                 continue
             moved = _remap_connection(failed_conn, conn)
             print(f"Connection failover: moved {len(moved)} node(s) to a live peer")
-            _last_failover_attempt = 0.0
+            _last_failover_attempt = float("-inf")
             return conn
 
         for candidate in _failover_candidates(failed_host):
@@ -1008,7 +1010,7 @@ def _failover_from(failed_conn, failed_host):
                 f"answering, moved {len(moved)} node(s) to {host}"
             )
             _refresh_node_cluster_ips(conn)
-            _last_failover_attempt = 0.0
+            _last_failover_attempt = float("-inf")
             return conn
 
     print(f"Connection failover: no reachable node found for {failed_host}")
