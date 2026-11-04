@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import (
+    _sha512_crypt,
     cluster_nodes,
     get_proxmox_for_node,
     group_shared_storages,
@@ -283,6 +284,23 @@ class TestUtilityFunctions(unittest.TestCase):
         self.assertEqual(len(result), 1)
         storage = result[0]
         self.assertNotIn("node_count", storage)
+
+    def test_sha512_crypt_matches_glibc(self):
+        """Hashes match glibc/openssl SHA-512 crypt output"""
+        self.assertEqual(
+            _sha512_crypt("", "xyxyxyxy"),
+            "$6$xyxyxyxy$k2h48.6ptSY955VZ5YjJF9yvy780fFi2v/hd5ZvDnCRMQevdGrccf6n5OFf7KvK7w0SIlZBrHV73dQWxRw8Ce0",
+        )
+        self.assertEqual(
+            _sha512_crypt("secret", "abcdefgh12345678")[:40],
+            "$6$abcdefgh12345678$8qry.al/7S2fAQnDPL..",
+        )
+
+    def test_sha512_crypt_random_salt(self):
+        """Without a salt, a 16-char random salt is generated"""
+        a, b = _sha512_crypt("pw"), _sha512_crypt("pw")
+        self.assertNotEqual(a, b)
+        self.assertRegex(a, r"^\$6\$[./0-9A-Za-z]{16}\$[./0-9A-Za-z]{86}$")
 
 
 if __name__ == "__main__":

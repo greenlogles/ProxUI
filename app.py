@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 import json
 import math
@@ -9352,6 +9353,55 @@ _CLOUD_INIT_KNOWN = (
 )
 
 
+_CRYPT_B64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+def _sha512_crypt(password: str, salt: str | None = None, rounds: int = 5000) -> str:
+    """Return a glibc-compatible SHA-512 crypt ($6$) hash.
+
+    Implemented on hashlib because the stdlib `crypt` module is gone in
+    Python 3.13; the format is what cloud-init's chpasswd `type: hash` expects.
+    """
+    if salt is None:
+        salt = "".join(secrets.choice(_CRYPT_B64) for _ in range(16))
+    pw = password.encode()
+    s = salt.encode()[:16]
+
+    b = hashlib.sha512(pw + s + pw).digest()
+    ctx = hashlib.sha512(pw + s)
+    ctx.update((b * (len(pw) // 64 + 1))[: len(pw)])
+    n = len(pw)
+    while n:
+        ctx.update(b if n & 1 else pw)
+        n >>= 1
+    a = ctx.digest()
+
+    dp = hashlib.sha512(pw * len(pw)).digest()
+    p = (dp * (len(pw) // 64 + 1))[: len(pw)]
+    ds = hashlib.sha512(s * (16 + a[0])).digest()
+    sb = ds[: len(s)]
+
+    c = a
+    for i in range(rounds):
+        h = hashlib.sha512(p if i & 1 else c)
+        if i % 3:
+            h.update(sb)
+        if i % 7:
+            h.update(p)
+        h.update(c if i & 1 else p)
+        c = h.digest()
+
+    order = [(i * 22 % 63, (i * 22 + 21) % 63, (i * 22 + 42) % 63) for i in range(21)]
+    out: list[str] = []
+    for x, y, z in order:
+        v = (c[x] << 16) | (c[y] << 8) | c[z]
+        out.extend(_CRYPT_B64[(v >> (6 * k)) & 0x3F] for k in range(4))
+    out.extend(_CRYPT_B64[(c[63] >> (6 * k)) & 0x3F] for k in range(2))
+
+    prefix = "$6$" if rounds == 5000 else f"$6$rounds={rounds}$"
+    return f"{prefix}{s.decode()}${''.join(out)}"
+
+
 def _validate_cloud_init_yaml(content: str) -> tuple[list, list]:
     """Return (errors, warnings) for cloud-init YAML content."""
     errors: list = []
@@ -10782,6 +10832,16 @@ def api_vm_cloudinit_validate(node, vmid):
         )
     errors, warnings = _validate_cloud_init_yaml(content)
     return jsonify({"valid": len(errors) == 0, "errors": errors, "warnings": warnings})
+
+
+@app.route("/api/cloudinit/hash-password", methods=["POST"])
+def api_cloudinit_hash_password():
+    """Hash a password for a cloud-init chpasswd `type: hash` entry."""
+    data = request.get_json() or {}
+    password = data.get("password") or ""
+    if not password:
+        return jsonify({"error": "password is required"}), 400
+    return jsonify({"hash": _sha512_crypt(password)})
 
 
 @app.route("/api/vm/<node>/<vmid>/cloudinit/snippet", methods=["POST"])
