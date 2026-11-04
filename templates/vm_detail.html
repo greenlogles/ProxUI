@@ -737,6 +737,8 @@
     </div>
 </div>
 
+{% with fw_scope = 'guest' %}{% include "_firewall_card.html" %}{% endwith %}
+
 <!-- Migration Modal -->
 <div class="modal fade" id="migrateModal" tabindex="-1" x-data="migrateStorages('{{ node }}', '{{ vmid }}', '{{ vm_type }}')">
     <div class="modal-dialog">
@@ -898,6 +900,7 @@
 <script type="module">
 import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
 import { vmSnapshots } from "{{ url_for('static', filename='js/snapshots.js') }}";
+import { firewallPanel } from "{{ url_for('static', filename='js/firewall.js') }}";
 window.ProxUtils = ProxUtils;
 
 const ALLOWED_STATUS = new Set(['primary','secondary','success','danger','warning','info','dark']);
@@ -1272,6 +1275,7 @@ function register() {
   window.Alpine.data('vmStatus', vmStatus);
   window.Alpine.data('migrateStorages', migrateStorages);
   window.Alpine.data('vmSnapshots', vmSnapshots);
+  window.Alpine.data('firewallPanel', firewallPanel);
   {% if vm_type == 'lxc' %}
   window.Alpine.data('lxcSummary', lxcSummary);
   {% endif %}

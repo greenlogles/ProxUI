@@ -894,7 +894,9 @@ def renew_proxmox_connection(node_name):
 node_cluster_ips = {}
 
 _failover_lock = threading.Lock()
-_last_failover_attempt = 0.0
+# -inf, not 0.0: time.monotonic() counts from boot, so on a host up for less
+# than FAILOVER_RETRY_SECONDS a 0.0 start would throttle the first failover.
+_last_failover_attempt = float("-inf")
 
 # How long to wait before trying to fail over again after a failed sweep, so a
 # fully unreachable cluster costs one probe round per window instead of one per
@@ -987,7 +989,7 @@ def _failover_from(failed_conn, failed_host):
                 continue
             moved = _remap_connection(failed_conn, conn)
             print(f"Connection failover: moved {len(moved)} node(s) to a live peer")
-            _last_failover_attempt = 0.0
+            _last_failover_attempt = float("-inf")
             return conn
 
         for candidate in _failover_candidates(failed_host):
@@ -1008,7 +1010,7 @@ def _failover_from(failed_conn, failed_host):
                 f"answering, moved {len(moved)} node(s) to {host}"
             )
             _refresh_node_cluster_ips(conn)
-            _last_failover_attempt = 0.0
+            _last_failover_attempt = float("-inf")
             return conn
 
     print(f"Connection failover: no reachable node found for {failed_host}")
@@ -4309,6 +4311,12 @@ def _group_backups_by_guest(backups, guests):
     return rows
 
 
+@app.route("/firewall")
+def firewall():
+    """Datacenter-wide firewall options and rules"""
+    return render_template("firewall.html")
+
+
 @app.route("/backups")
 def backups():
     """Show scheduled backup jobs and stored backups, grouped per guest."""
@@ -6098,6 +6106,678 @@ def api_vm_snapshot_rollback(node, vmid, snapname):
             "success": True,
             "message": f"Rolling back to snapshot '{snapname}'.",
             "upid": upid,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Firewall (cluster / node / guest)
+# ---------------------------------------------------------------------------
+# PVE exposes the same rules/options API at all three levels, so one set of
+# handlers serves /api/cluster/firewall, /api/node/<node>/firewall and
+# /api/vm/<node>/<vmid>/firewall; the URL arguments pick the scope.
+
+_FW_POLICIES = ("ACCEPT", "REJECT", "DROP")
+_FW_OPTION_CHOICES = {
+    "cluster": {
+        "enable": None,
+        "policy_in": _FW_POLICIES,
+        "policy_out": _FW_POLICIES,
+        "policy_forward": ("ACCEPT", "DROP"),
+    },
+    "node": {"enable": None},
+    "guest": {"enable": None, "policy_in": _FW_POLICIES, "policy_out": _FW_POLICIES},
+}
+# What PVE applies when an option is absent from the config.
+_FW_OPTION_DEFAULTS = {
+    "cluster": {
+        "enable": 0,
+        "policy_in": "DROP",
+        "policy_out": "ACCEPT",
+        "policy_forward": "ACCEPT",
+    },
+    "node": {"enable": 1},
+    "guest": {"enable": 0, "policy_in": "DROP", "policy_out": "ACCEPT"},
+}
+_FW_RULE_TYPES = ("in", "out", "forward", "group")
+_FW_LOG_LEVELS = (
+    "emerg",
+    "alert",
+    "crit",
+    "err",
+    "warning",
+    "notice",
+    "info",
+    "debug",
+    "nolog",
+)
+_FW_RULE_TEXT_FIELDS = (
+    "macro",
+    "proto",
+    "source",
+    "dest",
+    "sport",
+    "dport",
+    "iface",
+    "icmp-type",
+    "comment",
+)
+_FW_GROUP_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,17}$")
+
+
+def _fw_scope(node, vmid):
+    if vmid is not None:
+        return "guest"
+    return "node" if node is not None else "cluster"
+
+
+def _fw_target(node, vmid):
+    """Return (scope, firewall endpoint, proxmox, guest endpoint|None, error response|None)."""
+    scope = _fw_scope(node, vmid)
+    if scope == "cluster":
+        proxmox = _any_live_connection()
+    else:
+        proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return scope, None, None, None, (jsonify({"error": "Node not found"}), 404)
+    if scope == "cluster":
+        return scope, proxmox.cluster.firewall, proxmox, None, None
+    if scope == "node":
+        return scope, proxmox.nodes(node).firewall, proxmox, None, None
+    guest = _guest_endpoint(proxmox, node, vmid, _guest_type(proxmox, node, vmid))
+    return scope, guest.firewall, proxmox, guest, None
+
+
+def _fw_rules_target(node, vmid, group):
+    """Return (scope, rules endpoint, error response|None).
+
+    A security group's rules sit at cluster/firewall/groups/<group> rather than
+    under a `rules` child, but take the same list/add/edit/move/delete calls.
+    """
+    if group is not None:
+        if not _FW_GROUP_NAME_RE.match(group):
+            return "group", None, (jsonify({"error": "Invalid group name"}), 400)
+        proxmox = _any_live_connection()
+        if not proxmox:
+            return "group", None, (jsonify({"error": "No live connection"}), 503)
+        return "group", proxmox.cluster.firewall.groups(group), None
+    scope, fw, _proxmox, _guest, err = _fw_target(node, vmid)
+    return scope, (fw.rules if fw is not None else None), err
+
+
+def _fw_rule_params(data, editing):
+    """Validate a rule body into (params, delete keys, error).
+
+    On edit, a field sent empty is cleared via PVE's `delete` list; otherwise
+    PVE would keep the old value.
+    """
+    params, delete = {}, []
+    rule_type = (data.get("type") or "").strip()
+    if rule_type not in _FW_RULE_TYPES:
+        return None, None, f"type must be one of {', '.join(_FW_RULE_TYPES)}"
+    params["type"] = rule_type
+
+    action = (data.get("action") or "").strip()
+    if rule_type == "group":
+        if not _FW_GROUP_NAME_RE.match(action):
+            return None, None, "A group rule needs a security group name as action"
+    elif action not in _FW_POLICIES:
+        return None, None, f"action must be one of {', '.join(_FW_POLICIES)}"
+    params["action"] = action
+
+    for key in _FW_RULE_TEXT_FIELDS:
+        value = data.get(key)
+        value = "" if value is None else str(value).strip()
+        if "\n" in value or "\r" in value or len(value) > 512:
+            return None, None, f"Invalid value for {key}"
+        if value:
+            params[key] = value
+        elif editing:
+            delete.append(key)
+
+    log = (data.get("log") or "").strip()
+    if log:
+        if log not in _FW_LOG_LEVELS:
+            return None, None, "Invalid log level"
+        params["log"] = log
+    elif editing:
+        delete.append("log")
+
+    params["enable"] = 1 if data.get("enable") else 0
+    digest = data.get("digest")
+    if digest:
+        params["digest"] = str(digest)
+    return params, delete, None
+
+
+@app.route("/api/cluster/firewall/options", methods=["GET", "PUT"])
+@app.route("/api/node/<node>/firewall/options", methods=["GET", "PUT"])
+@app.route("/api/vm/<node>/<vmid>/firewall/options", methods=["GET", "PUT"])
+def api_firewall_options(node=None, vmid=None):
+    """Read or change firewall options (enable flag, default policies)."""
+    scope, fw, proxmox, guest, err = _fw_target(node, vmid)
+    if err:
+        return err
+    choices = _FW_OPTION_CHOICES[scope]
+
+    if request.method == "GET":
+        try:
+            raw = fw.options.get() or {}
+        except Exception as e:
+            return _proxmox_error_response(e)
+        result = {
+            "scope": scope,
+            "options": {k: raw[k] for k in choices if k in raw},
+            "defaults": _FW_OPTION_DEFAULTS[scope],
+            "digest": raw.get("digest"),
+        }
+        if scope != "cluster":
+            # Node and guest rules only take effect while the datacenter
+            # firewall is on, so the UI needs to warn when it is off.
+            try:
+                cluster_opts = proxmox.cluster.firewall.options.get() or {}
+                result["cluster_enabled"] = bool(int(cluster_opts.get("enable") or 0))
+            except Exception:
+                result["cluster_enabled"] = None
+        if scope == "guest":
+            # Guest rules only apply on NICs that carry firewall=1.
+            try:
+                config = guest.config.get() or {}
+            except Exception:
+                config = {}
+            try:
+                pending = {
+                    p["key"]: p.get("pending")
+                    for p in (guest.pending.get() or [])
+                    if "pending" in p
+                }
+            except Exception:
+                pending = {}
+
+            def has_fw(v):
+                return "firewall=1" in str(v).split(",")
+
+            result["nics"] = [
+                {
+                    "key": k,
+                    "firewall": has_fw(v),
+                    "pending": k in pending and has_fw(pending[k]) != has_fw(v),
+                }
+                for k, v in sorted(config.items())
+                if re.match(r"^net\d+$", k)
+            ]
+        return jsonify(result)
+
+    data = request.get_json(silent=True) or {}
+    params, delete = {}, []
+    for key, allowed in choices.items():
+        if key not in data:
+            continue
+        value = data[key]
+        if key == "enable":
+            params["enable"] = 1 if value else 0
+        elif value in (None, ""):
+            delete.append(key)
+        elif value in allowed:
+            params[key] = value
+        else:
+            return jsonify({"error": f"Invalid value for {key}"}), 400
+    if not params and not delete:
+        return jsonify({"error": "Nothing to change"}), 400
+    if delete:
+        params["delete"] = ",".join(delete)
+    if data.get("digest"):
+        params["digest"] = str(data["digest"])
+    try:
+        fw.options.put(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify({"success": True, "message": "Firewall options saved."})
+
+
+@app.route("/api/cluster/firewall/rules", methods=["GET", "POST"])
+@app.route("/api/node/<node>/firewall/rules", methods=["GET", "POST"])
+@app.route("/api/vm/<node>/<vmid>/firewall/rules", methods=["GET", "POST"])
+@app.route("/api/cluster/firewall/groups/<group>/rules", methods=["GET", "POST"])
+def api_firewall_rules(node=None, vmid=None, group=None):
+    """List firewall rules, or add one (PVE always inserts new rules at the top)."""
+    scope, rules_ep, err = _fw_rules_target(node, vmid, group)
+    if err:
+        return err
+
+    if request.method == "GET":
+        try:
+            rules = rules_ep.get() or []
+        except Exception as e:
+            return _proxmox_error_response(e)
+        rules.sort(key=lambda r: r.get("pos", 0))
+        return jsonify({"scope": scope, "rules": rules})
+
+    data = request.get_json(silent=True) or {}
+    params, _delete, error = _fw_rule_params(data, editing=False)
+    if error:
+        return jsonify({"error": error}), 400
+    try:
+        rules_ep.post(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify({"success": True, "message": "Firewall rule added."})
+
+
+@app.route("/api/cluster/firewall/rules/<int:pos>", methods=["PUT", "DELETE"])
+@app.route("/api/node/<node>/firewall/rules/<int:pos>", methods=["PUT", "DELETE"])
+@app.route("/api/vm/<node>/<vmid>/firewall/rules/<int:pos>", methods=["PUT", "DELETE"])
+@app.route(
+    "/api/cluster/firewall/groups/<group>/rules/<int:pos>", methods=["PUT", "DELETE"]
+)
+def api_firewall_rule(pos, node=None, vmid=None, group=None):
+    """Edit, move (`move: up|down`) or delete the rule at `pos`."""
+    _scope, rules_ep, err = _fw_rules_target(node, vmid, group)
+    if err:
+        return err
+
+    if request.method == "DELETE":
+        params = {}
+        if request.args.get("digest"):
+            params["digest"] = request.args["digest"]
+        try:
+            rules_ep(pos).delete(**params)
+        except Exception as e:
+            return _proxmox_error_response(e)
+        return jsonify({"success": True, "message": "Firewall rule deleted."})
+
+    data = request.get_json(silent=True) or {}
+    move = data.get("move")
+    if move:
+        if move not in ("up", "down"):
+            return jsonify({"error": "move must be 'up' or 'down'"}), 400
+        if move == "up" and pos == 0:
+            return jsonify({"error": "Rule is already first"}), 400
+        # PVE inserts the rule before the rule that is at `moveto` in the
+        # original list, so one step down means skipping past pos + 1.
+        params = {"moveto": pos - 1 if move == "up" else pos + 2}
+        if data.get("digest"):
+            params["digest"] = str(data["digest"])
+        try:
+            rules_ep(pos).put(**params)
+        except Exception as e:
+            return _proxmox_error_response(e)
+        return jsonify({"success": True, "message": "Firewall rule moved."})
+
+    if set(data) <= {"enable", "digest"} and "enable" in data:
+        params = {"enable": 1 if data["enable"] else 0}
+        if data.get("digest"):
+            params["digest"] = str(data["digest"])
+    else:
+        params, delete, error = _fw_rule_params(data, editing=True)
+        if error:
+            return jsonify({"error": error}), 400
+        if delete:
+            params["delete"] = ",".join(delete)
+    try:
+        rules_ep(pos).put(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify({"success": True, "message": "Firewall rule saved."})
+
+
+@app.route("/api/vm/<node>/<vmid>/firewall/nics/<key>", methods=["PUT"])
+def api_firewall_nic(node, vmid, key):
+    """Set or clear the firewall=1 flag on one guest NIC, keeping its other settings."""
+    if not re.match(r"^net\d+$", key):
+        return jsonify({"error": "Invalid interface key"}), 400
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+    guest = _guest_endpoint(proxmox, node, vmid, _guest_type(proxmox, node, vmid))
+    enable = bool((request.get_json(silent=True) or {}).get("firewall"))
+
+    try:
+        config = guest.config.get() or {}
+        value = config.get(key)
+        if not value:
+            return jsonify({"error": f"{key} not found"}), 404
+        parts = [p for p in str(value).split(",") if not p.startswith("firewall=")]
+        if enable:
+            parts.append("firewall=1")
+        params = {key: ",".join(parts)}
+        if config.get("digest"):
+            params["digest"] = config["digest"]
+        guest.config.put(**params)
+        # Without NIC hotplug on a running guest, PVE parks the change as pending.
+        applied = (
+            "firewall=1" in str((guest.config.get() or {}).get(key, "")).split(",")
+        ) == enable
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+    state = "on" if enable else "off"
+    if applied:
+        return jsonify({"success": True, "message": f"Firewall {state} for {key}."})
+    return jsonify(
+        {
+            "success": True,
+            "pending": True,
+            "message": f"Firewall {state} for {key} saved as a pending change; "
+            "it applies after the guest restarts.",
+        }
+    )
+
+
+_FW_OBJECT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,63}$")
+_FW_CIDR_RE = re.compile(r"^[A-Za-z0-9:./_-]{1,64}$")
+
+
+def _fw_comment(data):
+    comment = str(data.get("comment") or "").strip()
+    if "\n" in comment or "\r" in comment or len(comment) > 512:
+        return None
+    return comment
+
+
+def _fw_cluster():
+    proxmox = _any_live_connection()
+    return proxmox.cluster.firewall if proxmox else None
+
+
+@app.route("/api/cluster/firewall/groups", methods=["GET", "POST"])
+def api_firewall_groups():
+    """List security groups, or create one."""
+    fw = _fw_cluster()
+    if fw is None:
+        return jsonify({"error": "No live connection"}), 503
+    if request.method == "GET":
+        try:
+            groups = fw.groups.get() or []
+        except Exception as e:
+            return _proxmox_error_response(e)
+        return jsonify({"groups": sorted(groups, key=lambda g: g.get("group", ""))})
+
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("group") or "").strip()
+    comment = _fw_comment(data)
+    if not _FW_GROUP_NAME_RE.match(name):
+        return (
+            jsonify(
+                {
+                    "error": "Group name: 2-18 chars, letter first, then letters, digits, - or _"
+                }
+            ),
+            400,
+        )
+    if comment is None:
+        return jsonify({"error": "Invalid comment"}), 400
+    params = {"group": name}
+    if comment:
+        params["comment"] = comment
+    try:
+        fw.groups.post(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify({"success": True, "message": f"Security group '{name}' created."})
+
+
+@app.route("/api/cluster/firewall/groups/<group>", methods=["PUT", "DELETE"])
+def api_firewall_group(group):
+    """Rename / re-comment a security group, or delete it (PVE refuses non-empty ones)."""
+    fw = _fw_cluster()
+    if fw is None:
+        return jsonify({"error": "No live connection"}), 503
+    if not _FW_GROUP_NAME_RE.match(group):
+        return jsonify({"error": "Invalid group name"}), 400
+    if request.method == "DELETE":
+        try:
+            fw.groups(group).delete()
+        except Exception as e:
+            return _proxmox_error_response(e)
+        return jsonify(
+            {"success": True, "message": f"Security group '{group}' deleted."}
+        )
+
+    data = request.get_json(silent=True) or {}
+    new_name = str(data.get("group") or group).strip()
+    comment = _fw_comment(data)
+    if not _FW_GROUP_NAME_RE.match(new_name):
+        return jsonify({"error": "Invalid group name"}), 400
+    if comment is None:
+        return jsonify({"error": "Invalid comment"}), 400
+    # PVE updates a group through POST with rename=<current name>; renaming to
+    # the same name just changes the comment.
+    params = {"group": new_name, "rename": group, "comment": comment}
+    if data.get("digest"):
+        params["digest"] = str(data["digest"])
+    try:
+        fw.groups.post(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify({"success": True, "message": f"Security group '{new_name}' saved."})
+
+
+@app.route("/api/cluster/firewall/aliases", methods=["GET", "POST"])
+def api_firewall_aliases():
+    """List aliases, or create one."""
+    fw = _fw_cluster()
+    if fw is None:
+        return jsonify({"error": "No live connection"}), 503
+    if request.method == "GET":
+        try:
+            aliases = fw.aliases.get() or []
+        except Exception as e:
+            return _proxmox_error_response(e)
+        return jsonify({"aliases": sorted(aliases, key=lambda a: a.get("name", ""))})
+
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name") or "").strip()
+    cidr = str(data.get("cidr") or "").strip()
+    comment = _fw_comment(data)
+    if not _FW_OBJECT_NAME_RE.match(name):
+        return (
+            jsonify(
+                {"error": "Alias name: letter first, then letters, digits, - or _"}
+            ),
+            400,
+        )
+    if not _FW_CIDR_RE.match(cidr):
+        return jsonify({"error": "An IP address or CIDR is required"}), 400
+    if comment is None:
+        return jsonify({"error": "Invalid comment"}), 400
+    params = {"name": name, "cidr": cidr}
+    if comment:
+        params["comment"] = comment
+    try:
+        fw.aliases.post(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify({"success": True, "message": f"Alias '{name}' created."})
+
+
+@app.route("/api/cluster/firewall/aliases/<name>", methods=["PUT", "DELETE"])
+def api_firewall_alias(name):
+    """Edit (optionally rename) or delete an alias."""
+    fw = _fw_cluster()
+    if fw is None:
+        return jsonify({"error": "No live connection"}), 503
+    if not _FW_OBJECT_NAME_RE.match(name):
+        return jsonify({"error": "Invalid alias name"}), 400
+    if request.method == "DELETE":
+        params = {}
+        if request.args.get("digest"):
+            params["digest"] = request.args["digest"]
+        try:
+            fw.aliases(name).delete(**params)
+        except Exception as e:
+            return _proxmox_error_response(e)
+        return jsonify({"success": True, "message": f"Alias '{name}' deleted."})
+
+    data = request.get_json(silent=True) or {}
+    cidr = str(data.get("cidr") or "").strip()
+    new_name = str(data.get("name") or name).strip()
+    comment = _fw_comment(data)
+    if not _FW_CIDR_RE.match(cidr):
+        return jsonify({"error": "An IP address or CIDR is required"}), 400
+    if not _FW_OBJECT_NAME_RE.match(new_name):
+        return jsonify({"error": "Invalid alias name"}), 400
+    if comment is None:
+        return jsonify({"error": "Invalid comment"}), 400
+    params = {"cidr": cidr, "comment": comment}
+    if new_name != name:
+        params["rename"] = new_name
+    if data.get("digest"):
+        params["digest"] = str(data["digest"])
+    try:
+        fw.aliases(name).put(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify({"success": True, "message": f"Alias '{new_name}' saved."})
+
+
+@app.route("/api/cluster/firewall/ipsets", methods=["GET", "POST"])
+def api_firewall_ipsets():
+    """List IP sets (with their entries), or create one."""
+    fw = _fw_cluster()
+    if fw is None:
+        return jsonify({"error": "No live connection"}), 503
+    if request.method == "GET":
+        try:
+            ipsets = fw.ipset.get() or []
+            for s in ipsets:
+                s["entries"] = sorted(
+                    fw.ipset(s["name"]).get() or [], key=lambda e: e.get("cidr", "")
+                )
+        except Exception as e:
+            return _proxmox_error_response(e)
+        return jsonify({"ipsets": sorted(ipsets, key=lambda s: s.get("name", ""))})
+
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name") or "").strip()
+    comment = _fw_comment(data)
+    if not _FW_OBJECT_NAME_RE.match(name):
+        return (
+            jsonify(
+                {"error": "IP set name: letter first, then letters, digits, - or _"}
+            ),
+            400,
+        )
+    if comment is None:
+        return jsonify({"error": "Invalid comment"}), 400
+    params = {"name": name}
+    if comment:
+        params["comment"] = comment
+    try:
+        fw.ipset.post(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify({"success": True, "message": f"IP set '{name}' created."})
+
+
+@app.route("/api/cluster/firewall/ipsets/<name>", methods=["PUT", "DELETE"])
+def api_firewall_ipset(name):
+    """Rename / re-comment an IP set, or delete it together with its entries."""
+    fw = _fw_cluster()
+    if fw is None:
+        return jsonify({"error": "No live connection"}), 503
+    if not _FW_OBJECT_NAME_RE.match(name):
+        return jsonify({"error": "Invalid IP set name"}), 400
+    if request.method == "DELETE":
+        try:
+            # Without force PVE refuses to delete an IP set that has entries;
+            # the UI has already asked the user to confirm that.
+            fw.ipset(name).delete(force=1)
+        except Exception as e:
+            return _proxmox_error_response(e)
+        return jsonify({"success": True, "message": f"IP set '{name}' deleted."})
+
+    data = request.get_json(silent=True) or {}
+    new_name = str(data.get("name") or name).strip()
+    comment = _fw_comment(data)
+    if not _FW_OBJECT_NAME_RE.match(new_name):
+        return jsonify({"error": "Invalid IP set name"}), 400
+    if comment is None:
+        return jsonify({"error": "Invalid comment"}), 400
+    # Same as groups: POST with rename=<current name> updates in place.
+    params = {"name": new_name, "rename": name, "comment": comment}
+    if data.get("digest"):
+        params["digest"] = str(data["digest"])
+    try:
+        fw.ipset.post(**params)
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify({"success": True, "message": f"IP set '{new_name}' saved."})
+
+
+@app.route("/api/cluster/firewall/ipsets/<name>/entries", methods=["POST"])
+@app.route(
+    "/api/cluster/firewall/ipsets/<name>/entries/<path:cidr>", methods=["PUT", "DELETE"]
+)
+def api_firewall_ipset_entry(name, cidr=None):
+    """Add, edit (comment / nomatch) or remove one IP set entry."""
+    fw = _fw_cluster()
+    if fw is None:
+        return jsonify({"error": "No live connection"}), 503
+    if not _FW_OBJECT_NAME_RE.match(name):
+        return jsonify({"error": "Invalid IP set name"}), 400
+    data = request.get_json(silent=True) or {}
+    if request.method == "POST":
+        cidr = str(data.get("cidr") or "").strip()
+    if not cidr or not _FW_CIDR_RE.match(cidr):
+        return jsonify({"error": "An IP address, CIDR or alias is required"}), 400
+    # PVE's own UI puts the CIDR into the path unencoded (slash included).
+    entry = fw.ipset(name)(cidr)
+
+    if request.method == "DELETE":
+        params = {}
+        if request.args.get("digest"):
+            params["digest"] = request.args["digest"]
+        try:
+            entry.delete(**params)
+        except Exception as e:
+            return _proxmox_error_response(e)
+        return jsonify({"success": True, "message": f"Removed {cidr} from '{name}'."})
+
+    comment = _fw_comment(data)
+    if comment is None:
+        return jsonify({"error": "Invalid comment"}), 400
+    params = {"nomatch": 1 if data.get("nomatch") else 0}
+    try:
+        if request.method == "POST":
+            if comment:
+                params["comment"] = comment
+            fw.ipset(name).post(cidr=cidr, **params)
+            msg = f"Added {cidr} to '{name}'."
+        else:
+            params["comment"] = comment
+            if data.get("digest"):
+                params["digest"] = str(data["digest"])
+            entry.put(**params)
+            msg = f"Saved {cidr} in '{name}'."
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify({"success": True, "message": msg})
+
+
+@app.route("/api/firewall/choices")
+def api_firewall_choices():
+    """Macros, security groups, aliases and IP sets for the rule editor's pickers."""
+    proxmox = _any_live_connection()
+    if not proxmox:
+        return jsonify({"error": "No live connection"}), 503
+    try:
+        macros = proxmox.cluster.firewall.macros.get() or []
+        groups = proxmox.cluster.firewall.groups.get() or []
+        aliases = proxmox.cluster.firewall.aliases.get() or []
+        ipsets = proxmox.cluster.firewall.ipset.get() or []
+    except Exception as e:
+        return _proxmox_error_response(e)
+    return jsonify(
+        {
+            "macros": sorted(
+                ({"name": m.get("macro"), "descr": m.get("descr", "")} for m in macros),
+                key=lambda m: m["name"] or "",
+            ),
+            "groups": sorted(g.get("group") for g in groups if g.get("group")),
+            # Rules reference these as `name` (alias) and `+name` (IP set).
+            "addresses": sorted(a["name"] for a in aliases if a.get("name"))
+            + sorted("+" + s["name"] for s in ipsets if s.get("name")),
         }
     )
 

@@ -49,7 +49,7 @@ class FailoverTestCase(unittest.TestCase):
         app.connection_metadata.clear()
         app.node_cluster_ips.clear()
         app.all_clusters.clear()
-        app._last_failover_attempt = 0.0
+        app._last_failover_attempt = float("-inf")
         self._saved_cluster = app.current_cluster_id
         app.current_cluster_id = "c1"
         app.all_clusters["c1"] = {
@@ -67,7 +67,7 @@ class FailoverTestCase(unittest.TestCase):
         app.connection_metadata.clear()
         app.node_cluster_ips.clear()
         app.all_clusters.clear()
-        app._last_failover_attempt = 0.0
+        app._last_failover_attempt = float("-inf")
         app.current_cluster_id = self._saved_cluster
 
     def _seed(self, conn, hosts=("kilo", "node1", "node2"), host="10.0.0.1"):
@@ -164,7 +164,7 @@ class FailoverTestCase(unittest.TestCase):
         self._seed(dead)
         with patch.object(app, "create_proxmox_connection", return_value=live):
             app.get_proxmox_connection("node1")
-        self.assertEqual(app._last_failover_attempt, 0.0)
+        self.assertEqual(app._last_failover_attempt, float("-inf"))
 
     def test_auth_errors_still_renew_against_the_same_host(self):
         conn = Mock()

@@ -305,7 +305,7 @@
                     {% endif %}
 
                     <!-- Network Interfaces -->
-                    <div class="mb-4">
+                    <div class="mb-4" id="network">
                         <div class="d-flex justify-content-between align-items-center mb-3">
                             <div class="sub-h mb-0" style="margin-top:0"><i class="bi bi-diagram-3"></i> Network Interfaces</div>
                             <button type="button" class="btn-x sm primary" id="addNetworkBtn">
@@ -1452,6 +1452,7 @@ function createNetworkInterfaceCard(iface) {
     let ipAddress = '';
     let gateway = '';
     let name = 'eth0';
+    const firewall = parts.includes('firewall=1');
 
     for (const part of parts) {
         if (part.includes('=')) {
@@ -1487,11 +1488,19 @@ function createNetworkInterfaceCard(iface) {
                         <strong>${iface.key}</strong><br>
                         <small class="text-muted">${name}</small>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <label class="form-label small mb-1">Bridge</label>
                         <select class="form-select form-select-sm bridge-select" data-interface="${iface.key}">
                             <option value="">Loading...</option>
                         </select>
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label small mb-1 d-block">Firewall</label>
+                        <div class="form-check form-switch mb-0">
+                            <input class="form-check-input" type="checkbox" ${firewall ? 'checked' : ''}
+                                   title="Apply guest firewall rules to this interface (firewall=1)"
+                                   onchange="setNicFirewall('${iface.key}', this)">
+                        </div>
                     </div>
                     <div class="col-md-2">
                         <label class="form-label small mb-1">IP Config</label>
@@ -1536,8 +1545,16 @@ function createNetworkInterfaceCard(iface) {
                             <option value="">Loading bridges...</option>
                         </select>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <small class="text-muted">${macAddr ? macAddr.substring(0, 17) : 'Auto MAC'}</small>
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label small mb-1 d-block">Firewall</label>
+                        <div class="form-check form-switch mb-0">
+                            <input class="form-check-input" type="checkbox" ${firewall ? 'checked' : ''}
+                                   title="Apply guest firewall rules to this interface (firewall=1)"
+                                   onchange="setNicFirewall('${iface.key}', this)">
+                        </div>
                     </div>
                     <div class="col-md-2">
                         <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeNetworkInterface('${iface.key}')">
@@ -1556,6 +1573,29 @@ function createNetworkInterfaceCard(iface) {
     }, 100);
 
     return div;
+}
+
+function setNicFirewall(interfaceKey, checkbox) {
+    checkbox.disabled = true;
+    fetch(`/api/vm/${node}/${vmid}/firewall/nics/${interfaceKey}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ firewall: checkbox.checked })
+    })
+    .then(response => response.json().then(result => ({ ok: response.ok, result })))
+    .then(({ ok, result }) => {
+        if (ok && result.success) {
+            showNotification(result.message, result.pending ? 'warning' : 'success');
+        } else {
+            showNotification(result.error || 'Failed to update interface', 'error');
+            checkbox.checked = !checkbox.checked;
+        }
+    })
+    .catch(() => {
+        showNotification('Network error while updating interface', 'error');
+        checkbox.checked = !checkbox.checked;
+    })
+    .finally(() => { checkbox.disabled = false; });
 }
 
 function toggleLxcIpFields(selectElement) {
@@ -1578,24 +1618,28 @@ function saveLxcNetworkConfig(interfaceKey) {
     const ipAddress = ipAddressInput ? ipAddressInput.value : '';
     const gateway = gatewayInput ? gatewayInput.value : '';
 
-    // Build LXC network config string
-    let netConfig = `name=eth0,bridge=${bridge}`;
-    if (ipConfig === 'dhcp') {
-        netConfig += ',ip=dhcp';
-    } else if (ipConfig === 'static' && ipAddress) {
-        netConfig += `,ip=${ipAddress}`;
-        if (gateway) {
-            netConfig += `,gw=${gateway}`;
+    // Edit bridge/ip/gw inside the current value so name, hwaddr, tag,
+    // firewall=1 etc. survive the change.
+    fetch(`/api/vm/${node}/${vmid}/config`)
+    .then(response => response.json())
+    .then(data => {
+        const current = data[interfaceKey];
+        if (!current) throw new Error(`${interfaceKey} not found`);
+        const parts = current.split(',').filter(p => !/^(bridge|ip|gw)=/.test(p));
+        parts.push(`bridge=${bridge}`);
+        if (ipConfig === 'dhcp') {
+            parts.push('ip=dhcp');
+        } else if (ipConfig === 'static' && ipAddress) {
+            parts.push(`ip=${ipAddress}`);
+            if (gateway) parts.push(`gw=${gateway}`);
         }
-    }
-
-    const updateData = {};
-    updateData[interfaceKey] = netConfig;
-
-    fetch(`/api/vm/${node}/${vmid}/config`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updateData)
+        const updateData = {};
+        updateData[interfaceKey] = parts.join(',');
+        return fetch(`/api/vm/${node}/${vmid}/config`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updateData)
+        });
     })
     .then(response => response.json())
     .then(result => {
