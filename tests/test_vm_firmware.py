@@ -200,5 +200,120 @@ class TestCloudTemplateJobFirmware(unittest.TestCase):
         self.assertNotIn("efidisk0", kwargs)
 
 
+class TestVmBiosEdit(unittest.TestCase):
+    EFIDISK = "local-lvm:vm-150-disk-1,efitype=4m,pre-enrolled-keys=0,size=4M"
+
+    def setUp(self):
+        flask_app.config["TESTING"] = True
+        self.client = flask_app.test_client()
+        self.proxmox = Mock()
+        self.vm = self.proxmox.nodes.return_value.qemu.return_value
+        self.vm.status.current.get.return_value = {"status": "stopped"}
+        self.patchers = [
+            patch("app.get_proxmox_connection", return_value=self.proxmox),
+            patch("app.config_file_exists", True),
+            patch.dict("app.all_clusters", {"c1": {"id": "c1"}}),
+        ]
+        for p in self.patchers:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patchers:
+            p.stop()
+
+    def _put(self, **body):
+        return self.client.put("/api/vm/pve1/150/bios", json=body)
+
+    def _put_calls(self):
+        return [c.kwargs for c in self.vm.config.put.call_args_list]
+
+    def test_to_ovmf_creates_efidisk(self):
+        self.vm.config.get.return_value = {"scsi0": "local-lvm:vm-150-disk-0"}
+        resp = self._put(bios="ovmf", storage="local-lvm", secure_boot=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            self._put_calls(),
+            [
+                {
+                    "bios": "ovmf",
+                    "efidisk0": "local-lvm:1,efitype=4m,pre-enrolled-keys=1",
+                }
+            ],
+        )
+
+    def test_to_ovmf_reuses_existing_efidisk(self):
+        self.vm.config.get.return_value = {"efidisk0": self.EFIDISK}
+        resp = self._put(bios="ovmf")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(self._put_calls(), [{"bios": "ovmf"}])
+
+    def test_to_ovmf_without_storage_rejected(self):
+        self.vm.config.get.return_value = {}
+        self.assertEqual(self._put(bios="ovmf").status_code, 400)
+        self.vm.config.put.assert_not_called()
+
+    def test_to_seabios_keeps_efidisk_by_default(self):
+        self.vm.config.get.return_value = {"bios": "ovmf", "efidisk0": self.EFIDISK}
+        resp = self._put(bios="seabios")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(self._put_calls(), [{"delete": "bios"}])
+
+    def test_to_seabios_deletes_efidisk_volume(self):
+        self.vm.config.get.side_effect = [
+            {"bios": "ovmf", "efidisk0": self.EFIDISK},
+            {
+                "unused0": "local-lvm:vm-150-disk-9",
+                "unused1": "local-lvm:vm-150-disk-1",
+            },
+        ]
+        resp = self._put(bios="seabios", remove_efidisk=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            self._put_calls(), [{"delete": "bios,efidisk0"}, {"delete": "unused1"}]
+        )
+        self.assertIn("deleted", resp.get_json()["message"])
+
+    def test_to_seabios_volume_still_referenced(self):
+        self.vm.config.get.side_effect = [
+            {"bios": "ovmf", "efidisk0": self.EFIDISK},
+            {},
+        ]
+        resp = self._put(bios="seabios", remove_efidisk=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(self._put_calls(), [{"delete": "bios,efidisk0"}])
+        self.assertIn("kept", resp.get_json()["message"])
+
+    def test_volume_delete_failure_reported(self):
+        self.vm.config.get.side_effect = [
+            {"bios": "ovmf", "efidisk0": self.EFIDISK},
+            {"unused0": "local-lvm:vm-150-disk-1"},
+        ]
+        self.vm.config.put.side_effect = [None, Exception("used by linked clone")]
+        resp = self._put(bios="seabios", remove_efidisk=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("kept as unused0", resp.get_json()["message"])
+
+    def test_running_vm_rejected(self):
+        self.vm.status.current.get.return_value = {"status": "running"}
+        self.assertEqual(self._put(bios="ovmf", storage="x").status_code, 409)
+        self.vm.config.put.assert_not_called()
+
+    def test_invalid_bios_rejected(self):
+        self.assertEqual(self._put(bios="coreboot").status_code, 400)
+
+    def test_edit_page_renders_bios_card(self):
+        self.vm.status.current.get.return_value = {"status": "stopped", "vmid": 150}
+        self.vm.config.get.return_value = {
+            "bios": "ovmf",
+            "efidisk0": self.EFIDISK,
+            "ide2": "local:iso/x.iso,media=cdrom",
+            "scsi0": "fast:vm-150-disk-0,size=10G",
+        }
+        html = self.client.get("/vm/pve1/150/edit").get_data(as_text=True)
+        self.assertIn("/api/vm/pve1/150/bios", html)
+        self.assertIn("storage: 'fast'", html)
+        self.assertIn("efidisk: 'local-lvm:vm-150-disk-1'", html)
+
+
 if __name__ == "__main__":
     unittest.main()

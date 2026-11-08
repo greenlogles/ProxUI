@@ -510,6 +510,98 @@
         </div>
     </div>
 </div>
+
+{% set _bios = config.get('bios', 'seabios') %}
+{% set _efidisk = config.get('efidisk0', '') | string %}
+<div class="row justify-content-center mt-3"
+     x-data="{
+       current: '{{ _bios }}', bios: '{{ _bios }}',
+       efidisk: '{{ _efidisk.split(',')[0] }}',
+       stopped: {{ 'true' if vm.status == 'stopped' else 'false' }},
+       storage: '{{ efi_default_storage }}', storages: [],
+       secureBoot: false, removeEfidisk: true,
+       busy: false, error: '', success: '',
+       get needsStorage() { return this.bios === 'ovmf' && !this.efidisk; },
+       async loadStorages() {
+         if (this.storages.length) return;
+         try {
+           this.storages = await window.ProxUtils.apiJson('/api/node/{{ node }}/storages?vm_type=qemu');
+           if (!this.storages.some(s => s.storage === this.storage) && this.storages.length) {
+             this.storage = this.storages[0].storage;
+           }
+         } catch(e) { this.error = e.message || 'Failed to load storages'; }
+       },
+       async save() {
+         this.busy = true;
+         this.error = ''; this.success = '';
+         try {
+           const data = await window.ProxUtils.apiJson('/api/vm/{{ node }}/{{ vm.vmid }}/bios', {
+             method: 'PUT',
+             headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ bios: this.bios, storage: this.storage,
+                                    secure_boot: this.secureBoot, remove_efidisk: this.removeEfidisk }),
+           });
+           this.success = data.message;
+           this.current = this.bios;
+           const cfg = await window.ProxUtils.apiJson('/api/vm/{{ node }}/{{ vm.vmid }}/config');
+           this.efidisk = (cfg.efidisk0 || '').split(',')[0];
+         } catch(e) {
+           this.error = e.message || 'Request failed';
+         } finally {
+           this.busy = false;
+         }
+       }
+     }"
+     x-init="$watch('bios', () => { if (needsStorage) loadStorages(); })">
+    <div class="col-md-8">
+        <div class="card-x">
+            <div class="cx-head"><span class="cx-title"><i class="bi bi-motherboard"></i> BIOS</span></div>
+            <div class="cx-body">
+                <p class="text-muted-2 small mb-3">
+                    Firmware the VM boots with. Switching changes how the installed OS boots — a guest
+                    installed for legacy BIOS won't boot under UEFI and vice versa. The VM must be stopped.
+                </p>
+                <div class="field">
+                    <select class="inp" x-model="bios" :disabled="busy || !stopped">
+                        <option value="seabios">SeaBIOS (legacy BIOS)</option>
+                        <option value="ovmf">OVMF (UEFI)</option>
+                    </select>
+                    <div class="hint" x-show="efidisk">EFI disk: <code x-text="efidisk"></code></div>
+                </div>
+                <div x-show="needsStorage">
+                    <div class="field">
+                        <label>EFI disk storage</label>
+                        <select class="inp" x-model="storage" :disabled="busy">
+                            <template x-for="s in storages" :key="s.storage">
+                                <option :value="s.storage" x-text="s.storage" :selected="s.storage === storage"></option>
+                            </template>
+                        </select>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="biosSecureBoot" x-model="secureBoot">
+                        <label class="form-check-label" for="biosSecureBoot">Pre-enroll Secure Boot keys</label>
+                    </div>
+                </div>
+                <div class="form-check mb-2" x-show="bios === 'seabios' && current === 'ovmf' && efidisk">
+                    <input class="form-check-input" type="checkbox" id="biosRemoveEfidisk" x-model="removeEfidisk">
+                    <label class="form-check-label" for="biosRemoveEfidisk">Delete the EFI disk (its UEFI variables and boot entries are lost)</label>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <button type="button" class="btn-x primary" @click="save()"
+                            :disabled="busy || !stopped || bios === current || (needsStorage && !storage)">
+                        <span x-show="busy" class="spinner-border spinner-border-sm me-1"></span>
+                        Apply
+                    </button>
+                    <span x-show="!stopped" class="text-muted-2 small">Stop the VM to change the BIOS.</span>
+                </div>
+                <div x-show="error" class="callout danger mt-2 mb-0 py-2"><span x-text="error"></span></div>
+                <div x-show="success" class="callout info mt-2 mb-0 py-2">
+                    <i class="bi bi-info-circle"></i> <span x-text="success"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 {% endif %}
 
 {% if vm_type != 'lxc' %}

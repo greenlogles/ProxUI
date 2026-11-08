@@ -2869,6 +2869,16 @@ def vm_edit(node, vmid):
             config = proxmox.nodes(node).lxc(vmid).config.get()
 
         ci_sshkeys = unquote(config.get("sshkeys", "")) if config.get("sshkeys") else ""
+        efi_default_storage = next(
+            (
+                str(config[k]).split(":", 1)[0]
+                for k in sorted(config)
+                if re.match(r"^(scsi|virtio|sata|ide)\d+$", k)
+                and ":" in str(config[k])
+                and "media=cdrom" not in str(config[k])
+            ),
+            "",
+        )
         return render_template(
             "vm_edit.html",
             node=node,
@@ -2876,6 +2886,7 @@ def vm_edit(node, vmid):
             config=config,
             vm_type=vm_type,
             ci_sshkeys=ci_sshkeys,
+            efi_default_storage=efi_default_storage,
         )
     except Exception as e:
         flash(f"Error loading VM/Container configuration: {e}", "error")
@@ -11698,6 +11709,102 @@ def api_vm_agent(node, vmid):
                 "success": True,
                 "message": f"Guest agent {state}. Takes effect on next VM start.",
             }
+        )
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/bios", methods=["PUT"])
+def api_vm_bios(node, vmid):
+    """Switch a VM or template between SeaBIOS and OVMF.
+
+    Requires a stopped guest: firmware only changes on a cold boot, and on a
+    running VM the efidisk0 changes would be left pending.
+    """
+    data = request.get_json(silent=True) or {}
+    bios = data.get("bios")
+    if bios not in VM_BIOS_TYPES:
+        return (
+            jsonify({"error": f"bios must be one of {', '.join(VM_BIOS_TYPES)}"}),
+            400,
+        )
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        vm = proxmox.nodes(node).qemu(vmid)
+        if vm.status.current.get().get("status") != "stopped":
+            return jsonify({"error": "Stop the VM before changing its BIOS"}), 409
+        config = vm.config.get()
+        efidisk = config.get("efidisk0")
+
+        if bios == "ovmf":
+            params = {"bios": "ovmf"}
+            if not efidisk:
+                storage = data.get("storage")
+                if not storage:
+                    return (
+                        jsonify(
+                            {"error": "storage is required to create the EFI disk"}
+                        ),
+                        400,
+                    )
+                params["efidisk0"] = efidisk_spec(
+                    storage, bool(data.get("secure_boot"))
+                )
+            vm.config.put(**params)
+            return jsonify(
+                {
+                    "success": True,
+                    "message": "BIOS set to OVMF (UEFI)"
+                    + ("." if efidisk else " and EFI disk created."),
+                }
+            )
+
+        if not efidisk or not data.get("remove_efidisk"):
+            vm.config.put(delete="bios")
+            note = " The EFI disk was kept." if efidisk else ""
+            return jsonify({"success": True, "message": f"BIOS set to SeaBIOS.{note}"})
+
+        # Deleting efidisk0 only detaches it to unusedN; deleting that entry
+        # frees the volume (PVE refuses if a snapshot or linked clone uses it).
+        volid = efidisk.split(",", 1)[0]
+        vm.config.put(delete="bios,efidisk0")
+        config = vm.config.get()
+        unused = next(
+            (
+                k
+                for k, v in config.items()
+                if re.match(r"^unused\d+$", k) and str(v).split(",", 1)[0] == volid
+            ),
+            None,
+        )
+        if not unused:
+            return jsonify(
+                {
+                    "success": True,
+                    "message": (
+                        "BIOS set to SeaBIOS and the EFI disk detached. Its volume "
+                        f"{volid} is still referenced (snapshot?) and was kept."
+                    ),
+                }
+            )
+        try:
+            vm.config.put(delete=unused)
+        except Exception as e:
+            return jsonify(
+                {
+                    "success": True,
+                    "message": (
+                        "BIOS set to SeaBIOS and the EFI disk detached, but deleting "
+                        f"{volid} failed; it is kept as {unused}: {e}"
+                    ),
+                }
+            )
+        return jsonify(
+            {"success": True, "message": "BIOS set to SeaBIOS and EFI disk deleted."}
         )
     except Exception as e:
         return _proxmox_error_response(e)
