@@ -402,6 +402,29 @@
                 </div>
               </div>
             </div>
+            <div class="row">
+              <div class="col-md-6">
+                <div class="field">
+                  <label>BIOS</label>
+                  <select class="inp" x-model="cloud.bios">
+                    <option value="seabios" :disabled="!cloudFirmwareSupported('seabios')">SeaBIOS (legacy BIOS)</option>
+                    <option value="ovmf" :disabled="!cloudFirmwareSupported('ovmf')">OVMF (UEFI)</option>
+                  </select>
+                  <div class="hint" x-show="cloudSelectedImage && !cloudFirmwareSupported('ovmf')">
+                    This image has no EFI system partition and boots with SeaBIOS only.
+                  </div>
+                </div>
+              </div>
+              <div class="col-md-6" x-show="cloud.bios === 'ovmf'">
+                <div class="field">
+                  <label>&nbsp;</label>
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="cloudSecureBoot" x-model="cloud.secureBoot">
+                    <label class="form-check-label" for="cloudSecureBoot">Pre-enroll Secure Boot keys</label>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Cloud-Init -->

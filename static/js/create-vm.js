@@ -10,6 +10,7 @@ export function createVmForm() {
     selectedBridge: '',
     isos: [],
     selectedIso: '',
+    bios: 'seabios',
     templates: [],
     selectedTemplate: '',
     osTemplates: [],
