@@ -101,6 +101,18 @@
         "os_type": "l26",
         "description": "AlmaLinux 9"
     },
+    "fedora-45": {
+        "name": "Fedora 45 Cloud (Official)",
+        "url": "https://ftp2.osuosl.org/pub/fedora/linux/releases/45/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-45-1.4.x86_64.qcow2",
+        "os_type": "l26",
+        "description": "Fedora 45"
+    },
+    "fedora-44": {
+        "name": "Fedora 44 Cloud (Official)",
+        "url": "https://ftp2.osuosl.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2",
+        "os_type": "l26",
+        "description": "Fedora 44"
+    },
     "fedora-43": {
         "name": "Fedora 43 Cloud (Official)",
         "url": "https://ftp2.osuosl.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2",
@@ -112,18 +124,6 @@
         "url": "https://github.com/greenlogles/proxui-cloud-images/releases/latest/download/fedora-43-amd64.qcow2",
         "os_type": "l26",
         "description": "Fedora 43 proxui mirror"
-    },
-    "fedora-42": {
-        "name": "Fedora 42 Cloud (Official)",
-        "url": "https://ftp2.osuosl.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2",
-        "os_type": "l26",
-        "description": "Fedora 42"
-    },
-    "fedora-42-proxui-mirror": {
-        "name": "Fedora 42 Cloud (Official) (proxui mirror)",
-        "url": "https://github.com/greenlogles/proxui-cloud-images/releases/latest/download/fedora-42-amd64.qcow2",
-        "os_type": "l26",
-        "description": "Fedora 42 proxui mirror"
     },
     "freebsd-14.2-gyptazy-mirror": {
         "name": "FreeBSD 14.2 (gyptazy mirror)",
