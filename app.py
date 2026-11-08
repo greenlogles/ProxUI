@@ -613,6 +613,20 @@ def load_cloud_images():
 
 CLOUD_IMAGES = load_cloud_images()
 
+VM_BIOS_TYPES = ("seabios", "ovmf")
+
+
+def cloud_image_firmware(image_info):
+    """Firmware types a cloud image can boot with; images without a "firmware"
+    key are hybrid (BIOS boot partition + ESP)."""
+    return image_info.get("firmware") or list(VM_BIOS_TYPES)
+
+
+def efidisk_spec(storage, secure_boot):
+    # efitype=4m is required for Secure Boot; pre-enrolled keys turn it on.
+    return f"{storage}:1,efitype=4m,pre-enrolled-keys={1 if secure_boot else 0}"
+
+
 LXC_PROFILES_DEFAULT_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "lxc_profiles.json"
 )
@@ -3108,6 +3122,21 @@ def create_vm():
                 # when the agent isn't installed in the guest).
                 if request.form.get("agent") in ("1", "on", "true", "yes"):
                     params["agent"] = "1"
+
+                bios = request.form.get("bios", "seabios")
+                if bios not in VM_BIOS_TYPES:
+                    flash(f"Invalid BIOS type: {bios}", "error")
+                    return redirect(url_for("create_vm"))
+                if bios == "ovmf":
+                    params["bios"] = "ovmf"
+                    if storage:
+                        secure_boot = request.form.get("secure_boot") in (
+                            "1",
+                            "on",
+                            "true",
+                            "yes",
+                        )
+                        params["efidisk0"] = efidisk_spec(storage, secure_boot)
 
                 # Create the VM
                 proxmox.nodes(node).qemu.create(**params)
@@ -8019,6 +8048,7 @@ def api_cloud_images():
                 "name": image_info["name"],
                 "description": image_info["description"],
                 "url": image_info["url"],
+                "firmware": cloud_image_firmware(image_info),
             }
         )
     return jsonify(images)
@@ -8403,6 +8433,9 @@ def run_cloud_template_job(job_id, node, params):
             "vga": "qxl",  # SPICE display
             "agent": "enabled=1",
         }
+        if params.get("bios") == "ovmf":
+            vm_config["bios"] = "ovmf"
+            vm_config["efidisk0"] = efidisk_spec(storage, params.get("secure_boot"))
 
         try:
             create_task = proxmox.nodes(node).qemu.create(**vm_config)
@@ -8640,6 +8673,15 @@ def api_create_cloud_template(node):
 
         vmid = int(vmid)
 
+        bios = data.get("bios", "seabios")
+        if bios not in VM_BIOS_TYPES:
+            return jsonify({"error": f"Invalid BIOS type: {bios}"}), 400
+        if bios not in cloud_image_firmware(CLOUD_IMAGES[image_id]):
+            return (
+                jsonify({"error": f"Cloud image {image_id} cannot boot with {bios}"}),
+                400,
+            )
+
         # Prepare job parameters
         params = {
             "image_id": image_id,
@@ -8654,6 +8696,8 @@ def api_create_cloud_template(node):
             "ci_password": data.get("ci_password", ""),
             "ci_sshkeys": data.get("ci_sshkeys", ""),
             "ip_config": data.get("ip_config", "ip=dhcp,ip6=auto"),
+            "bios": bios,
+            "secure_boot": bool(data.get("secure_boot")),
         }
 
         # Create job

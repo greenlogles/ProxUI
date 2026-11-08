@@ -17,7 +17,7 @@ export function isosManager() {
     cloud: {
       node: '', image: '', name: '', vmid: '',
       cores: 2, memory: 2048, diskSize: '10G',
-      storage: '', bridge: 'vmbr0',
+      storage: '', bridge: 'vmbr0', bios: 'seabios', secureBoot: false,
       ciUser: '', ciPassword: '', ciSshKeys: '', ciIpConfig: 'ip=dhcp,ip6=auto',
       images: [], storages: [], bridges: [],
       vmidStatus: { checking: false, msg: '', valid: null },
@@ -65,6 +65,11 @@ export function isosManager() {
 
     get cloudSelectedImage() {
       return this.cloud.images.find(i => i.id === this.cloud.image) || null;
+    },
+
+    cloudFirmwareSupported(bios) {
+      const img = this.cloudSelectedImage;
+      return !img || !img.firmware || img.firmware.includes(bios);
     },
 
     get lxcSections() {
@@ -293,7 +298,7 @@ export function isosManager() {
       Object.assign(this.cloud, {
         node: nodeName, image: '', name: '', vmid: '',
         cores: 2, memory: 2048, diskSize: '10G',
-        storage: '', bridge: 'vmbr0',
+        storage: '', bridge: 'vmbr0', bios: 'seabios', secureBoot: false,
         ciUser: '', ciPassword: '', ciSshKeys: '', ciIpConfig: 'ip=dhcp,ip6=auto',
         storages: [], bridges: [],
         vmidStatus: { checking: false, msg: '', valid: null },
@@ -317,6 +322,9 @@ export function isosManager() {
     onCloudImageChange() {
       if (this.cloud.image && !this.cloud.name) {
         this.cloud.name = this.cloud.image + '-template';
+      }
+      if (!this.cloudFirmwareSupported(this.cloud.bios)) {
+        this.cloud.bios = this.cloudSelectedImage.firmware[0];
       }
     },
 
@@ -359,6 +367,8 @@ export function isosManager() {
             ci_password: this.cloud.ciPassword || undefined,
             ci_sshkeys: this.cloud.ciSshKeys || undefined,
             ip_config: this.cloud.ciIpConfig || 'ip=dhcp,ip6=auto',
+            bios: this.cloud.bios,
+            secure_boot: this.cloud.bios === 'ovmf' && this.cloud.secureBoot,
           }),
         });
         this.cloud.showProgress = false;

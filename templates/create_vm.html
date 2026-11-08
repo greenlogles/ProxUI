@@ -142,6 +142,23 @@
                         <div class="hint">Select an ISO image to attach to the VM for OS installation</div>
                     </div>
 
+                    <!-- VM-specific: firmware (clones inherit the template's) -->
+                    <div class="field" x-show="vmType === 'qemu' && creationMethod !== 'template'">
+                        <label for="bios">BIOS</label>
+                        <select class="inp" id="bios" name="bios" x-model="bios">
+                            <option value="seabios">SeaBIOS (legacy BIOS)</option>
+                            <option value="ovmf">OVMF (UEFI)</option>
+                        </select>
+                        <div class="form-check mt-2" x-show="bios === 'ovmf'">
+                            <input class="form-check-input" type="checkbox" id="secure_boot" name="secure_boot" value="1">
+                            <label class="form-check-label" for="secure_boot">Pre-enroll Secure Boot keys</label>
+                        </div>
+                        <div class="hint">
+                            OVMF adds a small EFI vars disk on the selected storage. Needed for Windows 11 and
+                            UEFI-only installers; Secure Boot keys enable Secure Boot on first boot.
+                        </div>
+                    </div>
+
                     <!-- VM-specific: QEMU guest agent -->
                     <div class="field" x-show="vmType === 'qemu'">
                         <div class="form-check">
@@ -185,6 +202,7 @@
                 <div class="summary-row"><span class="k">Storage</span><span class="v" x-text="selectedStorage || '—'"></span></div>
                 <div class="summary-row" x-show="vmType === 'qemu'"><span class="k">Bridge</span><span class="v" x-text="selectedBridge || '—'"></span></div>
                 <div class="summary-row" x-show="vmType === 'qemu' && creationMethod !== 'template'"><span class="k">ISO</span><span class="v" x-text="selectedIso || 'None'"></span></div>
+                <div class="summary-row" x-show="vmType === 'qemu' && creationMethod !== 'template'"><span class="k">BIOS</span><span class="v" x-text="bios === 'ovmf' ? 'OVMF (UEFI)' : 'SeaBIOS'"></span></div>
                 <div class="summary-row" x-show="vmType === 'lxc'"><span class="k">OS Template</span><span class="v" x-text="selectedOsTemplate || '—'"></span></div>
             </div>
         </div>
