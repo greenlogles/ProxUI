@@ -627,6 +627,31 @@ def efidisk_spec(storage, secure_boot):
     return f"{storage}:1,efitype=4m,pre-enrolled-keys={1 if secure_boot else 0}"
 
 
+VM_MACHINE_TYPES = ("i440fx", "q35")
+
+# OVMF on i440fx runs without SMM, so PVE loads the non-Secure-Boot OVMF
+# build, and some guests (Ubuntu 26.04) never detect the IDE cloud-init CD.
+OVMF_MACHINE = "q35"
+
+
+def split_machine(machine):
+    """Split a PVE machine string ("pc-q35-9.2+pve0,viommu=intel") into the
+    machine type and its remaining key=value options."""
+    mtype, opts = "", []
+    for part in filter(None, str(machine or "").split(",")):
+        if part.startswith("type="):
+            mtype = part[len("type=") :]
+        elif "=" not in part:
+            mtype = part
+        else:
+            opts.append(part)
+    return mtype, opts
+
+
+def machine_family(machine):
+    return "q35" if "q35" in split_machine(machine)[0] else "i440fx"
+
+
 LXC_PROFILES_DEFAULT_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "lxc_profiles.json"
 )
@@ -2869,6 +2894,16 @@ def vm_edit(node, vmid):
             config = proxmox.nodes(node).lxc(vmid).config.get()
 
         ci_sshkeys = unquote(config.get("sshkeys", "")) if config.get("sshkeys") else ""
+        efi_default_storage = next(
+            (
+                str(config[k]).split(":", 1)[0]
+                for k in sorted(config)
+                if re.match(r"^(scsi|virtio|sata|ide)\d+$", k)
+                and ":" in str(config[k])
+                and "media=cdrom" not in str(config[k])
+            ),
+            "",
+        )
         return render_template(
             "vm_edit.html",
             node=node,
@@ -2876,6 +2911,8 @@ def vm_edit(node, vmid):
             config=config,
             vm_type=vm_type,
             ci_sshkeys=ci_sshkeys,
+            efi_default_storage=efi_default_storage,
+            machine_family=machine_family(config.get("machine")),
         )
     except Exception as e:
         flash(f"Error loading VM/Container configuration: {e}", "error")
@@ -3129,6 +3166,7 @@ def create_vm():
                     return redirect(url_for("create_vm"))
                 if bios == "ovmf":
                     params["bios"] = "ovmf"
+                    params["machine"] = OVMF_MACHINE
                     if storage:
                         secure_boot = request.form.get("secure_boot") in (
                             "1",
@@ -8435,6 +8473,7 @@ def run_cloud_template_job(job_id, node, params):
         }
         if params.get("bios") == "ovmf":
             vm_config["bios"] = "ovmf"
+            vm_config["machine"] = OVMF_MACHINE
             vm_config["efidisk0"] = efidisk_spec(storage, params.get("secure_boot"))
 
         try:
@@ -11699,6 +11738,146 @@ def api_vm_agent(node, vmid):
                 "message": f"Guest agent {state}. Takes effect on next VM start.",
             }
         )
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/bios", methods=["PUT"])
+def api_vm_bios(node, vmid):
+    """Switch a VM or template between SeaBIOS and OVMF.
+
+    Requires a stopped guest: firmware only changes on a cold boot, and on a
+    running VM the efidisk0 changes would be left pending.
+    """
+    data = request.get_json(silent=True) or {}
+    bios = data.get("bios")
+    if bios not in VM_BIOS_TYPES:
+        return (
+            jsonify({"error": f"bios must be one of {', '.join(VM_BIOS_TYPES)}"}),
+            400,
+        )
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        vm = proxmox.nodes(node).qemu(vmid)
+        if vm.status.current.get().get("status") != "stopped":
+            return jsonify({"error": "Stop the VM before changing its BIOS"}), 409
+        config = vm.config.get()
+        efidisk = config.get("efidisk0")
+
+        if bios == "ovmf":
+            params = {"bios": "ovmf"}
+            if not efidisk:
+                storage = data.get("storage")
+                if not storage:
+                    return (
+                        jsonify(
+                            {"error": "storage is required to create the EFI disk"}
+                        ),
+                        400,
+                    )
+                params["efidisk0"] = efidisk_spec(
+                    storage, bool(data.get("secure_boot"))
+                )
+            vm.config.put(**params)
+            return jsonify(
+                {
+                    "success": True,
+                    "message": "BIOS set to OVMF (UEFI)"
+                    + ("." if efidisk else " and EFI disk created."),
+                }
+            )
+
+        if not efidisk or not data.get("remove_efidisk"):
+            vm.config.put(delete="bios")
+            note = " The EFI disk was kept." if efidisk else ""
+            return jsonify({"success": True, "message": f"BIOS set to SeaBIOS.{note}"})
+
+        # Deleting efidisk0 only detaches it to unusedN; deleting that entry
+        # frees the volume (PVE refuses if a snapshot or linked clone uses it).
+        volid = efidisk.split(",", 1)[0]
+        vm.config.put(delete="bios,efidisk0")
+        config = vm.config.get()
+        unused = next(
+            (
+                k
+                for k, v in config.items()
+                if re.match(r"^unused\d+$", k) and str(v).split(",", 1)[0] == volid
+            ),
+            None,
+        )
+        if not unused:
+            return jsonify(
+                {
+                    "success": True,
+                    "message": (
+                        "BIOS set to SeaBIOS and the EFI disk detached. Its volume "
+                        f"{volid} is still referenced (snapshot?) and was kept."
+                    ),
+                }
+            )
+        try:
+            vm.config.put(delete=unused)
+        except Exception as e:
+            return jsonify(
+                {
+                    "success": True,
+                    "message": (
+                        "BIOS set to SeaBIOS and the EFI disk detached, but deleting "
+                        f"{volid} failed; it is kept as {unused}: {e}"
+                    ),
+                }
+            )
+        return jsonify(
+            {"success": True, "message": "BIOS set to SeaBIOS and EFI disk deleted."}
+        )
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/machine", methods=["PUT"])
+def api_vm_machine(node, vmid):
+    """Switch a VM or template between the i440fx and q35 machine types.
+
+    A pinned version (pc-q35-9.2+pve0) is dropped so the guest gets the latest
+    one; other options (viommu, enable-s3, ...) are kept.
+    """
+    data = request.get_json(silent=True) or {}
+    family = data.get("machine")
+    if family not in VM_MACHINE_TYPES:
+        return (
+            jsonify({"error": f"machine must be one of {', '.join(VM_MACHINE_TYPES)}"}),
+            400,
+        )
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        vm = proxmox.nodes(node).qemu(vmid)
+        if vm.status.current.get().get("status") != "stopped":
+            return (
+                jsonify({"error": "Stop the VM before changing its machine type"}),
+                409,
+            )
+        current = vm.config.get().get("machine")
+        if machine_family(current) == family:
+            return jsonify(
+                {"success": True, "message": f"Machine type is already {family}."}
+            )
+
+        opts = split_machine(current)[1]
+        if family == "q35":
+            vm.config.put(machine=",".join(["q35"] + opts))
+        elif opts:
+            vm.config.put(machine=",".join(["pc"] + opts))
+        else:
+            vm.config.put(delete="machine")
+        return jsonify({"success": True, "message": f"Machine type set to {family}."})
     except Exception as e:
         return _proxmox_error_response(e)
 

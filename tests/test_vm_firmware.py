@@ -79,6 +79,7 @@ class TestCreateVmFirmware(unittest.TestCase):
         kwargs = self._create_kwargs()
         self.assertNotIn("bios", kwargs)
         self.assertNotIn("efidisk0", kwargs)
+        self.assertNotIn("machine", kwargs)
 
     def test_ovmf_adds_efidisk_on_vm_storage(self):
         self.client.post("/create", data={**self.form, "bios": "ovmf"})
@@ -87,6 +88,7 @@ class TestCreateVmFirmware(unittest.TestCase):
         self.assertEqual(
             kwargs["efidisk0"], "local-lvm:1,efitype=4m,pre-enrolled-keys=0"
         )
+        self.assertEqual(kwargs["machine"], "q35")
 
     def test_ovmf_secure_boot(self):
         self.client.post(
@@ -193,11 +195,211 @@ class TestCloudTemplateJobFirmware(unittest.TestCase):
         self.assertEqual(
             kwargs["efidisk0"], "local-lvm:1,efitype=4m,pre-enrolled-keys=1"
         )
+        self.assertEqual(kwargs["machine"], "q35")
 
     def test_seabios_job_has_no_efidisk(self):
         kwargs = self._run_job("seabios")
         self.assertNotIn("bios", kwargs)
         self.assertNotIn("efidisk0", kwargs)
+        self.assertNotIn("machine", kwargs)
+
+
+class TestVmBiosEdit(unittest.TestCase):
+    EFIDISK = "local-lvm:vm-150-disk-1,efitype=4m,pre-enrolled-keys=0,size=4M"
+
+    def setUp(self):
+        flask_app.config["TESTING"] = True
+        self.client = flask_app.test_client()
+        self.proxmox = Mock()
+        self.vm = self.proxmox.nodes.return_value.qemu.return_value
+        self.vm.status.current.get.return_value = {"status": "stopped"}
+        self.patchers = [
+            patch("app.get_proxmox_connection", return_value=self.proxmox),
+            patch("app.config_file_exists", True),
+            patch.dict("app.all_clusters", {"c1": {"id": "c1"}}),
+        ]
+        for p in self.patchers:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patchers:
+            p.stop()
+
+    def _put(self, **body):
+        return self.client.put("/api/vm/pve1/150/bios", json=body)
+
+    def _put_calls(self):
+        return [c.kwargs for c in self.vm.config.put.call_args_list]
+
+    def test_to_ovmf_creates_efidisk(self):
+        self.vm.config.get.return_value = {"scsi0": "local-lvm:vm-150-disk-0"}
+        resp = self._put(bios="ovmf", storage="local-lvm", secure_boot=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            self._put_calls(),
+            [
+                {
+                    "bios": "ovmf",
+                    "efidisk0": "local-lvm:1,efitype=4m,pre-enrolled-keys=1",
+                }
+            ],
+        )
+
+    def test_to_ovmf_reuses_existing_efidisk(self):
+        self.vm.config.get.return_value = {"efidisk0": self.EFIDISK}
+        resp = self._put(bios="ovmf")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(self._put_calls(), [{"bios": "ovmf"}])
+
+    def test_to_ovmf_without_storage_rejected(self):
+        self.vm.config.get.return_value = {}
+        self.assertEqual(self._put(bios="ovmf").status_code, 400)
+        self.vm.config.put.assert_not_called()
+
+    def test_to_seabios_keeps_efidisk_by_default(self):
+        self.vm.config.get.return_value = {"bios": "ovmf", "efidisk0": self.EFIDISK}
+        resp = self._put(bios="seabios")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(self._put_calls(), [{"delete": "bios"}])
+
+    def test_to_seabios_deletes_efidisk_volume(self):
+        self.vm.config.get.side_effect = [
+            {"bios": "ovmf", "efidisk0": self.EFIDISK},
+            {
+                "unused0": "local-lvm:vm-150-disk-9",
+                "unused1": "local-lvm:vm-150-disk-1",
+            },
+        ]
+        resp = self._put(bios="seabios", remove_efidisk=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            self._put_calls(), [{"delete": "bios,efidisk0"}, {"delete": "unused1"}]
+        )
+        self.assertIn("deleted", resp.get_json()["message"])
+
+    def test_to_seabios_volume_still_referenced(self):
+        self.vm.config.get.side_effect = [
+            {"bios": "ovmf", "efidisk0": self.EFIDISK},
+            {},
+        ]
+        resp = self._put(bios="seabios", remove_efidisk=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(self._put_calls(), [{"delete": "bios,efidisk0"}])
+        self.assertIn("kept", resp.get_json()["message"])
+
+    def test_volume_delete_failure_reported(self):
+        self.vm.config.get.side_effect = [
+            {"bios": "ovmf", "efidisk0": self.EFIDISK},
+            {"unused0": "local-lvm:vm-150-disk-1"},
+        ]
+        self.vm.config.put.side_effect = [None, Exception("used by linked clone")]
+        resp = self._put(bios="seabios", remove_efidisk=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("kept as unused0", resp.get_json()["message"])
+
+    def test_running_vm_rejected(self):
+        self.vm.status.current.get.return_value = {"status": "running"}
+        self.assertEqual(self._put(bios="ovmf", storage="x").status_code, 409)
+        self.vm.config.put.assert_not_called()
+
+    def test_invalid_bios_rejected(self):
+        self.assertEqual(self._put(bios="coreboot").status_code, 400)
+
+    def test_edit_page_renders_bios_card(self):
+        self.vm.status.current.get.return_value = {"status": "stopped", "vmid": 150}
+        self.vm.config.get.return_value = {
+            "bios": "ovmf",
+            "efidisk0": self.EFIDISK,
+            "ide2": "local:iso/x.iso,media=cdrom",
+            "scsi0": "fast:vm-150-disk-0,size=10G",
+        }
+        html = self.client.get("/vm/pve1/150/edit").get_data(as_text=True)
+        self.assertIn("/api/vm/pve1/150/bios", html)
+        self.assertIn("storage: 'fast'", html)
+        self.assertIn("efidisk: 'local-lvm:vm-150-disk-1'", html)
+        self.assertIn("/api/vm/pve1/150/machine", html)
+        self.assertIn("currentMachine: 'i440fx'", html)
+
+
+class TestMachineHelpers(unittest.TestCase):
+    def test_family(self):
+        cases = {
+            None: "i440fx",
+            "": "i440fx",
+            "pc": "i440fx",
+            "pc-i440fx-8.1+pve0": "i440fx",
+            "q35": "q35",
+            "pc-q35-9.2+pve1,viommu=intel": "q35",
+            "type=q35,enable-s3=1": "q35",
+            "viommu=virtio": "i440fx",
+        }
+        for value, family in cases.items():
+            self.assertEqual(app.machine_family(value), family, value)
+
+    def test_split_keeps_options(self):
+        self.assertEqual(
+            app.split_machine("type=pc-q35-9.2,viommu=intel,enable-s3=0"),
+            ("pc-q35-9.2", ["viommu=intel", "enable-s3=0"]),
+        )
+
+
+class TestVmMachineEdit(unittest.TestCase):
+    def setUp(self):
+        flask_app.config["TESTING"] = True
+        self.client = flask_app.test_client()
+        self.proxmox = Mock()
+        self.vm = self.proxmox.nodes.return_value.qemu.return_value
+        self.vm.status.current.get.return_value = {"status": "stopped"}
+        self.patchers = [
+            patch("app.get_proxmox_connection", return_value=self.proxmox),
+            patch("app.config_file_exists", True),
+            patch.dict("app.all_clusters", {"c1": {"id": "c1"}}),
+        ]
+        for p in self.patchers:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patchers:
+            p.stop()
+
+    def _put(self, current, machine):
+        self.vm.config.get.return_value = (
+            {} if current is None else {"machine": current}
+        )
+        return self.client.put("/api/vm/pve1/150/machine", json={"machine": machine})
+
+    def _put_calls(self):
+        return [c.kwargs for c in self.vm.config.put.call_args_list]
+
+    def test_default_to_q35(self):
+        self.assertEqual(self._put(None, "q35").status_code, 200)
+        self.assertEqual(self._put_calls(), [{"machine": "q35"}])
+
+    def test_q35_to_i440fx_deletes_machine(self):
+        self.assertEqual(self._put("pc-q35-9.2+pve0", "i440fx").status_code, 200)
+        self.assertEqual(self._put_calls(), [{"delete": "machine"}])
+
+    def test_options_are_kept(self):
+        self._put("pc-i440fx-8.1,viommu=virtio", "q35")
+        self._put("q35,viommu=virtio", "i440fx")
+        self.assertEqual(
+            self._put_calls(),
+            [{"machine": "q35,viommu=virtio"}, {"machine": "pc,viommu=virtio"}],
+        )
+
+    def test_same_family_is_noop(self):
+        resp = self._put("pc-q35-9.2+pve0", "q35")
+        self.assertEqual(resp.status_code, 200)
+        self.vm.config.put.assert_not_called()
+
+    def test_running_vm_rejected(self):
+        self.vm.status.current.get.return_value = {"status": "running"}
+        self.assertEqual(self._put(None, "q35").status_code, 409)
+        self.vm.config.put.assert_not_called()
+
+    def test_invalid_machine_rejected(self):
+        self.assertEqual(self._put(None, "virt").status_code, 400)
+        self.vm.config.put.assert_not_called()
 
 
 if __name__ == "__main__":

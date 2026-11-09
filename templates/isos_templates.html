@@ -413,6 +413,11 @@
                   <div class="hint" x-show="cloudSelectedImage && !cloudFirmwareSupported('ovmf')">
                     This image has no EFI system partition and boots with SeaBIOS only.
                   </div>
+                  <div class="hint" x-show="cloud.bios === 'ovmf'">
+                    <i class="bi bi-info-circle"></i> UEFI templates use the <strong>q35</strong> machine type
+                    (PCIe chipset) instead of the Proxmox default i440fx — needed for Secure Boot and for
+                    the guest to see the cloud-init drive. Clones inherit it.
+                  </div>
                 </div>
               </div>
               <div class="col-md-6" x-show="cloud.bios === 'ovmf'">
