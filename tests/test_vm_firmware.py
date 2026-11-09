@@ -79,6 +79,7 @@ class TestCreateVmFirmware(unittest.TestCase):
         kwargs = self._create_kwargs()
         self.assertNotIn("bios", kwargs)
         self.assertNotIn("efidisk0", kwargs)
+        self.assertNotIn("machine", kwargs)
 
     def test_ovmf_adds_efidisk_on_vm_storage(self):
         self.client.post("/create", data={**self.form, "bios": "ovmf"})
@@ -87,6 +88,7 @@ class TestCreateVmFirmware(unittest.TestCase):
         self.assertEqual(
             kwargs["efidisk0"], "local-lvm:1,efitype=4m,pre-enrolled-keys=0"
         )
+        self.assertEqual(kwargs["machine"], "q35")
 
     def test_ovmf_secure_boot(self):
         self.client.post(
@@ -193,11 +195,13 @@ class TestCloudTemplateJobFirmware(unittest.TestCase):
         self.assertEqual(
             kwargs["efidisk0"], "local-lvm:1,efitype=4m,pre-enrolled-keys=1"
         )
+        self.assertEqual(kwargs["machine"], "q35")
 
     def test_seabios_job_has_no_efidisk(self):
         kwargs = self._run_job("seabios")
         self.assertNotIn("bios", kwargs)
         self.assertNotIn("efidisk0", kwargs)
+        self.assertNotIn("machine", kwargs)
 
 
 class TestVmBiosEdit(unittest.TestCase):
@@ -313,6 +317,89 @@ class TestVmBiosEdit(unittest.TestCase):
         self.assertIn("/api/vm/pve1/150/bios", html)
         self.assertIn("storage: 'fast'", html)
         self.assertIn("efidisk: 'local-lvm:vm-150-disk-1'", html)
+        self.assertIn("/api/vm/pve1/150/machine", html)
+        self.assertIn("currentMachine: 'i440fx'", html)
+
+
+class TestMachineHelpers(unittest.TestCase):
+    def test_family(self):
+        cases = {
+            None: "i440fx",
+            "": "i440fx",
+            "pc": "i440fx",
+            "pc-i440fx-8.1+pve0": "i440fx",
+            "q35": "q35",
+            "pc-q35-9.2+pve1,viommu=intel": "q35",
+            "type=q35,enable-s3=1": "q35",
+            "viommu=virtio": "i440fx",
+        }
+        for value, family in cases.items():
+            self.assertEqual(app.machine_family(value), family, value)
+
+    def test_split_keeps_options(self):
+        self.assertEqual(
+            app.split_machine("type=pc-q35-9.2,viommu=intel,enable-s3=0"),
+            ("pc-q35-9.2", ["viommu=intel", "enable-s3=0"]),
+        )
+
+
+class TestVmMachineEdit(unittest.TestCase):
+    def setUp(self):
+        flask_app.config["TESTING"] = True
+        self.client = flask_app.test_client()
+        self.proxmox = Mock()
+        self.vm = self.proxmox.nodes.return_value.qemu.return_value
+        self.vm.status.current.get.return_value = {"status": "stopped"}
+        self.patchers = [
+            patch("app.get_proxmox_connection", return_value=self.proxmox),
+            patch("app.config_file_exists", True),
+            patch.dict("app.all_clusters", {"c1": {"id": "c1"}}),
+        ]
+        for p in self.patchers:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patchers:
+            p.stop()
+
+    def _put(self, current, machine):
+        self.vm.config.get.return_value = (
+            {} if current is None else {"machine": current}
+        )
+        return self.client.put("/api/vm/pve1/150/machine", json={"machine": machine})
+
+    def _put_calls(self):
+        return [c.kwargs for c in self.vm.config.put.call_args_list]
+
+    def test_default_to_q35(self):
+        self.assertEqual(self._put(None, "q35").status_code, 200)
+        self.assertEqual(self._put_calls(), [{"machine": "q35"}])
+
+    def test_q35_to_i440fx_deletes_machine(self):
+        self.assertEqual(self._put("pc-q35-9.2+pve0", "i440fx").status_code, 200)
+        self.assertEqual(self._put_calls(), [{"delete": "machine"}])
+
+    def test_options_are_kept(self):
+        self._put("pc-i440fx-8.1,viommu=virtio", "q35")
+        self._put("q35,viommu=virtio", "i440fx")
+        self.assertEqual(
+            self._put_calls(),
+            [{"machine": "q35,viommu=virtio"}, {"machine": "pc,viommu=virtio"}],
+        )
+
+    def test_same_family_is_noop(self):
+        resp = self._put("pc-q35-9.2+pve0", "q35")
+        self.assertEqual(resp.status_code, 200)
+        self.vm.config.put.assert_not_called()
+
+    def test_running_vm_rejected(self):
+        self.vm.status.current.get.return_value = {"status": "running"}
+        self.assertEqual(self._put(None, "q35").status_code, 409)
+        self.vm.config.put.assert_not_called()
+
+    def test_invalid_machine_rejected(self):
+        self.assertEqual(self._put(None, "virt").status_code, 400)
+        self.vm.config.put.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -627,6 +627,31 @@ def efidisk_spec(storage, secure_boot):
     return f"{storage}:1,efitype=4m,pre-enrolled-keys={1 if secure_boot else 0}"
 
 
+VM_MACHINE_TYPES = ("i440fx", "q35")
+
+# OVMF on i440fx runs without SMM, so PVE loads the non-Secure-Boot OVMF
+# build, and some guests (Ubuntu 26.04) never detect the IDE cloud-init CD.
+OVMF_MACHINE = "q35"
+
+
+def split_machine(machine):
+    """Split a PVE machine string ("pc-q35-9.2+pve0,viommu=intel") into the
+    machine type and its remaining key=value options."""
+    mtype, opts = "", []
+    for part in filter(None, str(machine or "").split(",")):
+        if part.startswith("type="):
+            mtype = part[len("type=") :]
+        elif "=" not in part:
+            mtype = part
+        else:
+            opts.append(part)
+    return mtype, opts
+
+
+def machine_family(machine):
+    return "q35" if "q35" in split_machine(machine)[0] else "i440fx"
+
+
 LXC_PROFILES_DEFAULT_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "lxc_profiles.json"
 )
@@ -2887,6 +2912,7 @@ def vm_edit(node, vmid):
             vm_type=vm_type,
             ci_sshkeys=ci_sshkeys,
             efi_default_storage=efi_default_storage,
+            machine_family=machine_family(config.get("machine")),
         )
     except Exception as e:
         flash(f"Error loading VM/Container configuration: {e}", "error")
@@ -3140,6 +3166,7 @@ def create_vm():
                     return redirect(url_for("create_vm"))
                 if bios == "ovmf":
                     params["bios"] = "ovmf"
+                    params["machine"] = OVMF_MACHINE
                     if storage:
                         secure_boot = request.form.get("secure_boot") in (
                             "1",
@@ -8446,6 +8473,7 @@ def run_cloud_template_job(job_id, node, params):
         }
         if params.get("bios") == "ovmf":
             vm_config["bios"] = "ovmf"
+            vm_config["machine"] = OVMF_MACHINE
             vm_config["efidisk0"] = efidisk_spec(storage, params.get("secure_boot"))
 
         try:
@@ -11806,6 +11834,50 @@ def api_vm_bios(node, vmid):
         return jsonify(
             {"success": True, "message": "BIOS set to SeaBIOS and EFI disk deleted."}
         )
+    except Exception as e:
+        return _proxmox_error_response(e)
+
+
+@app.route("/api/vm/<node>/<vmid>/machine", methods=["PUT"])
+def api_vm_machine(node, vmid):
+    """Switch a VM or template between the i440fx and q35 machine types.
+
+    A pinned version (pc-q35-9.2+pve0) is dropped so the guest gets the latest
+    one; other options (viommu, enable-s3, ...) are kept.
+    """
+    data = request.get_json(silent=True) or {}
+    family = data.get("machine")
+    if family not in VM_MACHINE_TYPES:
+        return (
+            jsonify({"error": f"machine must be one of {', '.join(VM_MACHINE_TYPES)}"}),
+            400,
+        )
+
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        return jsonify({"error": "Node not found"}), 404
+
+    try:
+        vm = proxmox.nodes(node).qemu(vmid)
+        if vm.status.current.get().get("status") != "stopped":
+            return (
+                jsonify({"error": "Stop the VM before changing its machine type"}),
+                409,
+            )
+        current = vm.config.get().get("machine")
+        if machine_family(current) == family:
+            return jsonify(
+                {"success": True, "message": f"Machine type is already {family}."}
+            )
+
+        opts = split_machine(current)[1]
+        if family == "q35":
+            vm.config.put(machine=",".join(["q35"] + opts))
+        elif opts:
+            vm.config.put(machine=",".join(["pc"] + opts))
+        else:
+            vm.config.put(delete="machine")
+        return jsonify({"success": True, "message": f"Machine type set to {family}."})
     except Exception as e:
         return _proxmox_error_response(e)
 

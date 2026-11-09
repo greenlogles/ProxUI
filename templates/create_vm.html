@@ -157,6 +157,11 @@
                             OVMF adds a small EFI vars disk on the selected storage. Needed for Windows 11 and
                             UEFI-only installers; Secure Boot keys enable Secure Boot on first boot.
                         </div>
+                        <div class="hint" x-show="bios === 'ovmf'">
+                            <i class="bi bi-info-circle"></i> UEFI VMs are created with the <strong>q35</strong>
+                            machine type (PCIe chipset) instead of the Proxmox default i440fx — needed for
+                            Secure Boot and reliable cloud-init. You can change it later on the Edit page.
+                        </div>
                     </div>
 
                     <!-- VM-specific: QEMU guest agent -->
@@ -203,6 +208,7 @@
                 <div class="summary-row" x-show="vmType === 'qemu'"><span class="k">Bridge</span><span class="v" x-text="selectedBridge || '—'"></span></div>
                 <div class="summary-row" x-show="vmType === 'qemu' && creationMethod !== 'template'"><span class="k">ISO</span><span class="v" x-text="selectedIso || 'None'"></span></div>
                 <div class="summary-row" x-show="vmType === 'qemu' && creationMethod !== 'template'"><span class="k">BIOS</span><span class="v" x-text="bios === 'ovmf' ? 'OVMF (UEFI)' : 'SeaBIOS'"></span></div>
+                <div class="summary-row" x-show="vmType === 'qemu' && creationMethod !== 'template'"><span class="k">Machine</span><span class="v" x-text="bios === 'ovmf' ? 'q35' : 'i440fx'"></span></div>
                 <div class="summary-row" x-show="vmType === 'lxc'"><span class="k">OS Template</span><span class="v" x-text="selectedOsTemplate || '—'"></span></div>
             </div>
         </div>
