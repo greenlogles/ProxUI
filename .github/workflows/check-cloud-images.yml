@@ -1,0 +1,48 @@
+name: Check cloud images
+
+on:
+  schedule:
+    # Mondays 23:00 UTC
+    - cron: '0 23 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Check image URLs
+      run: |
+        set -o pipefail
+        python misc/check_cloud_images.py | tee report.txt
+
+    - name: Open or update failure issue
+      if: failure()
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        title="Cloud image check failed"
+        {
+          echo "Run: $RUN_URL"
+          echo
+          echo '```'
+          grep '^FAIL' report.txt 2>/dev/null || echo 'No report produced; see the run log.'
+          echo '```'
+        } > body.md
+        number=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+        if [ -n "$number" ]; then
+          gh issue comment "$number" --body-file body.md
+        else
+          gh issue create --title "$title" --body-file body.md --assignee "${{ github.repository_owner }}"
+        fi
