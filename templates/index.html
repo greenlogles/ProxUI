@@ -185,26 +185,26 @@
                 </template>
                 <table class="tbl" x-show="tasks.length > 0">
                     <tbody>
-                        <template x-for="task in tasks" :key="task.upid || (task.node + task.type + task.starttime)">
+                        <template x-for="task in tasks" :key="task.id">
                             <tr>
                                 <td style="width:26px">
                                     <span class="job-ico" :class="dotCls(task)" style="width:26px;height:26px;font-size:13px">
-                                        <i class="bi" :class="dotIcon(task)"></i>
+                                        <i class="bi" :class="statusInfo(task).icon"></i>
                                     </span>
                                 </td>
                                 <td>
-                                    <div class="nm" x-text="displayName(task)"></div>
+                                    <a class="nm text-reset" :href="detailUrl(task)" x-text="title(task)"></a>
                                     <div class="text-faint" style="font-size:11px">
-                                        <span x-text="task.node || 'Unknown'"></span>
-                                        <template x-if="task.id && isVmTask(task)">
-                                            <span> · VM/CT <a :href="vmLink(task)" x-text="task.id"></a></span>
+                                        <span x-text="task.source === 'proxui' ? 'ProxUI' : (task.node || 'Unknown')"></span>
+                                        <template x-if="vmUrl(task)">
+                                            <span> · VM/CT <a :href="vmUrl(task)" x-text="task.vmid"></a></span>
                                         </template>
-                                        <template x-if="task.id && !isVmTask(task)">
-                                            <span> · <span x-text="task.id"></span></span>
+                                        <template x-if="!task.vmid && task.target">
+                                            <span> · <span x-text="task.target"></span></span>
                                         </template>
                                     </div>
                                 </td>
-                                <td class="text-faint mono" style="font-size:11px;text-align:right" x-text="fmtDateTime(task.starttime)"></td>
+                                <td class="text-faint mono" style="font-size:11px;text-align:right" x-text="fmtDateTime(task.started_at)"></td>
                             </tr>
                         </template>
                     </tbody>
@@ -219,9 +219,7 @@
 <script type="module">
   import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
 
-  const ALLOWED_STATUS = new Set(['primary','secondary','success','danger','warning','info','dark']);
-  const JOB_ICO = { success: 'ok', danger: 'err', primary: 'run', secondary: 'ok' };
-  const JOB_ICON = { success: 'bi-check-circle', danger: 'bi-x-circle', primary: 'bi-arrow-repeat spin', secondary: 'bi-dash-circle' };
+  const JOB_ICO = { success: 'ok', danger: 'err', primary: 'run', secondary: 'ok', warning: 'err' };
 
   function dashboardNodes() {
     return {
@@ -251,18 +249,17 @@
   function dashboardTasks() {
     return {
       tasks: [], loading: true, error: '', _poller: null,
-      displayName(t) { return ProxUtils.taskTypeName(t.type); },
-      statusClass(t) { return ALLOWED_STATUS.has(t.status_class) ? t.status_class : 'secondary'; },
-      dotCls(t)      { return JOB_ICO[this.statusClass(t)] || 'ok'; },
-      dotIcon(t)     { return JOB_ICON[this.statusClass(t)] || 'bi-dash-circle'; },
-      isVmTask(t)    { const ty = t.type || ''; return ty.startsWith('qm') || ty.startsWith('vz'); },
-      vmLink(t)      { return `/vm/${encodeURIComponent(t.node)}/${encodeURIComponent(t.id)}`; },
+      title: ProxUtils.activityTitle,
+      detailUrl: ProxUtils.activityUrl,
+      vmUrl: ProxUtils.activityVmUrl,
+      statusInfo: ProxUtils.activityStatus,
+      dotCls(t)      { return JOB_ICO[ProxUtils.activityStatus(t).color] || 'ok'; },
       fmtDateTime: ProxUtils.formatDateTime,
       async load() {
         this.loading = true; this.error = '';
         try {
-          const data = await ProxUtils.apiJson('/api/tasks?limit=8');
-          this.tasks = Array.isArray(data) ? data.slice(0, 8) : [];
+          const data = await ProxUtils.apiJson('/api/activity?limit=8');
+          this.tasks = Array.isArray(data.items) ? data.items.slice(0, 8) : [];
         }
         catch (e) { this.error = e.message; }
         finally { this.loading = false; }
