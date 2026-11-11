@@ -36,6 +36,7 @@ export const TASK_TYPE_NAMES = {
   startall: 'Bulk start VMs and Containers', stopall: 'Bulk stop VMs and Containers',
   srvreload: 'SRV networking - reload', vncproxy: 'VNC Console',
   clusterjoin: 'Add node to cluster', resize: 'Disk resize',
+  imgdel: 'Delete storage volume',
 };
 
 export function taskTypeName(type) {
