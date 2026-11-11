@@ -341,6 +341,7 @@ class JobQueue:
             "progress": 0,
             "current_step": "",
             "steps": [],
+            "upids": [],  # native Proxmox tasks this job started: {"node", "upid"}
             "result": None,
             "error": None,
             "created_at": datetime.now().isoformat(),
@@ -399,6 +400,13 @@ class JobQueue:
                 timestamp = datetime.now().strftime("%H:%M:%S")
                 self.jobs[job_id]["steps"].append(f"[{timestamp}] {step_msg}")
                 self.jobs[job_id]["current_step"] = step_msg
+
+    def add_upid(self, job_id, node, upid):
+        """Link a native Proxmox task to the job so the activity feed nests it."""
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if job is not None and all(u["upid"] != upid for u in job["upids"]):
+                job["upids"].append({"node": node, "upid": upid})
 
     def set_running(self, job_id):
         """Mark job as running"""
@@ -8126,12 +8134,364 @@ def api_delete_job(job_id):
 
 
 # =============================================================================
+# Activity feed: native Proxmox tasks and ProxUI jobs in one list
+# =============================================================================
+
+# UPID:node:pid:pstart:starttime:type:id:user:
+_UPID_RE = re.compile(
+    r"^UPID:([^:/]+):[0-9A-Fa-f]+:[0-9A-Fa-f]+:([0-9A-Fa-f]+):([^:/]+):([^:/]*):([^:/]+):$"
+)
+
+TASK_PROGRESS_PATTERNS = [
+    # migrate / move disk / full clone / import:
+    # "mirror-scsi0: transferred 1.4 GiB of 60.0 GiB (2.41%) in 5s"
+    re.compile(
+        r"(?:(?P<label>[\w.-]+): )?transferred (?P<done>.+?) of (?P<total>.+?)"
+        r" \((?P<pct>\d+(?:\.\d+)?)%\)"
+    ),
+    # vzdump: "INFO:  45% (18.0 GiB of 40.0 GiB) in 2m 3s, read: ..."
+    re.compile(r"INFO:\s+(?P<pct>\d+(?:\.\d+)?)% \((?P<done>.+?) of (?P<total>.+?)\)"),
+    # qmrestore (vma): "progress 45% (read 123 bytes, duration 10 sec)"
+    re.compile(r"progress (?P<pct>\d+(?:\.\d+)?)% \("),
+]
+
+# Running tasks whose logs are tailed for progress. An allowlist, because
+# long-lived tasks such as console proxies would otherwise cost a log read
+# on every poll for nothing.
+PROGRESS_TASK_TYPES = {
+    "qmigrate",
+    "vzmigrate",
+    "qmclone",
+    "vzclone",
+    "qmmove",
+    "move_volume",
+    "qmcreate",
+    "qmconfig",
+    "vzdump",
+    "qmrestore",
+    "vzrestore",
+    "download",
+    "imgcopy",
+}
+
+_task_progress_cache = {}  # upid -> {"offset": int, "progress": dict | None}
+_task_progress_lock = threading.Lock()
+
+_JOB_STATUS = {
+    "queued": "queued",
+    "running": "running",
+    "completed": "ok",
+    "failed": "failed",
+}
+
+
+def parse_task_progress(line):
+    """Return {"percent", "text"} for a progress line of a task log, else None."""
+    for pattern in TASK_PROGRESS_PATTERNS:
+        m = pattern.search(line)
+        if not m:
+            continue
+        g = m.groupdict()
+        pct = float(g["pct"])
+        text = f"{pct:.2f}%"
+        if g.get("done"):
+            text = f"{g['done']} of {g['total']} ({text})"
+        if g.get("label"):
+            text = f"{g['label']}: {text}"
+        return {"percent": pct, "text": text}
+    return None
+
+
+def _last_progress(lines):
+    for line in reversed(lines):
+        progress = parse_task_progress(line)
+        if progress:
+            return progress
+    return None
+
+
+def running_task_progress(proxmox, node, upid, page=5000, max_pages=10):
+    """Read the log lines added since the last call and return the latest progress.
+
+    Offsets are cached per UPID so a long migration log is read once, not on
+    every poll.
+    """
+    with _task_progress_lock:
+        entry = _task_progress_cache.setdefault(upid, {"offset": 0, "progress": None})
+        offset = entry["offset"]
+    progress = None
+    for _ in range(max_pages):
+        lines = proxmox.nodes(node).tasks(upid).log.get(start=offset, limit=page)
+        new = [l for l in (lines or []) if l.get("n", 0) > offset]
+        for item in new:
+            offset = item["n"]
+            parsed = parse_task_progress(item.get("t") or "")
+            if parsed:
+                progress = parsed
+        if len(lines or []) < page:
+            break
+    with _task_progress_lock:
+        entry["offset"] = offset
+        if progress:
+            entry["progress"] = progress
+        return entry["progress"]
+
+
+def _prune_progress_cache(keep):
+    with _task_progress_lock:
+        for upid in list(_task_progress_cache):
+            if upid not in keep:
+                del _task_progress_cache[upid]
+
+
+def _parse_upid(upid):
+    m = _UPID_RE.match(upid or "")
+    if not m:
+        return None
+    node, start_hex, task_type, task_id, user = m.groups()
+    return {
+        "upid": upid,
+        "node": node,
+        "starttime": int(start_hex, 16),
+        "type": task_type,
+        "id": task_id,
+        "user": user,
+    }
+
+
+def _exit_state(exitstatus):
+    exitstatus = exitstatus or ""
+    if exitstatus == "OK":
+        return "ok"
+    if exitstatus.startswith("WARNINGS"):
+        return "warning"
+    return "failed"
+
+
+def _pve_status(task):
+    if not task.get("endtime"):
+        return "running"
+    return _exit_state(task.get("status"))
+
+
+def _pve_item(task, progress=None, status=None):
+    task_id = str(task.get("id") or "")
+    task_type = task.get("type") or ""
+    is_guest = task_type.startswith(("qm", "vz"))
+    return {
+        "id": task.get("upid"),
+        "source": "pve",
+        "type": task_type,
+        "title": None,
+        "node": task.get("node"),
+        "vmid": task_id if is_guest and task_id.isdigit() else None,
+        "target": task_id or None,
+        "user": task.get("user"),
+        "status": status or _pve_status(task),
+        "status_text": task.get("status") or ("" if task.get("endtime") else "running"),
+        "progress": round(progress["percent"]) if progress else None,
+        "current_step": progress["text"] if progress else "",
+        "started_at": task.get("starttime"),
+        "ended_at": task.get("endtime"),
+        "children": [],
+    }
+
+
+def _iso_to_epoch(value):
+    if not value:
+        return None
+    try:
+        return int(datetime.fromisoformat(value).timestamp())
+    except (TypeError, ValueError):
+        return None
+
+
+def _job_item(job, children):
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    params = job.get("params") if isinstance(job.get("params"), dict) else {}
+    vmid = result.get("vmid") or params.get("target_vmid") or params.get("vmid")
+    return {
+        "id": job["id"],
+        "source": "proxui",
+        "type": job["type"],
+        "title": job["description"],
+        "node": result.get("node") or params.get("node") or params.get("target_node"),
+        "vmid": str(vmid) if vmid else None,
+        "target": None,
+        "user": None,
+        "status": _JOB_STATUS.get(job["status"], job["status"]),
+        "status_text": job["status"],
+        "progress": job.get("progress"),
+        "current_step": job.get("current_step") or "",
+        "started_at": _iso_to_epoch(job.get("started_at"))
+        or _iso_to_epoch(job.get("created_at")),
+        "ended_at": _iso_to_epoch(job.get("completed_at")),
+        "children": children,
+    }
+
+
+def _child_item(ref, pve_by_upid):
+    task = pve_by_upid.get(ref["upid"])
+    if task:
+        return _pve_item(task)
+    parsed = _parse_upid(ref["upid"]) or {"upid": ref["upid"], "node": ref["node"]}
+    # Not in the recent cluster list: status is only known on the detail page.
+    return _pve_item(parsed, status="unknown")
+
+
+def _activity_connection():
+    if not proxmox_nodes:
+        return None
+    return get_proxmox_connection(next(iter(proxmox_nodes)), auto_renew=True)
+
+
+@app.route("/api/activity")
+def api_activity():
+    """Native Proxmox tasks and ProxUI jobs as one list, newest first.
+
+    Tasks a job started are nested under it rather than listed twice.
+    """
+    limit = max(1, min(request.args.get("limit", 50, type=int), 500))
+    jobs = job_queue.get_all_jobs(limit=limit)
+
+    pve_tasks, error = [], None
+    proxmox = _activity_connection()
+    if proxmox:
+        try:
+            pve_tasks = proxmox.cluster.tasks.get() or []
+        except Exception as e:
+            error = f"Failed to retrieve Proxmox tasks: {e}"
+    else:
+        error = "No Proxmox connections available"
+
+    pve_by_upid = {t["upid"]: t for t in pve_tasks if t.get("upid")}
+    child_upids = {ref["upid"] for job in jobs for ref in job.get("upids", [])}
+
+    items = [
+        _job_item(job, [_child_item(ref, pve_by_upid) for ref in job["upids"]])
+        for job in jobs
+    ]
+    tailed = set()
+    for task in pve_tasks:
+        upid = task.get("upid")
+        if not upid or upid in child_upids:
+            continue
+        progress = None
+        if not task.get("endtime") and task.get("type") in PROGRESS_TASK_TYPES:
+            tailed.add(upid)
+            try:
+                progress = running_task_progress(proxmox, task.get("node"), upid)
+            except Exception as e:
+                print(f"Error reading task log {upid}: {e}")
+        items.append(_pve_item(task, progress))
+    _prune_progress_cache(tailed)
+
+    items.sort(key=lambda i: i["started_at"] or 0, reverse=True)
+    return jsonify({"items": items[:limit], "error": error})
+
+
+def _read_task_log(proxmox, node, upid, page=5000, max_lines=20000):
+    lines, offset = [], 0
+    while True:
+        chunk = proxmox.nodes(node).tasks(upid).log.get(start=offset, limit=page)
+        chunk = [l for l in (chunk or []) if l.get("n", 0) > offset]
+        if not chunk:
+            break
+        lines.extend(l.get("t", "") for l in chunk)
+        offset = chunk[-1]["n"]
+        if len(chunk) < page:
+            break
+    truncated = len(lines) > max_lines
+    return lines[-max_lines:], truncated
+
+
+def _task_detail(upid):
+    parsed = _parse_upid(upid)
+    if not parsed:
+        return None
+    node = parsed["node"]
+    proxmox = get_proxmox_connection(node, auto_renew=True)
+    if not proxmox:
+        raise RuntimeError("No Proxmox connection available")
+
+    status = proxmox.nodes(node).tasks(upid).status.get()
+    task = dict(parsed)
+    task.update({k: v for k, v in status.items() if k in ("type", "id", "user")})
+    # tasks/{upid}/status has no end time; the cluster list does for recent tasks.
+    try:
+        listed = next(
+            (t for t in proxmox.cluster.tasks.get() if t.get("upid") == upid), None
+        )
+    except Exception:
+        listed = None
+    running = status.get("status") == "running"
+    if listed:
+        task.update(listed)
+        state = None
+    elif running:
+        state = "running"
+    else:
+        task["status"] = status.get("exitstatus") or ""
+        state = _exit_state(task["status"])
+
+    log, truncated = _read_task_log(proxmox, node, upid)
+    item = _pve_item(task, _last_progress(log) if running else None, status=state)
+    item["log"] = log
+    item["log_truncated"] = truncated
+    return item
+
+
+@app.route("/api/activity/<path:item_id>")
+def api_activity_item(item_id):
+    """One activity item: a Proxmox task with its full log, or a ProxUI job
+    with its steps and child tasks."""
+    if item_id.startswith("UPID:"):
+        try:
+            item = _task_detail(item_id)
+        except Exception as e:
+            return jsonify({"error": f"Failed to load task: {e}"}), 500
+        if not item:
+            return jsonify({"error": "Invalid task ID"}), 400
+        return jsonify(item)
+
+    job = job_queue.get_job(item_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    pve_by_upid = {}
+    if job["upids"]:
+        proxmox = _activity_connection()
+        try:
+            if proxmox:
+                pve_by_upid = {
+                    t["upid"]: t for t in proxmox.cluster.tasks.get() if t.get("upid")
+                }
+        except Exception as e:
+            print(f"Error getting cluster tasks: {e}")
+    item = _job_item(job, [_child_item(ref, pve_by_upid) for ref in job["upids"]])
+    item.update(
+        steps=job["steps"],
+        error=job["error"],
+        result=job["result"],
+        created_at=_iso_to_epoch(job.get("created_at")),
+    )
+    return jsonify(item)
+
+
+@app.route("/tasks/<path:item_id>")
+def task_detail(item_id):
+    """Detail page for a Proxmox task (UPID) or a ProxUI job (job ID)."""
+    return render_template("task_detail.html", item_id=item_id)
+
+
+# =============================================================================
 # Cloud Template Creation with Background Jobs
 # =============================================================================
 
 
 def wait_for_task(proxmox, node, task_upid, job_id, timeout=600, poll_interval=3):
     """Wait for a Proxmox task to complete, updating job progress"""
+    if job_id and isinstance(task_upid, str):
+        job_queue.add_upid(job_id, node, task_upid)
     waited = 0
     while waited < timeout:
         try:

@@ -31,9 +31,19 @@ ProxUI isn't a replacement for Proxmox web interface, but a light-weight additio
 
 ### System Monitoring
 - Dashboard with cluster overview and statistics
-- Task monitoring
+- Unified task list (see [Tasks and background jobs](#tasks-and-background-jobs))
 - Network configuration viewing
 - Real-time basic resource usage charts
+
+### Tasks and background jobs
+The Tasks page, the dashboard and the Activity menu in the top bar show two kinds of entries in one list:
+
+- **Proxmox tasks**: native tasks from the cluster task log (start, migrate, backup, ...), including ones started outside ProxUI. Running migrations, clones, disk moves, backups and restores show progress parsed from the task log.
+- **ProxUI jobs**: multi-step workflows run by ProxUI itself, such as cloud template creation or cloning. The Proxmox tasks a job starts are grouped under it instead of being listed separately.
+
+Every entry opens a detail page with the full Proxmox task log, or with the job's steps and the logs of its Proxmox tasks.
+
+ProxUI jobs, and with them the grouping, are kept in memory only. After ProxUI restarts, past jobs are gone and the Proxmox tasks they started appear as ordinary, ungrouped tasks.
 
 ### Multi-Cluster Management
 - Connect and manage multiple Proxmox clusters or individual servers from a single interface

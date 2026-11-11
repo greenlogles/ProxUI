@@ -420,6 +420,12 @@ a:hover { color: var(--accent); text-decoration: underline; }
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
   overflow: hidden; word-break: break-word;
 }
+.job-card:hover { background: var(--panel-hover); }
+.task-log {
+  margin: 0; padding: 12px 16px; max-height: 480px; overflow: auto;
+  background: var(--panel-2); color: var(--text); font-family: var(--font-mono);
+  font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+}
 
 /* ===================== SHELL ===================== */
 .app-shell{ display:grid; grid-template-columns:var(--sidebar-w) 1fr; grid-template-rows:100vh; }

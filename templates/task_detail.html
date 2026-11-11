@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+
+{% block title %}Task Details - Proxmox Manager{% endblock %}
+
+{% block content %}
+<div x-data="taskDetail({{ item_id | tojson | forceescape }})">
+    <div class="d-flex align-items-center flex-wrap gap-3 mb-3">
+        <a href="{{ url_for('tasks') }}" class="btn-x"><i class="bi bi-arrow-left"></i> Tasks</a>
+        <div class="me-auto" style="min-width:0">
+            <div class="sec-title text-truncate" x-text="item ? title(item) : 'Task'"></div>
+            <div class="sec-sub" x-text="item ? (item.source === 'proxui' ? 'ProxUI job' : 'Proxmox task') : ''"></div>
+        </div>
+        <template x-if="item">
+            <span class="pill" :class="statusInfo(item).pill" x-text="item.status_text || statusInfo(item).label"></span>
+        </template>
+        <button class="btn-x" @click="load()" :disabled="loading">
+            <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i> Refresh
+        </button>
+        <template x-if="item && item.source === 'proxui' && !isActive(item)">
+            <button class="btn-x" @click="deleteJob()"><i class="bi bi-trash"></i> Delete</button>
+        </template>
+    </div>
+
+    <template x-if="error">
+        <div class="alert alert-danger"><i class="bi bi-exclamation-triangle"></i> <span x-text="error"></span></div>
+    </template>
+    <template x-if="loading && !item && !error">
+        <div class="text-center p-4"><div class="spinner-border spinner-border-sm" role="status"></div> Loading...</div>
+    </template>
+
+    <template x-if="item">
+        <div class="d-flex flex-column gap-3">
+            <div class="card-x">
+                <div class="cx-body">
+                    <div class="row g-3" style="font-size:13px">
+                        <div class="col-6 col-md-3">
+                            <div class="text-faint">Node</div>
+                            <div x-text="item.node || '—'"></div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="text-faint">Guest</div>
+                            <template x-if="vmUrl(item)"><a :href="vmUrl(item)" x-text="item.vmid"></a></template>
+                            <template x-if="!vmUrl(item)"><div x-text="item.target || item.vmid || '—'"></div></template>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="text-faint">Started</div>
+                            <div class="mono" x-text="fmtDateTime(item.started_at)"></div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="text-faint">Duration</div>
+                            <div class="mono" x-text="duration(item) || '—'"></div>
+                        </div>
+                        <div class="col-6 col-md-3" x-show="item.user">
+                            <div class="text-faint">User</div>
+                            <div class="mono" x-text="item.user"></div>
+                        </div>
+                        <div class="col-12 col-md-9" x-show="item.source === 'pve'">
+                            <div class="text-faint">Task ID</div>
+                            <div class="mono text-break" style="font-size:11px" x-text="item.id"></div>
+                        </div>
+                    </div>
+                    <template x-if="isActive(item) && (item.current_step || item.progress != null)">
+                        <div class="mt-3">
+                            <div class="d-flex justify-content-between" style="font-size:12px">
+                                <span class="mono" x-text="item.current_step"></span>
+                                <span class="mono" x-show="item.progress != null" x-text="item.progress + '%'"></span>
+                            </div>
+                            <div class="progress mt-1" style="height:6px" x-show="item.progress != null">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated" :style="'width:' + item.progress + '%'"></div>
+                            </div>
+                        </div>
+                    </template>
+                    <template x-if="item.error">
+                        <div class="alert alert-danger mt-3 mb-0"><strong>Error:</strong> <span x-text="item.error"></span></div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Proxmox task: full log -->
+            <template x-if="item.source === 'pve'">
+                <div class="card-x">
+                    <div class="cx-head">
+                        <i class="bi bi-terminal" style="color:var(--accent)"></i><span class="cx-title">Task log</span>
+                        <small class="text-faint ms-auto" x-show="item.log_truncated">Showing the last 20000 lines</small>
+                    </div>
+                    <pre class="task-log" x-ref="log" x-text="(item.log || []).join('\n') || 'No output'"></pre>
+                </div>
+            </template>
+
+            <!-- ProxUI job: its steps and the Proxmox tasks it started -->
+            <template x-if="item.source === 'proxui'">
+                <div class="card-x">
+                    <div class="cx-head">
+                        <i class="bi bi-list-ol" style="color:var(--accent)"></i><span class="cx-title">Steps</span>
+                    </div>
+                    <pre class="task-log" x-ref="log" x-text="(item.steps || []).join('\n') || 'No steps recorded'"></pre>
+                </div>
+            </template>
+
+            <template x-if="item.source === 'proxui'">
+                <div class="card-x">
+                    <div class="cx-head">
+                        <i class="bi bi-diagram-3" style="color:var(--accent)"></i>
+                        <span class="cx-title">Proxmox tasks</span>
+                        <small class="text-faint" x-text="'(' + item.children.length + ')'"></small>
+                    </div>
+                    <div class="cx-body flush">
+                        <template x-if="!item.children.length">
+                            <div class="empty-hint"><i class="bi bi-info-circle"></i> This job has not started any Proxmox tasks</div>
+                        </template>
+                        <template x-for="child in item.children" :key="child.id">
+                            <div class="border-bottom">
+                                <div class="d-flex align-items-center gap-2 px-3 py-2">
+                                    <button class="btn btn-sm btn-link p-0 text-reset" @click="toggleChild(child.id)"
+                                            :title="openLogs[child.id] ? 'Hide log' : 'Show log'">
+                                        <i class="bi" :class="openLogs[child.id] ? 'bi-chevron-down' : 'bi-chevron-right'"></i>
+                                    </button>
+                                    <span class="pill" :class="statusInfo(child).pill" x-text="statusInfo(child).label"></span>
+                                    <span class="nm" x-text="title(child)"></span>
+                                    <span class="text-faint" style="font-size:12px" x-text="child.node"></span>
+                                    <span class="text-faint mono ms-auto" style="font-size:12px" x-text="duration(child)"></span>
+                                    <a :href="detailUrl(child)" title="Open task"><i class="bi bi-box-arrow-up-right"></i></a>
+                                </div>
+                                <template x-if="openLogs[child.id]">
+                                    <pre class="task-log mx-3 mb-2" x-text="childLog(child.id)"></pre>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </template>
+
+            <template x-if="item.source === 'proxui' && item.result">
+                <div class="card-x">
+                    <div class="cx-head"><i class="bi bi-check2-square" style="color:var(--accent)"></i><span class="cx-title">Result</span></div>
+                    <pre class="task-log" x-text="JSON.stringify(item.result, null, 2)"></pre>
+                </div>
+            </template>
+        </div>
+    </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
+
+  function taskDetail(itemId) {
+    return {
+      itemId,
+      item: null,
+      loading: true,
+      error: '',
+      openLogs: {},     // child upid -> { lines, loading, error }
+      _poller: null,
+
+      title: ProxUtils.activityTitle,
+      detailUrl: ProxUtils.activityUrl,
+      vmUrl: ProxUtils.activityVmUrl,
+      statusInfo: ProxUtils.activityStatus,
+      duration: ProxUtils.activityDuration,
+      isActive: ProxUtils.activityIsActive,
+      fmtDateTime: ProxUtils.formatDateTime,
+
+      async load() {
+        this.loading = true;
+        const logEl = this.$refs.log;
+        const atBottom = !logEl || logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30;
+        try {
+          this.item = await ProxUtils.apiJson(`/api/activity/${encodeURIComponent(this.itemId)}`);
+          this.error = '';
+          for (const id of Object.keys(this.openLogs)) this.fetchChildLog(id);
+        } catch (e) {
+          this.error = e.message;
+        } finally {
+          this.loading = false;
+        }
+        // Follow the log tail unless the user scrolled up to read.
+        if (atBottom) this.$nextTick(() => { const el = this.$refs.log; if (el) el.scrollTop = el.scrollHeight; });
+      },
+
+      async fetchChildLog(id) {
+        const entry = this.openLogs[id];
+        if (!entry) return;
+        try {
+          const child = await ProxUtils.apiJson(`/api/activity/${encodeURIComponent(id)}`);
+          this.openLogs[id] = { lines: child.log || [], loading: false, error: '' };
+        } catch (e) {
+          this.openLogs[id] = { lines: [], loading: false, error: e.message };
+        }
+      },
+
+      toggleChild(id) {
+        if (this.openLogs[id]) { delete this.openLogs[id]; return; }
+        this.openLogs[id] = { lines: [], loading: true, error: '' };
+        this.fetchChildLog(id);
+      },
+
+      childLog(id) {
+        const entry = this.openLogs[id];
+        if (!entry) return '';
+        if (entry.loading) return 'Loading...';
+        if (entry.error) return 'Error: ' + entry.error;
+        return entry.lines.join('\n') || 'No output';
+      },
+
+      async deleteJob() {
+        if (!confirm('Delete this job from the list?')) return;
+        try {
+          await ProxUtils.apiJson(`/api/jobs/${encodeURIComponent(this.itemId)}`, { method: 'DELETE' });
+          window.location.href = '{{ url_for("tasks") }}';
+        } catch (e) {
+          ProxUtils.notify('Error deleting job: ' + e.message, 'error');
+        }
+      },
+
+      init() {
+        this.load();
+        // Poll only while something is still running; finished items don't change.
+        this._poller = ProxUtils.createAdaptivePoller(() => {
+          if (!this.item || this.isActive(this.item)
+              || (this.item.children || []).some(c => this.isActive(c))) this.load();
+        }, 3000);
+      },
+
+      destroy() { this._poller?.destroy(); },
+    };
+  }
+
+  function register() {
+    window.Alpine.data('taskDetail', taskDetail);
+  }
+  if (window.Alpine) register();
+  else document.addEventListener('alpine:init', register);
+</script>
+{% endblock %}

@@ -158,13 +158,13 @@
                     <!-- Background Jobs -->
                     <div class="dropdown" x-data="globalJobs">
                         <button class="icon-btn" type="button" data-bs-toggle="dropdown" aria-expanded="false"
-                                title="Background Jobs" :class="{ 'jobs-active': activeJobs.length }">
+                                title="Activity" :class="{ 'jobs-active': activeJobs.length }">
                             <i class="bi bi-list-check"></i>
                             <span class="count-badge" x-show="activeJobs.length" x-text="activeJobs.length"></span>
                         </button>
                         <div class="dropdown-menu dropdown-menu-end shadow" style="min-width: 400px; max-height: 500px; overflow-y: auto;">
                             <div class="dropdown-header d-flex justify-content-between align-items-center">
-                                <span><i class="bi bi-list-task"></i> Background Jobs</span>
+                                <span><i class="bi bi-list-task"></i> Activity</span>
                                 <button class="btn btn-sm btn-link p-0" @click.prevent="refresh()" title="Refresh">
                                     <i class="bi bi-arrow-clockwise"></i>
                                 </button>
@@ -172,85 +172,31 @@
                             <div class="dropdown-divider"></div>
                             <div class="px-2">
                                 <div x-show="!recentJobs.length" class="text-center text-muted py-3">
-                                    <i class="bi bi-check-circle"></i> No active jobs
+                                    <i class="bi bi-check-circle"></i> No recent activity
                                 </div>
                                 <template x-for="job in recentJobs" :key="job.id">
-                                    <div class="card mb-2" :class="'border-' + statusInfo(job.status).color">
+                                    <a class="card mb-2 text-reset text-decoration-none job-card" :href="detailUrl(job)"
+                                       :class="'border-' + statusInfo(job).color" title="Open details">
                                         <div class="card-body py-2 px-3">
-                                            <div class="d-flex justify-content-between align-items-start">
-                                                <div class="flex-grow-1">
-                                                    <div class="d-flex align-items-center gap-2 mb-1">
-                                                        <span class="badge" :class="'bg-' + statusInfo(job.status).color">
-                                                            <i class="bi" :class="statusInfo(job.status).icon"></i>
-                                                            <span x-text="statusInfo(job.status).label"></span>
-                                                        </span>
-                                                        <small class="text-truncate" style="max-width: 200px;"
-                                                               :title="job.description" x-text="job.description"></small>
-                                                    </div>
-                                                    <small class="text-muted d-block job-step-text" x-text="job.current_step || 'Waiting...'"></small>
-                                                    <div x-show="job.status === 'running'" class="progress mt-1" style="height: 4px;">
-                                                        <div class="progress-bar progress-bar-striped progress-bar-animated" :style="'width: ' + job.progress + '%'"></div>
-                                                    </div>
-                                                    <small x-show="job.error" class="text-danger mt-1" style="display: block;">
-                                                        <i class="bi bi-exclamation-triangle"></i> <span x-text="errorSnippet(job)"></span>
-                                                    </small>
-                                                </div>
-                                                <button class="btn btn-sm btn-link text-secondary p-0 ms-2" @click.prevent="showDetails(job.id)" title="Details">
-                                                    <i class="bi bi-info-circle"></i>
-                                                </button>
+                                            <div class="d-flex align-items-center gap-2 mb-1">
+                                                <span class="badge" :class="'bg-' + statusInfo(job).color">
+                                                    <i class="bi" :class="statusInfo(job).icon"></i>
+                                                    <span x-text="statusInfo(job).label"></span>
+                                                </span>
+                                                <small class="text-truncate flex-grow-1" :title="title(job)" x-text="title(job)"></small>
+                                                <small class="text-muted" x-text="job.source === 'pve' ? job.node : 'ProxUI'"></small>
+                                                <i class="bi bi-chevron-right text-secondary"></i>
+                                            </div>
+                                            <small class="text-muted d-block job-step-text" x-show="job.current_step" x-text="job.current_step"></small>
+                                            <div x-show="job.status === 'running' && job.progress != null" class="progress mt-1" style="height: 4px;">
+                                                <div class="progress-bar progress-bar-striped progress-bar-animated" :style="'width: ' + job.progress + '%'"></div>
                                             </div>
                                         </div>
-                                    </div>
+                                    </a>
                                 </template>
                             </div>
-                        </div>
-
-                        <!-- Job details modal (Alpine-controlled) -->
-                        <div class="modal fade" :class="{ show: detailsOpen }" tabindex="-1"
-                             style="display: none;" :style="detailsOpen ? 'display:block; background:rgba(0,0,0,.5)' : ''"
-                             x-show="detailsOpen" @click.self="closeDetails()">
-                            <div class="modal-dialog modal-lg">
-                                <div class="modal-content" x-show="selectedJob">
-                                    <div class="modal-header">
-                                        <h5 class="modal-title"><i class="bi bi-info-circle"></i> Job Details</h5>
-                                        <button type="button" class="btn-close" @click="closeDetails()"></button>
-                                    </div>
-                                    <div class="modal-body" x-show="selectedJob">
-                                        <div class="mb-3" x-show="selectedJob">
-                                            <strong>Job ID:</strong> <span x-text="selectedJob?.id"></span><br>
-                                            <strong>Type:</strong> <span x-text="selectedJob?.type"></span><br>
-                                            <strong>Status:</strong>
-                                            <span class="badge" :class="'bg-' + statusInfo(selectedJob?.status).color" x-text="statusInfo(selectedJob?.status).label"></span><br>
-                                            <strong>Progress:</strong> <span x-text="selectedJob?.progress"></span>%<br>
-                                            <strong>Created:</strong> <span x-text="selectedJob?.created_at"></span><br>
-                                            <template x-if="selectedJob?.started_at"><span><strong>Started:</strong> <span x-text="selectedJob.started_at"></span><br></span></template>
-                                            <template x-if="selectedJob?.completed_at"><span><strong>Completed:</strong> <span x-text="selectedJob.completed_at"></span><br></span></template>
-                                        </div>
-                                        <div class="mb-3">
-                                            <strong>Steps:</strong>
-                                            <div class="bg-dark text-light p-2 rounded mt-1" style="max-height: 300px; overflow-y: auto;">
-                                                <template x-if="!(selectedJob?.steps && selectedJob.steps.length)">
-                                                    <div class="text-muted">No steps recorded</div>
-                                                </template>
-                                                <template x-for="(step, i) in (selectedJob?.steps || [])" :key="i">
-                                                    <div class="small font-monospace" x-text="step"></div>
-                                                </template>
-                                            </div>
-                                        </div>
-                                        <div x-show="selectedJob?.error" class="alert alert-danger">
-                                            <strong>Error:</strong> <span x-text="selectedJob?.error"></span>
-                                        </div>
-                                        <div x-show="selectedJob?.result" class="alert alert-success">
-                                            <strong>Result:</strong> Template created with VMID <span x-text="selectedJob?.result?.vmid"></span>
-                                        </div>
-                                    </div>
-                                    <div class="modal-footer">
-                                        <button type="button" class="btn btn-danger" x-show="selectedJob && selectedJob.status !== 'running'"
-                                                @click="deleteJob(selectedJob.id)"><i class="bi bi-trash"></i> Delete</button>
-                                        <button type="button" class="btn btn-secondary" @click="closeDetails()">Close</button>
-                                    </div>
-                                </div>
-                            </div>
+                            <div class="dropdown-divider"></div>
+                            <a class="dropdown-item text-center small" href="{{ url_for('tasks') }}">View all tasks</a>
                         </div>
                     </div>
 

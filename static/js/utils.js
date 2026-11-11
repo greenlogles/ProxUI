@@ -42,6 +42,55 @@ export function taskTypeName(type) {
   return TASK_TYPE_NAMES[type] || (type ? String(type).toUpperCase() : 'UNKNOWN');
 }
 
+// Items from /api/activity: native Proxmox tasks (source "pve") and ProxUI
+// jobs (source "proxui") share one shape.
+export function activityTitle(item) {
+  if (item.title) return item.title;
+  const name = taskTypeName(item.type);
+  return item.vmid ? `${name} ${item.vmid}` : name;
+}
+
+export function activityUrl(item) {
+  return `/tasks/${encodeURIComponent(item.id)}`;
+}
+
+export function activityVmUrl(item) {
+  if (!item.vmid || !item.node) return null;
+  return `/vm/${encodeURIComponent(item.node)}/${encodeURIComponent(item.vmid)}`;
+}
+
+export function activityIsActive(item) {
+  return item.status === 'running' || item.status === 'queued';
+}
+
+const ACTIVITY_STATUS = {
+  running: { label: 'Running', pill: 'info', color: 'primary', icon: 'bi-arrow-repeat spin' },
+  queued:  { label: 'Queued',  pill: 'info', color: 'secondary', icon: 'bi-clock' },
+  ok:      { label: 'OK',      pill: 'ok',   color: 'success', icon: 'bi-check-circle' },
+  warning: { label: 'Warnings', pill: 'maint', color: 'warning', icon: 'bi-exclamation-triangle' },
+  failed:  { label: 'Failed',  pill: 'err',  color: 'danger', icon: 'bi-x-circle' },
+};
+const ACTIVITY_STATUS_UNKNOWN = { label: 'Unknown', pill: 'info', color: 'secondary', icon: 'bi-dash-circle' };
+
+export function activityStatus(item) {
+  return ACTIVITY_STATUS[item?.status] || ACTIVITY_STATUS_UNKNOWN;
+}
+
+export function formatDuration(secs) {
+  if (secs == null || secs < 0) return '';
+  secs = Math.floor(secs);
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+}
+
+export function activityDuration(item) {
+  if (!item.started_at) return '';
+  if (item.ended_at) return formatDuration(item.ended_at - item.started_at);
+  if (activityIsActive(item)) return formatDuration(Date.now() / 1000 - item.started_at);
+  return '';
+}
+
 const DEMO_MODE = window.DEMO_MODE === true;
 
 export async function apiFetch(url, options = {}) {

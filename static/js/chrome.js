@@ -5,79 +5,48 @@
 
 import * as ProxUtils from "./utils.js";
 
-function jobStatusInfo(status) {
-  switch (status) {
-    case "queued":    return { color: "secondary", icon: "bi-clock", label: "Queued" };
-    case "running":   return { color: "primary", icon: "bi-hourglass-split", label: "Running" };
-    case "completed": return { color: "success", icon: "bi-check-circle", label: "Done" };
-    case "failed":    return { color: "danger", icon: "bi-x-circle", label: "Failed" };
-    default:          return { color: "secondary", icon: "", label: status };
-  }
-}
+// Long-lived console sessions are tasks too, but they'd keep the badge lit
+// for as long as a console is open, so the navbar leaves them out.
+const QUIET_TASK_TYPES = new Set(["vncproxy", "vncshell", "termproxy", "spiceproxy"]);
 
-// Background jobs indicator + dropdown + details modal.
+// Background activity indicator + dropdown: ProxUI jobs and native Proxmox
+// tasks from /api/activity. Each entry links to its detail page.
 export function globalJobs() {
   return {
     jobs: [],
-    selectedJob: null,
-    detailsOpen: false,
     _poller: null,
 
-    statusInfo: jobStatusInfo,
+    statusInfo: ProxUtils.activityStatus,
+    title: ProxUtils.activityTitle,
+    detailUrl: ProxUtils.activityUrl,
+
+    get visible() {
+      return this.jobs.filter(j => !QUIET_TASK_TYPES.has(j.type));
+    },
 
     get activeJobs() {
-      return this.jobs.filter(j => j.status === "queued" || j.status === "running");
+      return this.visible.filter(ProxUtils.activityIsActive);
     },
 
-    // Active jobs plus anything completed/failed within the last hour.
+    // Active entries plus anything that finished within the last hour.
     get recentJobs() {
-      const hourAgo = Date.now() - 3600000;
-      return this.jobs.filter(j => {
-        if (j.status === "queued" || j.status === "running") return true;
-        const done = j.completed_at ? new Date(j.completed_at).getTime() : null;
-        return done !== null && done > hourAgo;
-      });
-    },
-
-    errorSnippet(job) {
-      return job.error ? (String(job.error).substring(0, 50) + "...") : "";
+      const hourAgo = Date.now() / 1000 - 3600;
+      return this.visible
+        .filter(j => ProxUtils.activityIsActive(j) || (j.ended_at && j.ended_at > hourAgo))
+        .slice(0, 20);
     },
 
     async load() {
       try {
-        const data = await ProxUtils.apiJson("/api/jobs");
-        this.jobs = Array.isArray(data) ? data : [];
+        const data = await ProxUtils.apiJson("/api/activity?limit=50");
+        this.jobs = Array.isArray(data.items) ? data.items : [];
       } catch (e) {
         // Keep the last known list on transient failure; log for diagnostics.
-        console.error("Error loading jobs:", e);
+        console.error("Error loading activity:", e);
       }
     },
 
     refresh() { this.load(); },
-
-    async showDetails(jobId) {
-      try {
-        const job = await ProxUtils.apiJson(`/api/jobs/${jobId}`);
-        if (job.error && !job.steps) { ProxUtils.notify("Job not found", "error"); return; }
-        this.selectedJob = job;
-        this.detailsOpen = true;
-      } catch (e) {
-        ProxUtils.notify("Error loading job details: " + e.message, "error");
-      }
-    },
-
-    closeDetails() { this.detailsOpen = false; this.selectedJob = null; },
-
-    async deleteJob(jobId) {
-      if (!confirm("Delete this job from the list?")) return;
-      try {
-        const r = await ProxUtils.apiJson(`/api/jobs/${jobId}`, { method: "DELETE" });
-        if (r.success) { this.closeDetails(); this.load(); }
-        else ProxUtils.notify(r.error || "Failed to delete job", "error");
-      } catch (e) {
-        ProxUtils.notify("Error deleting job: " + e.message, "error");
-      }
-    },
 
     init() {
       this.load();

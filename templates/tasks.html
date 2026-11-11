@@ -7,7 +7,7 @@
     <div class="d-flex align-items-center flex-wrap gap-3 mb-3">
         <div class="me-auto">
             <div class="sec-title">Recent Tasks</div>
-            <div class="sec-sub">Cluster-wide task log</div>
+            <div class="sec-sub">Proxmox tasks and ProxUI jobs across the cluster</div>
         </div>
         <button class="btn-x" @click="refresh()" :disabled="loading">
             <i class="bi bi-arrow-clockwise" :class="loading && 'spin'"></i> Refresh
@@ -17,10 +17,15 @@
     <div class="card-x">
         <div class="cx-head flex-wrap gap-2">
             <div class="seg">
-                <button :class="{on:filter==='all'}" @click="filter='all'; applyFilter()">All</button>
-                <button :class="{on:filter==='running'}" @click="filter='running'; applyFilter()">Running</button>
-                <button :class="{on:filter==='ok'}" @click="filter='ok'; applyFilter()">Completed</button>
-                <button :class="{on:filter==='error'}" @click="filter='error'; applyFilter()">Failed</button>
+                <button :class="{on:filter==='all'}" @click="filter='all'">All</button>
+                <button :class="{on:filter==='running'}" @click="filter='running'">Running</button>
+                <button :class="{on:filter==='ok'}" @click="filter='ok'">Completed</button>
+                <button :class="{on:filter==='error'}" @click="filter='error'">Failed</button>
+            </div>
+            <div class="seg">
+                <button :class="{on:source==='all'}" @click="source='all'">All sources</button>
+                <button :class="{on:source==='pve'}" @click="source='pve'">Proxmox</button>
+                <button :class="{on:source==='proxui'}" @click="source='proxui'">ProxUI</button>
             </div>
             <div class="seg ms-auto">
                 <button :class="{on:limit===50}" @click="limit=50; load()">Last 50</button>
@@ -29,39 +34,58 @@
             </div>
         </div>
         <div class="cx-body flush tbl-scroll">
-            <template x-if="loading && filteredTasks.length === 0">
+            <template x-if="loading && allTasks.length === 0">
                 <div class="text-center p-4"><div class="spinner-border spinner-border-sm" role="status"></div> Loading tasks...</div>
             </template>
             <template x-if="error">
-                <div class="text-danger p-4"><i class="bi bi-exclamation-triangle"></i> Error loading tasks</div>
+                <div class="text-danger p-3"><i class="bi bi-exclamation-triangle"></i> <span x-text="error"></span></div>
             </template>
-            <template x-if="!loading && !error && filteredTasks.length === 0">
+            <template x-if="!loading && filteredTasks.length === 0">
                 <div class="empty-hint">
                     <i class="bi bi-info-circle"></i>
-                    <span x-text="filter === 'all' ? 'No tasks found' : 'No tasks match the current filter'"></span>
+                    <span x-text="filter === 'all' && source === 'all' ? 'No tasks found' : 'No tasks match the current filter'"></span>
                 </div>
             </template>
             <table class="tbl" x-show="filteredTasks.length > 0">
                 <thead><tr><th>Status</th><th>Task</th><th>Node</th><th>User</th><th>Start time</th><th class="num">Duration</th></tr></thead>
                 <tbody>
-                    <template x-for="task in filteredTasks" :key="task.upid || (task.node + task.type + task.starttime)">
+                    <template x-for="task in filteredTasks" :key="task.id">
                         <tr>
                             <td>
-                                <span class="pill" :class="pillCls(task)" x-text="task.status || (task.endtime ? 'unknown' : 'running')"></span>
+                                <span class="pill" :class="statusInfo(task).pill" x-text="statusInfo(task).label"></span>
                             </td>
                             <td>
-                                <div class="nm" x-text="taskName(task)"></div>
-                                <template x-if="task.id && ((task.type || '').startsWith('qm') || (task.type || '').startsWith('vz'))">
-                                    <div class="text-faint" style="font-size:11px">
-                                        <span x-text="(task.type || '').startsWith('qm') ? 'VM' : 'CT'"></span>
-                                        <a :href="vmLink(task)" x-text="task.id"></a>
+                                <a class="nm text-reset" :href="detailUrl(task)" x-text="title(task)"></a>
+                                <div class="text-faint" style="font-size:11px">
+                                    <template x-if="task.source === 'proxui'">
+                                        <span>
+                                            <span class="pill info" style="font-size:10px;padding:1px 6px">ProxUI</span>
+                                            <span x-show="task.children.length" x-text="task.children.length + (task.children.length === 1 ? ' task' : ' tasks')"></span>
+                                        </span>
+                                    </template>
+                                    <template x-if="vmUrl(task)">
+                                        <span>
+                                            <span x-text="(task.type || '').startsWith('vz') ? 'CT' : 'VM'"></span>
+                                            <a :href="vmUrl(task)" x-text="task.vmid"></a>
+                                        </span>
+                                    </template>
+                                    <template x-if="!task.vmid && task.target">
+                                        <span x-text="task.target"></span>
+                                    </template>
+                                </div>
+                                <template x-if="task.status === 'running' && task.current_step">
+                                    <div style="max-width:420px">
+                                        <div class="text-faint mono" style="font-size:11px" x-text="task.current_step"></div>
+                                        <div class="progress mt-1" style="height:4px" x-show="task.progress != null">
+                                            <div class="progress-bar" :style="'width:' + task.progress + '%'"></div>
+                                        </div>
                                     </div>
                                 </template>
                             </td>
-                            <td class="text-muted-2" x-text="task.node || 'Unknown'"></td>
-                            <td class="text-muted-2 mono" style="font-size:12px" x-text="task.user || ''"></td>
-                            <td class="text-muted-2 mono" style="font-size:12px" x-text="fmtDateTime(task.starttime)"></td>
-                            <td class="num mono text-muted-2" x-text="taskDuration(task)"></td>
+                            <td class="text-muted-2" x-text="task.node || ''"></td>
+                            <td class="text-muted-2 mono" style="font-size:12px" x-text="task.user || (task.source === 'proxui' ? 'ProxUI' : '')"></td>
+                            <td class="text-muted-2 mono" style="font-size:12px" x-text="fmtDateTime(task.started_at)"></td>
+                            <td class="num mono text-muted-2" x-text="duration(task)"></td>
                         </tr>
                     </template>
                 </tbody>
@@ -75,76 +99,40 @@
 <script type="module">
   import * as ProxUtils from "{{ url_for('static', filename='js/utils.js') }}";
 
-  const ALLOWED_STATUS = new Set(['primary', 'secondary', 'success', 'danger', 'warning', 'info', 'dark']);
-  const PILL_CLS = { success: 'ok', danger: 'err', primary: 'run', secondary: 'stop' };
-
   function tasksPage() {
     return {
-      allTasks: [], filteredTasks: [], _poller: null,
+      allTasks: [], _poller: null,
       filter: 'all',
+      source: 'all',
       limit: 50,
       loading: true,
       error: '',
 
-      taskName(task) {
-        return ProxUtils.taskTypeName(task.type);
-      },
-
+      title: ProxUtils.activityTitle,
+      detailUrl: ProxUtils.activityUrl,
+      vmUrl: ProxUtils.activityVmUrl,
+      statusInfo: ProxUtils.activityStatus,
+      duration: ProxUtils.activityDuration,
       fmtDateTime: ProxUtils.formatDateTime,
 
-      taskStatusClass(task) {
-        return ALLOWED_STATUS.has(task.status_class) ? task.status_class : 'secondary';
-      },
-
-      pillCls(task) {
-        return PILL_CLS[this.taskStatusClass(task)] || 'stop';
-      },
-
-      vmLink(task) {
-        return `/vm/${encodeURIComponent(task.node)}/${encodeURIComponent(task.id)}`;
-      },
-
-      taskDuration(task) {
-        if (!task.starttime) return '';
-        if (task.endtime) {
-          const secs = task.endtime - task.starttime;
-          if (secs < 60) return `${secs}s`;
-          if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
-          return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
-        }
-        const status = (task.status || '').toLowerCase();
-        if (status.includes('running') || !task.endtime) {
-          const secs = Math.floor(Date.now() / 1000) - task.starttime;
-          if (secs < 60) return `${secs}s`;
-          if (secs < 3600) return `${Math.floor(secs / 60)}m`;
-          return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
-        }
-        return '';
-      },
-
-      applyFilter() {
-        if (this.filter === 'all') {
-          this.filteredTasks = this.allTasks;
-          return;
-        }
-        this.filteredTasks = this.allTasks.filter(task => {
-          const s = (task.status || '').toLowerCase();
-          if (this.filter === 'running') return s.includes('running') || !task.endtime;
-          if (this.filter === 'ok') return s.includes('ok') || s === 'stopped';
-          if (this.filter === 'error') return s.includes('error') || s.includes('failed');
+      get filteredTasks() {
+        return this.allTasks.filter(task => {
+          if (this.source !== 'all' && task.source !== this.source) return false;
+          if (this.filter === 'running') return ProxUtils.activityIsActive(task);
+          if (this.filter === 'ok') return task.status === 'ok' || task.status === 'warning';
+          if (this.filter === 'error') return task.status === 'failed';
           return true;
         });
       },
 
       async load() {
         this.loading = true;
-        this.error = '';
         try {
-          const data = await ProxUtils.apiJson(`/api/tasks?limit=${this.limit}`);
-          this.allTasks = Array.isArray(data) ? data : [];
-          this.applyFilter();
+          const data = await ProxUtils.apiJson(`/api/activity?limit=${this.limit}`);
+          this.allTasks = Array.isArray(data.items) ? data.items : [];
+          this.error = data.error || '';
         } catch (e) {
-          this.error = e.message;
+          this.error = 'Error loading tasks: ' + e.message;
         } finally {
           this.loading = false;
         }
@@ -154,7 +142,7 @@
 
       init() {
         this.load();
-        this._poller = ProxUtils.createAdaptivePoller(() => this.load(), 30000);
+        this._poller = ProxUtils.createAdaptivePoller(() => this.load(), 10000);
       },
 
       destroy() { this._poller?.destroy(); },
