@@ -4733,6 +4733,14 @@ def api_node_status(node):
         return jsonify({"error": str(e)}), 500
 
 
+# PVE 9 introduced 'vm-vol'/'ct-vol' as successors of 'images'/'rootdir';
+# storages may report either name.
+_GUEST_DISK_CONTENT = {
+    "qemu": {"images", "vm-vol"},
+    "lxc": {"rootdir", "ct-vol"},
+}
+
+
 @app.route("/api/node/<node>/storages")
 def api_node_storages(node):
     """API endpoint to get storage pools for a specific node"""
@@ -4751,12 +4759,9 @@ def api_node_storages(node):
             if storage.get("enabled", 0) == 1:
                 content_types = storage.get("content", "").split(",")
 
-                # Filter based on VM type
-                is_suitable = False
-                if vm_type == "qemu" and "images" in content_types:
-                    is_suitable = True
-                elif vm_type == "lxc" and "rootdir" in content_types:
-                    is_suitable = True
+                is_suitable = bool(
+                    _GUEST_DISK_CONTENT.get(vm_type, set()) & set(content_types)
+                )
 
                 if is_suitable:
                     # Calculate available space
