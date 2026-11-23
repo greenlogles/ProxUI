@@ -187,6 +187,61 @@ class TestAPIEndpoints(unittest.TestCase):
         self.assertEqual(data[0]["storage"], "local-lvm")
         self.assertIn("available_gb", data[0])
 
+    def _node_storages(self, mock_get_connection, storages, vm_type):
+        mock_connection = Mock()
+        mock_connection.nodes.return_value.storage.get.return_value = storages
+        mock_get_connection.return_value = mock_connection
+        response = self.client.get(f"/api/node/test-node/storages?vm_type={vm_type}")
+        self.assertEqual(response.status_code, 200)
+        return [s["storage"] for s in json.loads(response.data)]
+
+    @patch("app.get_proxmox_connection")
+    def test_api_node_storages_vm_vol_content(self, mock_get_connection):
+        """Issue #60: PVE 9 lvmthin pools report 'vm-vol' instead of 'images'."""
+        storages = [
+            {
+                "storage": "pool-a",
+                "type": "lvmthin",
+                "active": 1,
+                "enabled": 1,
+                "content": "vm-vol",
+                "total": 100 * 1024**3,
+                "used": 10 * 1024**3,
+            },
+            {
+                "storage": "pool-b",
+                "type": "lvmthin",
+                "active": 1,
+                "enabled": 1,
+                "content": "vm-vol",
+                "total": 100 * 1024**3,
+                "used": 50 * 1024**3,
+            },
+        ]
+        self.assertEqual(
+            self._node_storages(mock_get_connection, storages, "qemu"),
+            ["pool-a", "pool-b"],
+        )
+        self.assertEqual(self._node_storages(mock_get_connection, storages, "lxc"), [])
+
+    @patch("app.get_proxmox_connection")
+    def test_api_node_storages_ct_vol_content(self, mock_get_connection):
+        storages = [
+            {"storage": "ct-pool", "enabled": 1, "content": "ct-vol"},
+            {"storage": "mixed", "enabled": 1, "content": "vm-vol,ct-vol"},
+            {"storage": "legacy", "enabled": 1, "content": "images,rootdir"},
+            {"storage": "isos", "enabled": 1, "content": "iso,vztmpl"},
+            {"storage": "disabled", "enabled": 0, "content": "vm-vol,ct-vol"},
+        ]
+        self.assertEqual(
+            sorted(self._node_storages(mock_get_connection, storages, "lxc")),
+            ["ct-pool", "legacy", "mixed"],
+        )
+        self.assertEqual(
+            sorted(self._node_storages(mock_get_connection, storages, "qemu")),
+            ["legacy", "mixed"],
+        )
+
     @patch("app.get_proxmox_connection")
     def test_api_node_templates(self, mock_get_connection):
         """Test node templates endpoint"""
